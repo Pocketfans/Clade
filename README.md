@@ -1,98 +1,120 @@
-# EvoSandbox
+# EvoSandbox: 规则约束下的 AI 演化沙盒
 
-EvoSandbox 是一款本地运行的 AI 物种演化沙盒。后端基于 FastAPI + SQLModel 管理地图、物种与推演流程，前端使用 React + Vite 提供策略 HUD。仓库同时包含运行所需的嵌入缓存、存档、导出目录等资源。
+**EvoSandbox** 是一个基于混合架构（Hybrid Architecture）的生物演化模拟系统。它旨在解决纯 AI 模拟中常见的数值崩坏问题，同时突破传统模拟游戏的创意瓶颈。
 
-## 项目概览
-- **回合驱动的模拟流水线**：`SimulationEngine` 串联环境、死亡、营养级互动、规则、AI 推理与导出服务，通过 REST API 对前端开放。
-- **React HUD**：`MapPanel`、`ControlPanel`、HUD 浮窗与设置抽屉放在 `frontend/src/components`，配合 `MapViewSelector` 和 `MapLegend` 呈现 80×40 六边形世界。
-- **模型与嵌入路由**：`app/ai/ModelRouter` 根据 `settings.json` 选择不同 provider/model，并由 `EmbeddingService` 负责缓存。
-- **三层物种分析**：Critical（玩家关注，最多3个，逐个详细分析）、Focus（生态强度排序，默认24个，批量处理）、Background（低种群/低强度，规则计算）。分层基于营养级权重、种群规模、濒危程度多维度评分，顶级捕食者即使种群小也优先关注。
-- **生态位对比**：`NicheCompareView` 通过向量化计算展示物种间的生态位重叠度、相似度与竞争强度，支持多维度对比。
-- **物种属性与演化机制**：物种具备耐寒性/耐热性/耐旱性/耐盐性等环境适应属性（1.0-15.0标度），支持动态添加新属性（如耐高压/耐酸性），支持渐进演化与退化。`organs` 字段记录结构化器官（运动/感觉/代谢/防御等），`capabilities` 字段存储能力标签。
-- **营养级与属性限制**：物种的营养级决定其在食物链中的位置和属性上限。生产者（T1.0）属性总和≤30，草食者（T2.0）≤50，中层捕食者（T3.0）≤80，高层捕食者（T4.0）≤105，顶级掠食者（T5.0+）≤135。引入克莱伯定律（Kleiber's Law）模拟大型生物的低单位代谢率。单属性最多达到特化上限，最多2个属性可超过基础上限。
-- **基因库系统**：属（Genus）维护共享的基因库，记录AI发现的新特质和器官。物种携带休眠基因，在环境压力下可激活潜在特质。
-- **分化与竞争**：分化遵循奠基者效应（Founder Effect），父代保留大部分（60-80%）种群，子代由边缘小群体建立。分化后3回合内亲代承受5-15%演化滞后debuff，同属子代对亲代施加最高25%竞争压力。
-- **亚种与遗传距离**：新分化物种初始为亚种（taxonomic_rank=subspecies），15回合后晋升为独立种。
-- **迁徙与扩散**：三种类型：压力驱动迁徙（死亡率>20%）、资源饱和扩散（资源压力>1.2）、人口溢出（增长>150%且资源压力>1.0）。
-- **数据持久化**：SQLite (`egame.db`) 储存游戏状态，`reports/`、`exports/`、`saves/` 负责回合导出与独立存档。
+> **核心理念**：用硬编码的**生态规则**保证系统的数值平衡与稳定性，用**大语言模型（LLM）**提供无限的生物多样性与涌现式叙事。
 
-## 目录结构
+## 🌟 核心特性
 
-```
-backend/              # 后端核心代码
-  app/
-    ai/               # 模型路由、Prompt 模板
-    api/              # FastAPI 路由与 UI 配置
-    core/             # 设置、数据库、默认种子
-    models/           # SQLModel 定义
-    repositories/     # 数据访问层
-    services/         # 规则/工具服务
-    simulation/       # SimulationEngine 及子系统
-  pyproject.toml
-frontend/             # 前端代码 (React + Vite)
-scripts/              # 工具脚本
-data/                 # 运行时数据 (已忽略)
-  db/                 # SQLite 数据库
-  saves/              # 存档
-  exports/            # 导出数据
-  reports/            # 回合报告
-  logs/               # 日志
-  cache/              # 嵌入缓存
-  settings.json       # UI 配置
-```
+### 1. 🧠 混合演化引擎 (Hybrid Engine)
+系统将演化过程拆解为两个维度，互为表里：
+- **数值骨架 (The Skeleton - Rules)**：
+  - 基于 **克莱伯定律 (Kleiber's Law)** 计算代谢率与能量消耗。
+  - 严格的 **营养级 (Trophic Levels)** 能量传递与承载力限制。
+  - 动态的 **r/K 选择理论** 决定繁殖策略。
+  - 这一层保证了生态系统不会因为 AI 的胡言乱语而瞬间崩溃。
+- **叙事血肉 (The Flesh - AI)**：
+  - LLM 负责物种的 **形态生成、命名、适应性变异**。
+  - 生成地质变迁的 **史诗叙事**。
+  - 创造独特的 **生态位 (Niche)** 描述与种间关系。
 
-## 快速开始
+### 2. 🗺️ 动态六边形世界
+- **80x40 六边形网格**：模拟真实的大陆板块、洋流与气候带。
+- **地形演化**：支持板块漂移、火山造山、侵蚀沉积等地质过程，直接影响生物群系的分布。
+- **环境压力**：全球变暖、海平面升降、极端干旱等事件实时重塑地图。
 
-### 后端
+### 3. 🧬 深度谱系追踪
+- **交互式族谱树**：完整记录物种的演化路径，清晰展示 **分化 (Speciation)**、**灭绝 (Extinction)** 与 **杂交 (Hybridization)** 事件。
+- **遗传距离计算**：基于形态与基因特征计算物种间的亲缘关系，决定杂交可育性。
+- **亚种系统**：模拟地理隔离导致的亚种分化与晋升机制。
 
-请在项目根目录下运行：
+### 4. 📊 生态位分析
+- **向量化对比**：使用 Embedding 技术计算物种间的生态位重叠度。
+- **竞争可视化**：直观展示不同物种在体型、代谢、环境适应性上的竞争关系。
+
+### 5. 🔓 表观遗传与休眠基因
+- **压力激活**：物种体内携带“休眠基因库”。当面临灭绝级压力（如突发冰期）时，特定的性状（如厚皮毛）会被瞬间激活。
+- **非随机演化**：模拟生物对环境的紧急生理反应，补充了常规达尔文演化速度过慢的问题。
+
+---
+
+## 🚀 快速开始
+
+本项目采用 Monorepo 结构，包含后端 (FastAPI) 和前端 (React)。
+
+### 环境要求
+- Python 3.10+
+- Node.js 18+
+- OpenAI API Key (或兼容的 LLM 服务)
+
+### 1. 启动后端
+后端负责核心模拟计算与数据存储。
 
 ```bash
-# 创建虚拟环境
+# 1. 创建虚拟环境
 python -m venv .venv
-.venv\Scripts\activate        # macOS/Linux: source .venv/bin/activate
+# Windows:
+.venv\Scripts\activate
+# Linux/macOS:
+source .venv/bin/activate
 
-# 安装依赖
+# 2. 安装依赖
 pip install -e backend/[dev]
-copy backend\.env.example .env        # macOS/Linux: cp backend/.env.example .env
 
-# 启动服务 (从根目录运行)
+# 3. 配置环境变量
+copy backend\.env.example .env
+# 编辑 .env 文件，填入你的 AI_API_KEY 和 AI_BASE_URL
+
+# 4. 启动服务 (在项目根目录下运行)
 uvicorn backend.app.main:app --reload --port 8000
 ```
+*首次启动会自动初始化 `data/db/egame.db` 并生成初始物种。*
 
-首启会自动创建 `data/db/egame.db`、初始化 80×40 地图并导入 `backend/app/core/seed.py` 中的默认物种。
-
-### 前端
+### 3. 启动前端
+前端提供可视化的上帝视角 HUD。
 
 ```bash
 cd frontend
 npm install
-npm run build
 npm run dev
 ```
+访问 `http://localhost:5173` 开始演化之旅。
 
-Vite 在 `http://localhost:5173` 提供界面，`vite.config.ts` 将 `/api` 代理到 `http://localhost:8000`。
+### 4. 运行测试与调试
+确保核心逻辑的稳定性。
 
-## 关键数据与配置
-- `.env`：位于根目录，配置数据库及 AI 接入所需的 Base URL/Key。
-- `data/settings.json`：UI 设置抽屉持久化的主模型、能力覆盖与嵌入配置。
-- `data/cache/embeddings/`：`EmbeddingService` 以 SHA256 命名缓存向量。
-- `data/reports/`、`data/exports/`：`ExportService` 输出 Markdown/JSON 年鉴与世界快照。
-- `data/saves/`：独立存档目录。
-- `data/logs/`：运行日志。
-- 物种关注列表通过 `GET/POST /api/watchlist` 管理，决定 Critical 层分配（默认最多3个）。
-- 回合报告（`TurnReport`）包含地形变化类型（`MapChange.change_type`）、分化原因（`BranchingEvent.reason`）及物种 AI 分析（`SpeciesSnapshot.notes`）。
-## 地形演化测试
-- 运行 `python test_terrain_evolution.py` 会创建临时存档并执行 10 轮推演，`TerrainEvolutionService` 在缺省外部模型时会启用规则驱动的候选区推断并输出阶段、事件与最大海拔改变量。
-- 日志需重点核对 5 个验证点：①板块阶段与事件类型是否匹配；②是否出现火山抬升并反映在海拔统计；③持续过程是否跨回合延续；④侵蚀/造山/火山幅度是否落在 5-30m、100-500m、200-800m 区间；⑤规则分析是否符合地质逻辑。
-- 测试结束自动写入 `test_output.log`，便于提交前留档。
-## 贡献指引
+```bash
+# 运行模拟集成测试 (End-to-End Scenario)
+python tests/api_simulation_test/run_test.py
+```
 
-1. 变更 API 后同步更新 `frontend/src/services/api.ts` 与相关类型定义。
-2. 运行 `uvicorn app.main:app`、`npm run dev`、`npm run build` 确认基础流程可用。
-3. 不要误删用户数据目录（`egame.db`、`reports/`、`exports/`、`saves/`）。
-4. PR 描述建议包含功能概述、影响面与风险提示。
+此外，你可以在前端界面的 **"设置 -> 开发者工具"** 中直接运行系统健康检查、重置世界或测试地形演化算法。
 
-## 许可
+---
 
-若仓库未附带 LICENSE，则默认专有，仅在作者授权范围内使用；如需授权请联系作者。
+## 📂 项目结构
+
+```text
+EvoSandbox/
+├── backend/            # 核心演化引擎 (FastAPI + SQLModel)
+│   ├── app/simulation/ # 模拟循环主逻辑
+│   ├── app/services/   # 规则服务 (死亡、繁殖、地形)
+│   └── app/ai/         # AI 模型路由与 Prompt
+├── frontend/           # 策略 HUD (React + Vite + D3.js)
+├── scripts/            # 运维与测试脚本
+├── data/               # [自动生成] 存档、数据库、日志、导出文件
+└── docs/               # 开发文档
+```
+
+## 📖 文档索引
+
+- **[开发文档 (DEV_DOC.md)](DEV_DOC.md)**：深入了解混合架构的实现原理、核心算法与数据流。
+- **[API 指南 (API_GUIDE.md)](API_GUIDE.md)**：后端接口定义与前端集成手册。
+
+## 🤝 贡献
+
+欢迎提交 Pull Request！无论是调整生态参数（让模拟更真实），还是优化 AI Prompt（让叙事更精彩），我们都非常期待。
+
+## 📄 许可
+
+保留所有权利。如需使用请联系作者。

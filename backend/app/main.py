@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 
 from .api.routes import router as api_router, initialize_environment
+from .api.admin_routes import router as admin_router
 from .core.config import get_settings, setup_logging
 from .core.database import init_db
 from .core.seed import seed_defaults
@@ -28,3 +29,4 @@ def healthcheck() -> dict[str, str]:
 
 
 app.include_router(api_router, prefix="/api")
+app.include_router(admin_router, prefix="/api")

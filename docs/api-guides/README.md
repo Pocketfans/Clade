@@ -1,48 +1,107 @@
-﻿# 总 API 指南
+﻿# 后端架构与模块参考手册
 
-本指南是 FastAPI 后端与 Node/Vite 前端协同时的入口，概述系统架构、接口分类以及如何深入到各模块与端点文档。
+> **Backend Architecture & Module Reference**
 
-## 系统总览
+本文档是 EvoSandbox 后端系统的核心技术蓝图。鉴于后端包含 30+ 个服务模块、复杂的混合演化引擎以及 AI 编排系统，本手册旨在帮助开发者理解系统的**分层架构**、**数据流向**以及**各模块的职责边界**。
 
-- **后端**：`backend/app/`，核心由 FastAPI (`main.py` + `api/routes.py`)、Service 层、Repository 层以及 Simulation/Environment 引擎组成。
-- **前端**：`frontend/src/`，通过 `services/api.ts` 和 React 组件调用 API。
-- **共享模型**：`backend/app/schemas` 内的请求/响应模型，部分在前端 `api.types.ts` 中有对应类型。
-- **AI/数据依赖**：`backend/app/ai`、`services/niche.py`、`services/genetic_distance.py`。
+---
 
-> 视觉化架构：请在 `docs/api-guides/diagrams/`（后续创建）放置体系结构图。
+## 1. 系统分层架构 (Layered Architecture)
 
-## 文档层级
+后端采用经典的领域驱动设计 (DDD) 分层风格，确保规则逻辑与基础设施分离。
 
-| 层级 | 文件/目录 | 内容 | 读者 |
-| --- | --- | --- | --- |
-| Level 1 | `docs/api-guides/README.md` | 全局综述、规范入口、模块索引 | 全体开发者 |
-| Level 1 扩展 | `glossary.md`, `conventions.md` | 术语、错误模型、版本、分页、鉴权 | API 设计/QA |
-| Level 2 | `modules/<module>/README.md` | 模块职责、流程、接口总览、前端锚点 | 模块负责人 |
-| Level 3 | `modules/<module>/*.md` | 具体端点说明、Schema、调用路径、示例 | 接口实现者、前端联调 |
+```mermaid
+graph TD
+    Client[前端 Client] --> API[API Layer (FastAPI)]
+    
+    subgraph Backend Core
+        API --> Engine[Simulation Engine (Orchestrator)]
+        
+        Engine --> Services[Service Layer (Business Logic)]
+        Engine --> AI[AI Layer (Model Router)]
+        
+        Services --> Repos[Repository Layer (Data Access)]
+        Services --> AI
+        
+        Repos --> DB[(SQLite / SQLModel)]
+    end
+    
+    style Engine fill:#f9f,stroke:#333,stroke-width:2px
+    style Services fill:#bbf,stroke:#333,stroke-width:2px
+```
 
-## 模块索引
+### 1.1 接口层 (API Layer)
+- **位置**: `backend/app/api/`
+- **职责**: 处理 HTTP 请求，验证输入 (Pydantic)，将请求转发给 Engine 或 Service，格式化响应。
+- **原则**: **不包含业务逻辑**。只做“收发员”。
 
-| 模块 | 职责 | 关键端点 | 联系人 |
-| --- | --- | --- | --- |
-| [Simulation](modules/simulation/README.md) | 回合运行、压力、队列、报告 | `/turns/run`, `/queue*`, `/history`, `/pressures/templates` | Backend Simulation |
-| [Species](modules/species/README.md) | 物种列表/详情、谱系、生成、守望 | `/species/*`, `/lineage`, `/watchlist` | Biology/Content |
-| [Environment](modules/environment/README.md) | 地图、地形演化、背景种群 | `/map` + Terrain services | Map Squad |
-| [Analytics & AI](modules/analytics-ai/README.md) | 生态位、遗传距离、AI 接口 | `/niche/compare`, `/config/test-api` | Data/AI |
-| [Saves & Ops](modules/saves-ops/README.md) | 存档生命周期、导出 | `/saves/*`, `/exports` | Ops |
-| [Config & UI](modules/config-ui/README.md) | UI 配置、AI 连接设置 | `/config/ui`, `/config/test-api` | Frontend Platform |
-| [Frontend Integration](modules/frontend-integration/README.md) | 前端服务层、hooks、UI 依赖关系 | `frontend/src/services/api.ts` | Frontend |
+### 1.2 引擎层 (Engine Layer)
+- **位置**: `backend/app/simulation/`
+- **核心**: `SimulationEngine`
+- **职责**: **时间的主宰**。管理回合循环 (Turn Loop)，按严格顺序调度各个 Service（环境 -> 地形 -> 死亡 -> 繁殖 -> 演化）。它是整个系统的“心脏”。
 
-## 使用方法
+### 1.3 服务层 (Service Layer) - *最庞大的部分*
+- **位置**: `backend/app/services/`
+- **职责**: **规则的执行者**。实现了所有硬编码的生态学规律。
+- **关键服务**:
+    - `MortalityEngine`: 死亡判官（基于压力计算死亡率）。
+    - `TrophicLevelCalculator`: 能量金字塔构建者。
+    - `TerrainEvolutionService`: 地质变迁模拟器。
+    - `SpeciationService`: 物种分化控制器（混合架构的典型代表）。
 
-1. 先阅读本文件了解全局原则与模块列表。
-2. 按需查阅 `glossary.md` 和 `conventions.md` 获取统一约束。
-3. 跳转到模块 README 获取业务上下文与接口矩阵。
-4. 若需实现或联调具体端点，进入 Level 3 文档（示例：`modules/simulation/turn-execution.md`）。
-5. 在 PR 中若新增/修改接口，需同步对应 Level 2、Level 3 文档，并在根 README 的“模块索引”中标注状态。
+### 1.4 AI 层 (AI Layer)
+- **位置**: `backend/app/ai/`
+- **职责**: **创意的源泉**。管理 Prompt 模板，通过 `ModelRouter` 智能分发请求（如将简单的分类任务交给 gpt-4o-mini，将复杂的叙事交给 gpt-4o）。
 
-## 快速跳转
+### 1.5 仓储层 (Repository Layer)
+- **位置**: `backend/app/repositories/`
+- **职责**: **数据的管家**。封装所有数据库操作，确保 Service 层不直接接触 SQL 语句。
 
-- [`API_GUIDE.md`](../../API_GUIDE.md) – 仓库根索引
-- [术语表](glossary.md)
-- [统一规范](conventions.md)
-- [模块文档](modules/)
+---
+
+## 2. 核心机制详解
+
+### 2.1 混合架构的实现 (The Hybrid Implementation)
+我们如何在代码层面落实 "规则约束 AI"？
+
+1.  **前置约束 (Pre-Constraint)**: 
+    - 在调用 AI 生成新物种前，`TraitConfig` 服务会计算当前营养级的属性上限（如 T1 物种的总属性点不能超过 30）。这些限制会作为 Prompt 的一部分发送给 AI。
+2.  **AI 生成 (Generation)**:
+    - `ModelRouter` 调用 LLM，返回 JSON 格式的结构化数据（如 `structural_innovations`）。
+3.  **后置校验 (Post-Validation)**:
+    - `SpeciationService` 接收 AI 返回的数据，再次运行校验逻辑。如果 AI 生成的数值超标，会被强制修正（Clamping）或拒绝。
+
+### 2.2 演化数据流 (Evolutionary Data Flow)
+一个典型的“回合”数据流向：
+1.  **Input**: 前端发送 `TurnCommand` (包含压力配置)。
+2.  **Environment**: `EnvironmentSystem` 解析压力，更新全局温度/海平面。
+3.  **Terrain**: `TerrainEvolutionService` 根据板块阶段修改 `MapTile` 数据。
+4.  **Life**: `MortalityEngine` 读取所有 `Species`，计算存活率。
+5.  **Narrative**: `ReportBuilder` 收集上述所有事件，投喂给 AI 生成战报。
+6.  **Output**: 打包为 `TurnReport` 返回前端，并写入 `data/exports/`。
+
+---
+
+## 3. 模块详细文档索引
+
+为了应对庞大的代码库，我们将详细文档按功能域拆分：
+
+| 模块域 | 说明 | 关键涉及文件 |
+| :--- | :--- | :--- |
+| **[Simulation (模拟核心)](modules/simulation/README.md)** | 引擎循环、压力队列、回合结算机制 | `engine.py`, `pressure.py` |
+| **[Species (物种系统)](modules/species/README.md)** | 物种数据结构、谱系管理、分化逻辑 | `species.py`, `speciation.py` |
+| **[Environment (环境系统)](modules/environment/README.md)** | 地图生成、地形演化算法、气候模型 | `map_manager.py`, `terrain_evolution.py` |
+| **[Analytics & AI (分析与智能)](modules/analytics-ai/README.md)** | 生态位分析、AI 模型路由、Embedding | `niche.py`, `model_router.py` |
+| **[Saves & Ops (运维管理)](modules/saves-ops/README.md)** | 存档管理、数据导出、日志系统 | `save_manager.py`, `exporter.py` |
+| **[Config & UI (配置系统)](modules/config-ui/README.md)** | 系统配置、UI 状态同步 | `config.py` |
+| **[Frontend Integration (前端集成)](modules/frontend-integration/README.md)** | 前端服务层对接指南 | `api.ts` |
+
+---
+
+## 4. 开发规范
+
+- **新增 Service**: 必须在 `backend/app/services/__init__.py` 导出，并在 `SimulationEngine` 中注册。
+- **修改模型**: 若修改 `models/species.py`，需同步更新 `schemas/responses.py` 和前端类型定义。
+- **AI Prompt**: 所有 Prompt 必须放在 `backend/app/ai/prompts/`，严禁硬编码在 Service 中。
+
+> **注意**：如果你是前端开发者，请直接查看根目录下的 **[`API_GUIDE.md`](../../API_GUIDE.md)** 获取接口契约。

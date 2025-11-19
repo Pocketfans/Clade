@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { SaveMetadata } from "../services/api.types";
 import { listSaves, loadGame } from "../services/api";
+import { AdminPanel } from "./AdminPanel";
 
 interface Props {
   currentSaveName: string;
@@ -22,6 +23,7 @@ export function GameSettingsMenu({
   const [saves, setSaves] = useState<SaveMetadata[]>([]);
   const [loading, setLoading] = useState(false);
   const [showLoadPanel, setShowLoadPanel] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
 
   const handleLoadClick = async () => {
     setLoading(true);
@@ -69,6 +71,10 @@ export function GameSettingsMenu({
       alert("保存失败");
     }
   };
+
+  if (showAdminPanel) {
+    return <AdminPanel onClose={() => setShowAdminPanel(false)} />;
+  }
 
   return (
     <div className="fullscreen-overlay" onClick={onClose}>
@@ -167,6 +173,18 @@ export function GameSettingsMenu({
                 <div className="menu-item-content">
                   <h3>AI设置</h3>
                   <p>配置模型与向量服务</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                className="settings-menu-item btn-secondary"
+                onClick={() => setShowAdminPanel(true)}
+              >
+                <div className="menu-item-icon">🛠️</div>
+                <div className="menu-item-content">
+                  <h3>开发者工具</h3>
+                  <p>系统诊断与重置</p>
                 </div>
               </button>
 
