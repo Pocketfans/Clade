@@ -5,12 +5,14 @@ import { GenealogySkeletonLoader } from "./SkeletonLoader";
 import { GenealogyGraphView } from "./GenealogyGraphView";
 import { GenealogyFilters, type FilterOptions } from "./GenealogyFilters";
 import { fetchSpeciesDetail } from "../services/api";
+import { GamePanel } from "./common/GamePanel";
 
 interface Props {
   tree: LineageTree | null;
   loading: boolean;
   error: string | null;
   onRetry: () => void;
+  onClose?: () => void; // Add onClose prop
 }
 
 const organCategoryMap: Record<string, string> = {
@@ -33,7 +35,7 @@ const statusMap: Record<string, string> = {
 
 type ViewMode = "list" | "graph";
 
-export function GenealogyView({ tree, loading, error, onRetry }: Props) {
+export function GenealogyView({ tree, loading, error, onRetry, onClose }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [selectedNode, setSelectedNode] = useState<LineageNode | null>(null);
   const [filters, setFilters] = useState<FilterOptions>({
@@ -110,81 +112,93 @@ export function GenealogyView({ tree, loading, error, onRetry }: Props) {
   }
 
   return (
-    <div className="genealogy-container">
-      <div className="genealogy-toolbar">
-        <GenealogyFilters 
-          filters={filters} 
-          maxTurn={maxTurn}
-          onChange={setFilters} 
-        />
-        
-        <div className="view-mode-toggle">
-          <button
-            className={`chip-button ${viewMode === "graph" ? "active" : ""}`}
-            onClick={() => setViewMode("graph")}
-            title="图谱视图"
-          >
-            <GitBranch size={16} />
-            <span>图谱</span>
-          </button>
-          <button
-            className={`chip-button ${viewMode === "list" ? "active" : ""}`}
-            onClick={() => setViewMode("list")}
-            title="列表视图"
-          >
-            <List size={16} />
-            <span>列表</span>
-          </button>
+    <GamePanel
+      title="物种演化族谱 (Evolutionary Genealogy)"
+      onClose={onClose}
+      variant="modal"
+      width="98vw"
+      height="95vh"
+    >
+      <div className="genealogy-container" style={{ height: "100%", display: "flex", flexDirection: "column", padding: "16px" }}>
+        <div className="genealogy-toolbar">
+          <GenealogyFilters 
+            filters={filters} 
+            maxTurn={maxTurn}
+            onChange={setFilters} 
+          />
+          
+          <div className="view-mode-toggle">
+            <button
+              className={`chip-button ${viewMode === "graph" ? "active" : ""}`}
+              onClick={() => setViewMode("graph")}
+              title="图谱视图"
+            >
+              <GitBranch size={16} />
+              <span>图谱</span>
+            </button>
+            <button
+              className={`chip-button ${viewMode === "list" ? "active" : ""}`}
+              onClick={() => setViewMode("list")}
+              title="列表视图"
+            >
+              <List size={16} />
+              <span>列表</span>
+            </button>
+          </div>
         </div>
+
+        <div className="genealogy-stats" style={{ 
+          padding: "0.75rem", 
+          background: "rgba(255, 255, 255, 0.03)",
+          borderRadius: "8px",
+          marginBottom: "1rem",
+          display: "flex",
+          gap: "1.5rem",
+          fontSize: "0.9rem"
+        }}>
+          <div>
+            <span style={{ color: "rgba(226, 236, 255, 0.6)" }}>总物种: </span>
+            <strong>{tree.nodes.length}</strong>
+          </div>
+          <div>
+            <span style={{ color: "rgba(226, 236, 255, 0.6)" }}>筛选结果: </span>
+            <strong>{filteredNodes.length}</strong>
+          </div>
+          <div>
+            <span style={{ color: "rgba(226, 236, 255, 0.6)" }}>存活: </span>
+            <strong style={{ color: "#22c55e" }}>
+              {filteredNodes.filter(n => n.state === "alive").length}
+            </strong>
+          </div>
+          <div>
+            <span style={{ color: "rgba(226, 236, 255, 0.6)" }}>灭绝: </span>
+            <strong style={{ color: "#f87171" }}>
+              {filteredNodes.filter(n => n.state === "extinct").length}
+            </strong>
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflow: "hidden", position: "relative", border: "1px solid rgba(255,255,255,0.05)", borderRadius: "8px" }}>
+            {viewMode === "graph" ? (
+                <GenealogyGraphView 
+                nodes={filteredNodes}
+                onNodeClick={setSelectedNode}
+                />
+            ) : (
+                <div style={{ height: "100%", overflowY: "auto" }}>
+                    <ListView nodes={filteredNodes} onSelectNode={setSelectedNode} />
+                </div>
+            )}
+        </div>
+
+        {selectedNode && (
+          <NodeDetailCard 
+            node={selectedNode} 
+            onClose={() => setSelectedNode(null)} 
+          />
+        )}
       </div>
-
-      <div className="genealogy-stats" style={{ 
-        padding: "0.75rem", 
-        background: "rgba(255, 255, 255, 0.03)",
-        borderRadius: "8px",
-        marginBottom: "1rem",
-        display: "flex",
-        gap: "1.5rem",
-        fontSize: "0.9rem"
-      }}>
-        <div>
-          <span style={{ color: "rgba(226, 236, 255, 0.6)" }}>总物种: </span>
-          <strong>{tree.nodes.length}</strong>
-        </div>
-        <div>
-          <span style={{ color: "rgba(226, 236, 255, 0.6)" }}>筛选结果: </span>
-          <strong>{filteredNodes.length}</strong>
-        </div>
-        <div>
-          <span style={{ color: "rgba(226, 236, 255, 0.6)" }}>存活: </span>
-          <strong style={{ color: "#22c55e" }}>
-            {filteredNodes.filter(n => n.state === "alive").length}
-          </strong>
-        </div>
-        <div>
-          <span style={{ color: "rgba(226, 236, 255, 0.6)" }}>灭绝: </span>
-          <strong style={{ color: "#f87171" }}>
-            {filteredNodes.filter(n => n.state === "extinct").length}
-          </strong>
-        </div>
-      </div>
-
-      {viewMode === "graph" ? (
-        <GenealogyGraphView 
-          nodes={filteredNodes}
-          onNodeClick={setSelectedNode}
-        />
-      ) : (
-        <ListView nodes={filteredNodes} onSelectNode={setSelectedNode} />
-      )}
-
-      {selectedNode && (
-        <NodeDetailCard 
-          node={selectedNode} 
-          onClose={() => setSelectedNode(null)} 
-        />
-      )}
-    </div>
+    </GamePanel>
   );
 }
 
@@ -197,7 +211,7 @@ function ListView({ nodes, onSelectNode }: {
   const roots = nodes.filter((node) => !node.parent_code);
   
   return (
-    <div className="genealogy-grid">
+    <div className="genealogy-grid" style={{ padding: "16px" }}>
       {roots.map((node) => (
         <TreeNode 
           key={node.lineage_code} 
@@ -289,7 +303,7 @@ function TreeNode({
   );
 }
 
-// 节点详情卡片（增强版）
+// 节点详情卡片（增强版） - 使用 sidebar-right 变体
 function NodeDetailCard({ node, onClose }: { node: LineageNode; onClose: () => void }) {
   const [speciesDetail, setSpeciesDetail] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -304,83 +318,24 @@ function NodeDetailCard({ node, onClose }: { node: LineageNode; onClose: () => v
   }, [node.lineage_code]);
 
   return (
-    <>
-      {/* 半透明背景遮罩 - 点击关闭 */}
-      <div 
-        style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: "rgba(0, 0, 0, 0.5)",
-          zIndex: 999,
-        }}
-        onClick={onClose}
-      />
-      
-      {/* 详情卡片 - 居中显示 */}
-      <div 
-        style={{
-          position: "fixed",
-          top: "50%",
-          left: "50%",
-          transform: "translate(-50%, -50%)",
-          background: "linear-gradient(135deg, rgba(10, 14, 32, 0.98), rgba(20, 24, 42, 0.98))",
-          border: "2px solid rgba(100, 150, 255, 0.3)",
-          borderRadius: "20px",
-          padding: "2rem",
-          minWidth: "500px",
-          maxWidth: "700px",
-          maxHeight: "85vh",
-          overflowY: "auto",
-          boxShadow: "0 25px 80px rgba(0, 0, 0, 0.8), 0 0 50px rgba(100, 150, 255, 0.15)",
-          zIndex: 1000,
-        }}
-        className="fade-in"
-        onClick={(e) => e.stopPropagation()} // 防止点击卡片关闭自己
-      >
+    <GamePanel
+      title="物种详情"
+      onClose={onClose}
+      variant="sidebar-right"
+      width="400px"
+    >
+      <div style={{ padding: "20px" }}>
         {/* 标题栏 */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: "1.5rem", borderBottom: "1px solid rgba(255, 255, 255, 0.1)", paddingBottom: "1rem" }}>
-          <div style={{ flex: 1 }}>
-            <h2 className="lineage-code" style={{ margin: 0, fontSize: "1.5rem", color: "#60a5fa" }}>
-              {node.lineage_code}
-            </h2>
-            <p style={{ margin: "0.5rem 0 0", fontSize: "1.1rem", color: "#e2ecff" }}>
-              <em>{node.latin_name}</em>
-            </p>
-            <p style={{ margin: "0.25rem 0 0", color: "rgba(226, 236, 255, 0.7)", fontSize: "0.95rem" }}>
-              {node.common_name}
-            </p>
-          </div>
-          <button 
-            onClick={onClose}
-            style={{
-              background: "rgba(255, 100, 100, 0.15)",
-              border: "1px solid rgba(255, 100, 100, 0.3)",
-              borderRadius: "50%",
-              width: "40px",
-              height: "40px",
-              cursor: "pointer",
-              color: "#ff6b6b",
-              fontSize: "1.5rem",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              transition: "all 0.2s",
-            }}
-            onMouseOver={(e) => {
-              e.currentTarget.style.background = "rgba(255, 100, 100, 0.25)";
-              e.currentTarget.style.transform = "scale(1.1)";
-            }}
-            onMouseOut={(e) => {
-              e.currentTarget.style.background = "rgba(255, 100, 100, 0.15)";
-              e.currentTarget.style.transform = "scale(1)";
-            }}
-            title="关闭"
-          >
-            ×
-          </button>
+        <div style={{ marginBottom: "1.5rem", borderBottom: "1px solid rgba(255, 255, 255, 0.1)", paddingBottom: "1rem" }}>
+          <h2 className="lineage-code" style={{ margin: 0, fontSize: "1.5rem", color: "#60a5fa" }}>
+            {node.lineage_code}
+          </h2>
+          <p style={{ margin: "0.5rem 0 0", fontSize: "1.1rem", color: "#e2ecff" }}>
+            <em>{node.latin_name}</em>
+          </p>
+          <p style={{ margin: "0.25rem 0 0", color: "rgba(226, 236, 255, 0.7)", fontSize: "0.95rem" }}>
+            {node.common_name}
+          </p>
         </div>
 
         {loading ? (
@@ -402,7 +357,7 @@ function NodeDetailCard({ node, onClose }: { node: LineageNode; onClose: () => v
                 <div style={{ fontSize: "0.85rem", fontWeight: "bold", marginBottom: "0.5rem", color: "#60a5fa", textTransform: "uppercase", letterSpacing: "1px" }}>
                   📝 物种描述
                 </div>
-                <p style={{ margin: 0, lineHeight: "1.6", color: "rgba(226, 236, 255, 0.9)" }}>
+                <p style={{ margin: 0, lineHeight: "1.6", color: "rgba(226, 236, 255, 0.9)", fontSize: "0.9rem" }}>
                   {speciesDetail.description}
                 </p>
               </div>
@@ -453,13 +408,13 @@ function NodeDetailCard({ node, onClose }: { node: LineageNode; onClose: () => v
                     <div key={category} style={{ 
                       padding: "0.75rem", 
                       background: "rgba(34, 197, 94, 0.1)", 
-                      borderRadius: "8px",
+                      borderRadius: "8px", 
                       border: "1px solid rgba(34, 197, 94, 0.2)"
                     }}>
                       <div style={{ fontSize: "0.75rem", color: "rgba(226, 236, 255, 0.6)", marginBottom: "0.25rem" }}>
                         {organCategoryMap[category] || category}
                       </div>
-                      <div style={{ fontWeight: "bold", color: "#22c55e" }}>
+                      <div style={{ fontWeight: "bold", color: "#22c55e", fontSize: "0.9rem" }}>
                         {organ.type || "未知"}
                       </div>
                       {organ.acquired_turn && (
@@ -541,7 +496,7 @@ function NodeDetailCard({ node, onClose }: { node: LineageNode; onClose: () => v
           </>
         )}
       </div>
-    </>
+    </GamePanel>
   );
 }
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { SpeciesListItem, NicheCompareResult } from "../services/api.types";
 import { fetchSpeciesList, compareNiche } from "../services/api";
+import { GamePanel } from "./common/GamePanel";
 
 interface NicheCompareViewProps {
   onClose?: () => void;
@@ -122,408 +123,386 @@ export function NicheCompareView({ onClose }: NicheCompareViewProps) {
   };
 
   return (
-    <div className="niche-compare-container" style={{ padding: "2rem", maxWidth: "1400px", margin: "0 auto" }}>
-      <div className="niche-header" style={{ marginBottom: "2rem" }}>
-        <h2 style={{ fontSize: "1.75rem", fontWeight: "bold", marginBottom: "0.5rem" }}>生态位对比分析</h2>
-        <p style={{ color: "#9ca3af", fontSize: "0.95rem" }}>选择两个物种，对比它们的生态位重叠度与竞争关系</p>
-      </div>
-
-      {error && (
-        <div
-          style={{
-            backgroundColor: "#fee2e2",
-            color: "#991b1b",
-            padding: "1rem",
-            borderRadius: "0.5rem",
-            marginBottom: "1.5rem",
-          }}
-        >
-          {error}
-        </div>
-      )}
-
-      <div className="filter-bar" style={{ display: "flex", gap: "1rem", marginBottom: "1.5rem", alignItems: "center" }}>
-        <div style={{ flex: 1 }}>
-          <label style={{ fontSize: "0.85rem", color: "#9ca3af", marginRight: "0.5rem" }}>状态:</label>
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            style={{
-              padding: "0.5rem",
-              borderRadius: "0.375rem",
-              backgroundColor: "#1f2937",
-              border: "1px solid #374151",
-              color: "white",
-              fontSize: "0.9rem",
-            }}
-          >
-            <option value="all">全部</option>
-            <option value="alive">存活</option>
-            <option value="extinct">灭绝</option>
-          </select>
-        </div>
-        <div style={{ flex: 1 }}>
-          <label style={{ fontSize: "0.85rem", color: "#9ca3af", marginRight: "0.5rem" }}>生态角色:</label>
-          <select
-            value={filterRole}
-            onChange={(e) => setFilterRole(e.target.value)}
-            style={{
-              padding: "0.5rem",
-              borderRadius: "0.375rem",
-              backgroundColor: "#1f2937",
-              border: "1px solid #374151",
-              color: "white",
-              fontSize: "0.9rem",
-            }}
-          >
-            <option value="all">全部</option>
-            <option value="生产者">生产者</option>
-            <option value="草食者">草食者</option>
-            <option value="肉食者">肉食者</option>
-            <option value="杂食者">杂食者</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="selector-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2rem", marginBottom: "2rem" }}>
-        <div className="species-selector">
-          <h3 style={{ fontSize: "1.1rem", fontWeight: "600", marginBottom: "0.75rem", color: "#3b82f6" }}>
-            物种 A
-          </h3>
-          <input
-            type="text"
-            placeholder="搜索物种名、学名或代码..."
-            value={searchA}
-            onChange={(e) => setSearchA(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "0.75rem",
-              marginBottom: "0.75rem",
-              borderRadius: "0.5rem",
-              backgroundColor: "#1f2937",
-              border: "1px solid #374151",
-              color: "white",
-              fontSize: "0.9rem",
-            }}
-          />
+    <GamePanel
+      title="生态位对比分析 (Niche Comparison)"
+      onClose={onClose}
+      variant="modal"
+      width="1000px"
+      height="85vh"
+    >
+      <div style={{ padding: "24px" }}>
+        {error && (
           <div
-            className="species-list"
             style={{
-              maxHeight: "450px",
-              overflowY: "auto",
-              border: "1px solid #374151",
-              borderRadius: "0.5rem",
-              backgroundColor: "#111827",
+              backgroundColor: "rgba(239, 68, 68, 0.1)",
+              color: "#fca5a5",
+              padding: "12px 16px",
+              borderRadius: "8px",
+              marginBottom: "24px",
+              border: "1px solid rgba(239, 68, 68, 0.2)"
             }}
           >
-            {filteredSpeciesA.length === 0 ? (
-              <div style={{ padding: "2rem", textAlign: "center", color: "#6b7280" }}>
-                未找到匹配的物种
-              </div>
-            ) : (
-              filteredSpeciesA.map((species) => (
-                <button
-                  key={species.lineage_code}
-                  onClick={() => setSelectedA(species.lineage_code)}
-                  style={{
-                    width: "100%",
-                    padding: "0.75rem 1rem",
-                    borderBottom: "1px solid #1f2937",
-                    backgroundColor: selectedA === species.lineage_code ? "rgba(59, 130, 246, 0.15)" : "transparent",
-                    borderLeft: selectedA === species.lineage_code ? "3px solid #3b82f6" : "3px solid transparent",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    transition: "all 0.15s",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (selectedA !== species.lineage_code) {
-                      e.currentTarget.style.backgroundColor = "rgba(59, 130, 246, 0.05)";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (selectedA !== species.lineage_code) {
-                      e.currentTarget.style.backgroundColor = "transparent";
-                    }
-                  }}
-                >
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: "500", fontSize: "0.9rem", marginBottom: "0.25rem" }}>
-                      {species.common_name}
-                      <span style={{ marginLeft: "0.5rem", fontSize: "0.75rem", color: "#6b7280" }}>
-                        [{species.lineage_code}]
-                      </span>
-                    </div>
-                    <div style={{ fontSize: "0.8rem", color: "#9ca3af", fontStyle: "italic" }}>
-                      {species.latin_name}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.25rem" }}>
-                    <span
-                      style={{
-                        fontSize: "0.7rem",
-                        padding: "0.15rem 0.4rem",
-                        borderRadius: "0.25rem",
-                        backgroundColor: getRoleColor(species.ecological_role),
-                        color: "white",
-                      }}
-                    >
-                      {species.ecological_role}
-                    </span>
-                    <span style={{ fontSize: "0.75rem", color: "#9ca3af" }}>
-                      {formatNumber(species.population)}
-                    </span>
-                  </div>
-                </button>
-              ))
-            )}
+            {error}
+          </div>
+        )}
+
+        <div className="filter-bar" style={{ display: "flex", gap: "16px", marginBottom: "24px", alignItems: "center", background: "rgba(255,255,255,0.03)", padding: "12px", borderRadius: "8px" }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.6)", marginRight: "8px" }}>状态筛选:</label>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="field-input"
+              style={{ padding: "6px 12px", fontSize: "0.9rem" }}
+            >
+              <option value="all">全部</option>
+              <option value="alive">存活</option>
+              <option value="extinct">灭绝</option>
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.6)", marginRight: "8px" }}>生态角色筛选:</label>
+            <select
+              value={filterRole}
+              onChange={(e) => setFilterRole(e.target.value)}
+              className="field-input"
+              style={{ padding: "6px 12px", fontSize: "0.9rem" }}
+            >
+              <option value="all">全部</option>
+              <option value="生产者">生产者</option>
+              <option value="草食者">草食者</option>
+              <option value="肉食者">肉食者</option>
+              <option value="杂食者">杂食者</option>
+            </select>
           </div>
         </div>
 
-        <div className="species-selector">
-          <h3 style={{ fontSize: "1.1rem", fontWeight: "600", marginBottom: "0.75rem", color: "#10b981" }}>
-            物种 B
-          </h3>
-          <input
-            type="text"
-            placeholder="搜索物种名、学名或代码..."
-            value={searchB}
-            onChange={(e) => setSearchB(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "0.75rem",
-              marginBottom: "0.75rem",
-              borderRadius: "0.5rem",
-              backgroundColor: "#1f2937",
-              border: "1px solid #374151",
-              color: "white",
-              fontSize: "0.9rem",
-            }}
-          />
-          <div
-            className="species-list"
-            style={{
-              maxHeight: "450px",
-              overflowY: "auto",
-              border: "1px solid #374151",
-              borderRadius: "0.5rem",
-              backgroundColor: "#111827",
-            }}
-          >
-            {filteredSpeciesB.length === 0 ? (
-              <div style={{ padding: "2rem", textAlign: "center", color: "#6b7280" }}>
-                未找到匹配的物种
-              </div>
-            ) : (
-              filteredSpeciesB.map((species) => (
-                <button
-                  key={species.lineage_code}
-                  onClick={() => setSelectedB(species.lineage_code)}
-                  style={{
-                    width: "100%",
-                    padding: "0.75rem 1rem",
-                    borderBottom: "1px solid #1f2937",
-                    backgroundColor: selectedB === species.lineage_code ? "rgba(16, 185, 129, 0.15)" : "transparent",
-                    borderLeft: selectedB === species.lineage_code ? "3px solid #10b981" : "3px solid transparent",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    transition: "all 0.15s",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (selectedB !== species.lineage_code) {
-                      e.currentTarget.style.backgroundColor = "rgba(16, 185, 129, 0.05)";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (selectedB !== species.lineage_code) {
-                      e.currentTarget.style.backgroundColor = "transparent";
-                    }
-                  }}
-                >
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: "500", fontSize: "0.9rem", marginBottom: "0.25rem" }}>
-                      {species.common_name}
-                      <span style={{ marginLeft: "0.5rem", fontSize: "0.75rem", color: "#6b7280" }}>
-                        [{species.lineage_code}]
-                      </span>
-                    </div>
-                    <div style={{ fontSize: "0.8rem", color: "#9ca3af", fontStyle: "italic" }}>
-                      {species.latin_name}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.25rem" }}>
-                    <span
-                      style={{
-                        fontSize: "0.7rem",
-                        padding: "0.15rem 0.4rem",
-                        borderRadius: "0.25rem",
-                        backgroundColor: getRoleColor(species.ecological_role),
-                        color: "white",
-                      }}
-                    >
-                      {species.ecological_role}
-                    </span>
-                    <span style={{ fontSize: "0.75rem", color: "#9ca3af" }}>
-                      {formatNumber(species.population)}
-                    </span>
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "center", gap: "1rem", marginBottom: "2rem" }}>
-        <button
-          onClick={handleCompare}
-          disabled={!selectedA || !selectedB || loading}
-          style={{
-            padding: "0.75rem 2rem",
-            fontSize: "1rem",
-            fontWeight: "600",
-            borderRadius: "0.5rem",
-            backgroundColor: selectedA && selectedB ? "#3b82f6" : "#4b5563",
-            color: "white",
-            border: "none",
-            cursor: selectedA && selectedB ? "pointer" : "not-allowed",
-            opacity: selectedA && selectedB ? 1 : 0.5,
-          }}
-        >
-          {loading ? "计算中..." : "开始对比"}
-        </button>
-      </div>
-
-      {compareResult && (
-        <div className="compare-result" style={{ marginTop: "2rem" }}>
-          <div className="metrics-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "1.5rem", marginBottom: "2rem" }}>
-            <div className="metric-card" style={{ padding: "1.5rem", backgroundColor: "#1f2937", borderRadius: "0.75rem", textAlign: "center" }}>
-              <div style={{ fontSize: "0.85rem", color: "#9ca3af", marginBottom: "0.5rem" }}>生态位相似度</div>
-              <div style={{ fontSize: "2rem", fontWeight: "bold", color: "#3b82f6" }}>
-                {(compareResult.similarity * 100).toFixed(1)}%
-              </div>
-              <div style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: "0.5rem" }}>
-                基于描述向量的余弦相似度
-              </div>
-            </div>
-
-            <div className="metric-card" style={{ padding: "1.5rem", backgroundColor: "#1f2937", borderRadius: "0.75rem", textAlign: "center" }}>
-              <div style={{ fontSize: "0.85rem", color: "#9ca3af", marginBottom: "0.5rem" }}>生态位重叠度</div>
-              <div style={{ fontSize: "2rem", fontWeight: "bold", color: "#10b981" }}>
-                {(compareResult.overlap * 100).toFixed(1)}%
-              </div>
-              <div style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: "0.5rem" }}>
-                资源利用的重叠程度
-              </div>
-            </div>
-
-            <div className="metric-card" style={{ padding: "1.5rem", backgroundColor: "#1f2937", borderRadius: "0.75rem", textAlign: "center" }}>
-              <div style={{ fontSize: "0.85rem", color: "#9ca3af", marginBottom: "0.5rem" }}>竞争强度</div>
-              <div
-                style={{
-                  fontSize: "2rem",
-                  fontWeight: "bold",
-                  color: getIntensityColor(compareResult.competition_intensity),
-                }}
-              >
-                {(compareResult.competition_intensity * 100).toFixed(1)}%
-              </div>
-              <div style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: "0.5rem" }}>
-                综合考虑种群规模的竞争压力
-              </div>
-            </div>
-          </div>
-
-          <div className="dimensions-comparison" style={{ backgroundColor: "#1f2937", borderRadius: "0.75rem", padding: "1.5rem" }}>
-            <h3 style={{ fontSize: "1.25rem", fontWeight: "600", marginBottom: "1.5rem" }}>生态位维度对比</h3>
-            <div style={{ display: "grid", gap: "1rem" }}>
-              {Object.entries(compareResult.niche_dimensions).map(([dimension, values]) => {
-                const valueA = values.species_a;
-                const valueB = values.species_b;
-                const maxValue = Math.max(valueA, valueB) || 1;
-                const percentA = (valueA / maxValue) * 100;
-                const percentB = (valueB / maxValue) * 100;
-
-                return (
-                  <div key={dimension} style={{ marginBottom: "0.5rem" }}>
-                    <div style={{ fontSize: "0.9rem", fontWeight: "500", marginBottom: "0.75rem" }}>{dimension}</div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: "1rem", alignItems: "center" }}>
-                      <div style={{ textAlign: "right" }}>
-                        <div style={{ fontSize: "0.85rem", color: "#9ca3af", marginBottom: "0.25rem" }}>
-                          {compareResult.species_a.common_name}
-                        </div>
-                        <div
-                          style={{
-                            height: "8px",
-                            backgroundColor: "#3b82f6",
-                            borderRadius: "4px",
-                            width: `${percentA}%`,
-                            marginLeft: "auto",
-                          }}
-                        />
-                        <div style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: "0.25rem" }}>
-                          {formatNumber(valueA)}
-                        </div>
+        <div className="selector-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", marginBottom: "24px" }}>
+          <div className="species-selector">
+            <h3 style={{ fontSize: "1.1rem", fontWeight: "600", marginBottom: "12px", color: "#3b82f6" }}>
+              物种 A (基准)
+            </h3>
+            <input
+              type="text"
+              placeholder="搜索物种名、学名或代码..."
+              value={searchA}
+              onChange={(e) => setSearchA(e.target.value)}
+              className="field-input"
+              style={{ width: "100%", marginBottom: "12px" }}
+            />
+            <div
+              className="custom-scrollbar"
+              style={{
+                maxHeight: "300px",
+                overflowY: "auto",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: "8px",
+                backgroundColor: "rgba(0,0,0,0.2)",
+              }}
+            >
+              {filteredSpeciesA.length === 0 ? (
+                <div style={{ padding: "24px", textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+                  未找到匹配的物种
+                </div>
+              ) : (
+                filteredSpeciesA.map((species) => (
+                  <button
+                    key={species.lineage_code}
+                    onClick={() => setSelectedA(species.lineage_code)}
+                    style={{
+                      width: "100%",
+                      padding: "10px 16px",
+                      borderBottom: "1px solid rgba(255,255,255,0.05)",
+                      backgroundColor: selectedA === species.lineage_code ? "rgba(59, 130, 246, 0.15)" : "transparent",
+                      borderLeft: selectedA === species.lineage_code ? "3px solid #3b82f6" : "3px solid transparent",
+                      borderTop: "none",
+                      borderRight: "none",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      transition: "all 0.15s",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      color: "#e2ecff"
+                    }}
+                    onMouseEnter={(e) => {
+                      if (selectedA !== species.lineage_code) {
+                        e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.05)";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (selectedA !== species.lineage_code) {
+                        e.currentTarget.style.backgroundColor = "transparent";
+                      }
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: "500", fontSize: "0.9rem", marginBottom: "2px" }}>
+                        {species.common_name}
+                        <span style={{ marginLeft: "6px", fontSize: "0.75rem", color: "rgba(255,255,255,0.5)" }}>
+                          [{species.lineage_code}]
+                        </span>
                       </div>
+                      <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.5)", fontStyle: "italic" }}>
+                        {species.latin_name}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "2px" }}>
+                      <span
+                        style={{
+                          fontSize: "0.7rem",
+                          padding: "2px 6px",
+                          borderRadius: "4px",
+                          backgroundColor: getRoleColor(species.ecological_role),
+                          color: "white",
+                        }}
+                      >
+                        {species.ecological_role}
+                      </span>
+                      <span style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.4)" }}>
+                        {formatNumber(species.population)}
+                      </span>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
 
-                      <div style={{ fontSize: "1.25rem", fontWeight: "bold", color: "#4b5563" }}>VS</div>
+          <div className="species-selector">
+            <h3 style={{ fontSize: "1.1rem", fontWeight: "600", marginBottom: "12px", color: "#10b981" }}>
+              物种 B (对比)
+            </h3>
+            <input
+              type="text"
+              placeholder="搜索物种名、学名或代码..."
+              value={searchB}
+              onChange={(e) => setSearchB(e.target.value)}
+              className="field-input"
+              style={{ width: "100%", marginBottom: "12px" }}
+            />
+            <div
+              className="custom-scrollbar"
+              style={{
+                maxHeight: "300px",
+                overflowY: "auto",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: "8px",
+                backgroundColor: "rgba(0,0,0,0.2)",
+              }}
+            >
+              {filteredSpeciesB.length === 0 ? (
+                <div style={{ padding: "24px", textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+                  未找到匹配的物种
+                </div>
+              ) : (
+                filteredSpeciesB.map((species) => (
+                  <button
+                    key={species.lineage_code}
+                    onClick={() => setSelectedB(species.lineage_code)}
+                    style={{
+                      width: "100%",
+                      padding: "10px 16px",
+                      borderBottom: "1px solid rgba(255,255,255,0.05)",
+                      backgroundColor: selectedB === species.lineage_code ? "rgba(16, 185, 129, 0.15)" : "transparent",
+                      borderLeft: selectedB === species.lineage_code ? "3px solid #10b981" : "3px solid transparent",
+                      borderTop: "none",
+                      borderRight: "none",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      transition: "all 0.15s",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      color: "#e2ecff"
+                    }}
+                    onMouseEnter={(e) => {
+                      if (selectedB !== species.lineage_code) {
+                        e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.05)";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (selectedB !== species.lineage_code) {
+                        e.currentTarget.style.backgroundColor = "transparent";
+                      }
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: "500", fontSize: "0.9rem", marginBottom: "2px" }}>
+                        {species.common_name}
+                        <span style={{ marginLeft: "6px", fontSize: "0.75rem", color: "rgba(255,255,255,0.5)" }}>
+                          [{species.lineage_code}]
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.5)", fontStyle: "italic" }}>
+                        {species.latin_name}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "2px" }}>
+                      <span
+                        style={{
+                          fontSize: "0.7rem",
+                          padding: "2px 6px",
+                          borderRadius: "4px",
+                          backgroundColor: getRoleColor(species.ecological_role),
+                          color: "white",
+                        }}
+                      >
+                        {species.ecological_role}
+                      </span>
+                      <span style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.4)" }}>
+                        {formatNumber(species.population)}
+                      </span>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
 
-                      <div style={{ textAlign: "left" }}>
-                        <div style={{ fontSize: "0.85rem", color: "#9ca3af", marginBottom: "0.25rem" }}>
-                          {compareResult.species_b.common_name}
+        <div style={{ display: "flex", justifyContent: "center", gap: "1rem", marginBottom: "32px" }}>
+          <button
+            onClick={handleCompare}
+            disabled={!selectedA || !selectedB || loading}
+            className="btn-primary btn-lg"
+            style={{
+              opacity: selectedA && selectedB ? 1 : 0.5,
+              cursor: selectedA && selectedB ? "pointer" : "not-allowed",
+            }}
+          >
+            {loading ? "计算中..." : "⚔️ 开始对比分析"}
+          </button>
+        </div>
+
+        {compareResult && (
+          <div className="compare-result fade-in">
+            <div className="metrics-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "24px", marginBottom: "32px" }}>
+              <div className="metric-card" style={{ padding: "24px", backgroundColor: "rgba(255,255,255,0.03)", borderRadius: "12px", textAlign: "center", border: "1px solid rgba(255,255,255,0.1)" }}>
+                <div style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "1px" }}>生态位相似度</div>
+                <div style={{ fontSize: "2.5rem", fontWeight: "bold", color: "#3b82f6", fontFamily: "var(--font-mono)" }}>
+                  {(compareResult.similarity * 100).toFixed(1)}%
+                </div>
+                <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.4)", marginTop: "8px" }}>
+                  基于描述向量的余弦相似度
+                </div>
+              </div>
+
+              <div className="metric-card" style={{ padding: "24px", backgroundColor: "rgba(255,255,255,0.03)", borderRadius: "12px", textAlign: "center", border: "1px solid rgba(255,255,255,0.1)" }}>
+                <div style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "1px" }}>生态位重叠度</div>
+                <div style={{ fontSize: "2.5rem", fontWeight: "bold", color: "#10b981", fontFamily: "var(--font-mono)" }}>
+                  {(compareResult.overlap * 100).toFixed(1)}%
+                </div>
+                <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.4)", marginTop: "8px" }}>
+                  资源利用的重叠程度
+                </div>
+              </div>
+
+              <div className="metric-card" style={{ padding: "24px", backgroundColor: "rgba(255,255,255,0.03)", borderRadius: "12px", textAlign: "center", border: "1px solid rgba(255,255,255,0.1)" }}>
+                <div style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "1px" }}>竞争强度</div>
+                <div
+                  style={{
+                    fontSize: "2.5rem",
+                    fontWeight: "bold",
+                    color: getIntensityColor(compareResult.competition_intensity),
+                    fontFamily: "var(--font-mono)"
+                  }}
+                >
+                  {(compareResult.competition_intensity * 100).toFixed(1)}%
+                </div>
+                <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.4)", marginTop: "8px" }}>
+                  综合考虑种群规模的竞争压力
+                </div>
+              </div>
+            </div>
+
+            <div className="dimensions-comparison" style={{ backgroundColor: "rgba(255,255,255,0.03)", borderRadius: "12px", padding: "24px", border: "1px solid rgba(255,255,255,0.1)" }}>
+              <h3 style={{ fontSize: "1.25rem", fontWeight: "600", marginBottom: "24px", color: "#e2ecff" }}>生态位维度对比</h3>
+              <div style={{ display: "grid", gap: "16px" }}>
+                {Object.entries(compareResult.niche_dimensions).map(([dimension, values]) => {
+                  const valueA = values.species_a;
+                  const valueB = values.species_b;
+                  const maxValue = Math.max(valueA, valueB) || 1;
+                  const percentA = (valueA / maxValue) * 100;
+                  const percentB = (valueB / maxValue) * 100;
+
+                  return (
+                    <div key={dimension} style={{ marginBottom: "8px" }}>
+                      <div style={{ fontSize: "0.9rem", fontWeight: "500", marginBottom: "8px", color: "rgba(255,255,255,0.8)" }}>{dimension}</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: "16px", alignItems: "center" }}>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginBottom: "4px" }}>
+                            {compareResult.species_a.common_name}
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "8px" }}>
+                            <div style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)", fontFamily: "var(--font-mono)" }}>{formatNumber(valueA)}</div>
+                            <div
+                              style={{
+                                height: "8px",
+                                backgroundColor: "#3b82f6",
+                                borderRadius: "4px",
+                                width: `${percentA}%`,
+                                minWidth: "4px"
+                              }}
+                            />
+                          </div>
                         </div>
-                        <div
-                          style={{
-                            height: "8px",
-                            backgroundColor: "#10b981",
-                            borderRadius: "4px",
-                            width: `${percentB}%`,
-                          }}
-                        />
-                        <div style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: "0.25rem" }}>
-                          {formatNumber(valueB)}
+
+                        <div style={{ fontSize: "0.9rem", fontWeight: "bold", color: "rgba(255,255,255,0.3)" }}>VS</div>
+
+                        <div style={{ textAlign: "left" }}>
+                          <div style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginBottom: "4px" }}>
+                            {compareResult.species_b.common_name}
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "flex-start", alignItems: "center", gap: "8px" }}>
+                            <div
+                              style={{
+                                height: "8px",
+                                backgroundColor: "#10b981",
+                                borderRadius: "4px",
+                                width: `${percentB}%`,
+                                minWidth: "4px"
+                              }}
+                            />
+                            <div style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)", fontFamily: "var(--font-mono)" }}>{formatNumber(valueB)}</div>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="species-details-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.5rem", marginTop: "2rem" }}>
-            <div className="species-detail-card" style={{ backgroundColor: "#1f2937", borderRadius: "0.75rem", padding: "1.5rem" }}>
-              <h4 style={{ fontSize: "1.1rem", fontWeight: "600", marginBottom: "1rem", color: "#3b82f6" }}>
-                {compareResult.species_a.common_name}
-              </h4>
-              <div style={{ fontSize: "0.9rem", fontStyle: "italic", color: "#9ca3af", marginBottom: "1rem" }}>
-                {compareResult.species_a.latin_name}
+                  );
+                })}
               </div>
-              <p style={{ fontSize: "0.9rem", lineHeight: "1.6", color: "#d1d5db" }}>
-                {compareResult.species_a.description}
-              </p>
             </div>
 
-            <div className="species-detail-card" style={{ backgroundColor: "#1f2937", borderRadius: "0.75rem", padding: "1.5rem" }}>
-              <h4 style={{ fontSize: "1.1rem", fontWeight: "600", marginBottom: "1rem", color: "#10b981" }}>
-                {compareResult.species_b.common_name}
-              </h4>
-              <div style={{ fontSize: "0.9rem", fontStyle: "italic", color: "#9ca3af", marginBottom: "1rem" }}>
-                {compareResult.species_b.latin_name}
+            <div className="species-details-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", marginTop: "32px" }}>
+              <div className="species-detail-card" style={{ backgroundColor: "rgba(59, 130, 246, 0.05)", borderRadius: "12px", padding: "24px", border: "1px solid rgba(59, 130, 246, 0.2)" }}>
+                <h4 style={{ fontSize: "1.1rem", fontWeight: "600", marginBottom: "12px", color: "#3b82f6" }}>
+                  {compareResult.species_a.common_name}
+                </h4>
+                <div style={{ fontSize: "0.9rem", fontStyle: "italic", color: "rgba(255,255,255,0.5)", marginBottom: "16px" }}>
+                  {compareResult.species_a.latin_name}
+                </div>
+                <p style={{ fontSize: "0.9rem", lineHeight: "1.6", color: "rgba(255,255,255,0.8)" }}>
+                  {compareResult.species_a.description}
+                </p>
               </div>
-              <p style={{ fontSize: "0.9rem", lineHeight: "1.6", color: "#d1d5db" }}>
-                {compareResult.species_b.description}
-              </p>
+
+              <div className="species-detail-card" style={{ backgroundColor: "rgba(16, 185, 129, 0.05)", borderRadius: "12px", padding: "24px", border: "1px solid rgba(16, 185, 129, 0.2)" }}>
+                <h4 style={{ fontSize: "1.1rem", fontWeight: "600", marginBottom: "12px", color: "#10b981" }}>
+                  {compareResult.species_b.common_name}
+                </h4>
+                <div style={{ fontSize: "0.9rem", fontStyle: "italic", color: "rgba(255,255,255,0.5)", marginBottom: "16px" }}>
+                  {compareResult.species_b.latin_name}
+                </div>
+                <p style={{ fontSize: "0.9rem", lineHeight: "1.6", color: "rgba(255,255,255,0.8)" }}>
+                  {compareResult.species_b.description}
+                </p>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </GamePanel>
   );
 }
 

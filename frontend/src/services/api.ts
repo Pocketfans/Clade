@@ -31,9 +31,13 @@ export async function runTurn(pressures: PressureDraft[] = []): Promise<TurnRepo
   return res.json();
 }
 
-export async function fetchMapOverview(viewMode: string = "terrain"): Promise<MapOverview> {
-  // 始终请求完整的 80x40 六边形网格，支持视图模式切换
-  const res = await fetch(`/api/map?limit_tiles=3200&limit_habitats=500&view_mode=${viewMode}`);
+export async function fetchMapOverview(viewMode: string = "terrain", speciesCode?: string): Promise<MapOverview> {
+  // 始终请求完整的 126x40 六边形网格 (约5040个)，支持视图模式切换
+  let url = `/api/map?limit_tiles=6000&limit_habitats=500&view_mode=${viewMode}`;
+  if (speciesCode) {
+    url += `&species_code=${speciesCode}`;
+  }
+  const res = await fetch(url);
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}));
     throw new Error(errorData.detail || `地图请求失败 (${res.status})`);
@@ -133,6 +137,7 @@ export async function testApiConnection(params: {
   base_url: string;
   api_key: string;
   model: string;
+  provider?: string;
 }): Promise<{ success: boolean; message: string; details?: string }> {
   const res = await fetch("/api/config/test-api", {
     method: "POST",
@@ -154,6 +159,7 @@ export async function createSave(params: {
   save_name: string;
   scenario: string;
   species_prompts?: string[];
+  map_seed?: number;
 }): Promise<any> {
   const res = await fetch("/api/saves/create", {
     method: "POST",
@@ -227,6 +233,39 @@ export async function compareNiche(speciesA: string, speciesB: string): Promise<
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}));
     throw new Error(errorData.detail || "niche compare failed");
+  }
+  return res.json();
+}
+
+// Admin API
+export async function checkHealth(): Promise<any> {
+  const res = await fetch("/api/admin/health");
+  if (!res.ok) throw new Error("health check failed");
+  return res.json();
+}
+
+export async function resetWorld(keepSaves: boolean, keepMap: boolean): Promise<any> {
+  const res = await fetch("/api/admin/reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keep_saves: keepSaves, keep_map: keepMap }),
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || "reset world failed");
+  }
+  return res.json();
+}
+
+export async function simulateTerrain(turns: number, width: number, height: number): Promise<any> {
+  const res = await fetch("/api/admin/simulate-terrain", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ turns, width, height }),
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || "simulate terrain failed");
   }
   return res.json();
 }

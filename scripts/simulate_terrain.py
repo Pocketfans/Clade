@@ -183,7 +183,7 @@ def print_terrain_summary(tiles: list[MapTile], turn: int, log_func):
 def main():
     parser = argparse.ArgumentParser(description="地形演化模拟")
     parser.add_argument("--turns", type=int, default=10, help="模拟回合数")
-    parser.add_argument("--width", type=int, default=80, help="地图宽度")
+    parser.add_argument("--width", type=int, default=126, help="地图宽度")
     parser.add_argument("--height", type=int, default=40, help="地图高度")
     args = parser.parse_args()
 

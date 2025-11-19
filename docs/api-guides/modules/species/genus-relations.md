@@ -1,16 +1,25 @@
 ﻿# 属级关系 – `/genus/{code}/relationships`
 
 - **Method**: `GET`
-- **实现**: `routes.py:1005`
-- **响应**: `{ "genus": str, "related": [ { "genus": str, "affinity": float } ] }`
+- **实现**: `backend/app/api/routes.py`
+- **响应**: 
+  ```json
+  {
+    "genus_code": string,
+    "genus_name": string,
+    "species": list[str],          // 属内物种列表
+    "genetic_distances": dict,     // 遗传距离矩阵
+    "can_hybridize_pairs": list    // 可杂交配对
+  }
+  ```
 
 ## 数据源
 - `genus_repository` 提供属级节点与关系网。
-- `history_repository` 补充共同事件统计。
+- `species_repository` 提供属内当前存活物种。
 
 ## 用例
 - 后台知识图谱可视化。
-- 为 AI 描述提供额外上下文（`SpeciesGenerator`）。
+- 分析属内物种的分化程度和杂交潜力。
 
 ## 前端
-- 暂无对应视图，若添加请更新 `frontend-integration` 文档。
+- 对应 `api.ts` 中的逻辑（暂无独立函数，可能在组件中调用或作为未来扩展）。

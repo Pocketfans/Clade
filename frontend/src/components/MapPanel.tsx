@@ -20,6 +20,7 @@ interface Props {
   onSelectTile: (tile: MapTileInfo, point: { clientX: number; clientY: number }) => void;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
+  highlightSpeciesId?: string | null; // New prop
 }
 
 const HEX_WIDTH = 40;
@@ -38,7 +39,7 @@ const STOP_VELOCITY = 0.1; // 停止阈值
 
 const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
 
-export function MapPanel({ map, onRefresh, selectedTile, onSelectTile, viewMode }: Props) {
+export function MapPanel({ map, onRefresh, selectedTile, onSelectTile, viewMode, highlightSpeciesId }: Props) {
   const [zoom, setZoom] = useState(INITIAL_ZOOM);
   const stageRef = useRef<HexStageHandle>(null);
 
@@ -79,6 +80,7 @@ export function MapPanel({ map, onRefresh, selectedTile, onSelectTile, viewMode 
             onSelectTile={onSelectTile}
             onZoomChange={setZoom}
             viewMode={viewMode}
+            highlightSpeciesId={highlightSpeciesId}
           />
           
           {/* Floating Zoom Controls */}
@@ -109,6 +111,7 @@ interface HexStageProps {
   onSelectTile: (tile: MapTileInfo, point: { clientX: number; clientY: number }) => void;
   onZoomChange: (value: number) => void;
   viewMode: ViewMode;
+  highlightSpeciesId?: string | null;
 }
 
 interface HexStageHandle {
@@ -119,7 +122,7 @@ interface HexStageHandle {
 const MOVEMENT_THRESHOLD = 4;
 
 const HexStage = forwardRef<HexStageHandle, HexStageProps>(function HexStage(
-  { map, selectedTile, onSelectTile, onZoomChange, viewMode },
+  { map, selectedTile, onSelectTile, onZoomChange, viewMode, highlightSpeciesId },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -392,6 +395,36 @@ const HexStage = forwardRef<HexStageHandle, HexStageProps>(function HexStage(
   const visibleTiles = useMemo(() => {
     if (!layout.worldWidth) return [];
 
+    // 预计算适宜度颜色映射 (如果处于适宜度模式且有高亮物种)
+    const suitabilityMap = new Map<number, string>();
+    if (viewMode === "suitability" && highlightSpeciesId) {
+      // 找到该物种的所有栖息地记录
+      // 注意：map.habitats 包含所有物种的记录，我们需要筛选
+      // 假设 map.habitats 中的 lineage_code 与 highlightSpeciesId 匹配
+      // 或者我们需要根据 species_id 匹配。这里假设 highlightSpeciesId 是 lineage_code
+      
+      // 性能优化：先建立 tile_id -> suitability 的映射
+      for (const hab of map.habitats) {
+        if (hab.lineage_code === highlightSpeciesId) {
+          // 简单的颜色插值：0 (红) -> 0.5 (黄) -> 1.0 (绿)
+          const s = Math.max(0, Math.min(1, hab.suitability));
+          let color = "#444"; // 默认
+          if (s < 0.5) {
+            // 红 -> 黄
+            const r = 255;
+            const g = Math.round(s * 2 * 255);
+            color = `rgb(${r}, ${g}, 0)`;
+          } else {
+            // 黄 -> 绿
+            const r = Math.round((1 - s) * 2 * 255);
+            const g = 255;
+            color = `rgb(${r}, ${g}, 0)`;
+          }
+          suitabilityMap.set(hab.tile_id, color);
+        }
+      }
+    }
+
     const scale = scaleRef.current;
     const { width: vpW, height: vpH } = viewportRef.current;
     
@@ -424,6 +457,17 @@ const HexStage = forwardRef<HexStageHandle, HexStageProps>(function HexStage(
         }
 
         const selected = selectedId === tile.id;
+        
+        // 决定最终颜色
+        let displayColor = tile.color;
+        if (viewMode === "suitability") {
+          if (highlightSpeciesId) {
+            displayColor = suitabilityMap.get(tile.id) || "rgba(255, 255, 255, 0.05)"; // 未分布区域显示为暗淡
+          } else {
+            displayColor = "#333"; // 无选中物种时全黑
+          }
+        }
+
         nodes.push(
           <HexCell
             key={`${tile.id}_${period}`}
@@ -431,6 +475,7 @@ const HexStage = forwardRef<HexStageHandle, HexStageProps>(function HexStage(
             position={{ x: pos.x + xOffset, y: pos.y }}
             selected={selected}
             viewMode={viewMode}
+            overrideColor={displayColor} // Pass override color
             onClick={(t, e) => {
               if (hasMovedRef.current) return;
               onSelectTile(t, { clientX: e.clientX, clientY: e.clientY });
@@ -440,7 +485,7 @@ const HexStage = forwardRef<HexStageHandle, HexStageProps>(function HexStage(
       }
     }
     return nodes;
-  }, [map.tiles, layout, selectedTile?.id, viewMode, onSelectTile, renderCamera]);
+  }, [map.tiles, map.habitats, layout, selectedTile?.id, viewMode, onSelectTile, renderCamera, highlightSpeciesId]);
 
   return (
     <div
@@ -488,10 +533,11 @@ interface HexCellProps {
   position: { x: number; y: number };
   selected: boolean;
   viewMode: ViewMode;
+  overrideColor?: string; // New prop
   onClick: (tile: MapTileInfo, event: React.MouseEvent<HTMLButtonElement>) => void;
 }
 
-const HexCell = memo(function HexCell({ tile, position, selected, viewMode, onClick }: HexCellProps) {
+const HexCell = memo(function HexCell({ tile, position, selected, viewMode, overrideColor, onClick }: HexCellProps) {
   return (
     <button
       type="button"
@@ -500,7 +546,7 @@ const HexCell = memo(function HexCell({ tile, position, selected, viewMode, onCl
         position: "absolute",
         left: `${position.x}px`,
         top: `${position.y}px`,
-        background: tile.color,
+        background: overrideColor || tile.color, // Use override if present
         color: "#000000",
       }}
       title={`${tile.terrain_type} | ${tile.climate_zone} | ${tile.elevation.toFixed(0)}m (${tile.x}, ${tile.y})`}
@@ -515,6 +561,7 @@ const HexCell = memo(function HexCell({ tile, position, selected, viewMode, onCl
     prevProps.tile.color === nextProps.tile.color &&
     prevProps.selected === nextProps.selected &&
     prevProps.viewMode === nextProps.viewMode &&
+    prevProps.overrideColor === nextProps.overrideColor && // Check override color
     prevProps.position.x === nextProps.position.x && 
     prevProps.position.y === nextProps.position.y
   );

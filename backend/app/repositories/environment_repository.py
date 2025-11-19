@@ -79,6 +79,9 @@ class EnvironmentRepository:
             if "global_avg_temperature" not in columns:
                 print("[环境仓储] 添加 global_avg_temperature 列...")
                 session.exec(text("ALTER TABLE map_state ADD COLUMN global_avg_temperature REAL DEFAULT 15.0"))
+            if "map_seed" not in columns:
+                print("[环境仓储] 添加 map_seed 列...")
+                session.exec(text("ALTER TABLE map_state ADD COLUMN map_seed INTEGER DEFAULT NULL"))
 
     def load_ui_config(self, path: Path) -> UIConfig:
         if not path.exists():

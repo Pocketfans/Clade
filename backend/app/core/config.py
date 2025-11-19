@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     report_model: str = Field(default="gpt-large", alias="REPORT_MODEL")
     lineage_model: str = Field(default="gpt-medium", alias="LINEAGE_MODEL")
     batch_rule_limit: int = 50
-    map_width: int = 80
+    map_width: int = 126
     map_height: int = 40
     reports_dir: str = "data/reports"
     exports_dir: str = "data/exports"
@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     ai_base_url: str | None = Field(default=None, alias="AI_BASE_URL")
     ai_api_key: str | None = Field(default=None, alias="AI_API_KEY")
     ai_request_timeout: int = Field(default=60, alias="AI_TIMEOUT")
+    ai_concurrency_limit: int = Field(default=15, alias="AI_CONCURRENCY_LIMIT")
     ui_config_path: str = Field(default="data/settings.json")
     
     # 日志配置

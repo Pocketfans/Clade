@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export type ViewMode = "terrain" | "terrain_type" | "elevation" | "biodiversity" | "climate";
+export type ViewMode = "terrain" | "terrain_type" | "elevation" | "biodiversity" | "climate" | "suitability";
 
 interface Props {
   currentMode: ViewMode;
@@ -14,6 +14,7 @@ export function MapViewSelector({ currentMode, onModeChange }: Props) {
     { value: "elevation", label: "海拔图", description: "海拔高度渐变色阶（-11000m至8848m）" },
     { value: "biodiversity", label: "生物热力图", description: "物种分布与多样性热力图" },
     { value: "climate", label: "气候图", description: "气候带与温度分布" },
+    { value: "suitability", label: "适宜度", description: "当前选中物种的生存适宜度分布" },
   ];
 
   return (

@@ -12,7 +12,7 @@ from ..core.seed import A_SCENARIO, seed_defaults
 from ..core.config import get_settings
 from ..models.species import Species
 from ..models.environment import MapTile, MapState, TerrainEvolutionHistory
-from ..models.history import HistoryRecord, TurnLog
+from ..models.history import TurnLog
 from ..repositories.species_repository import species_repository
 from ..repositories.environment_repository import environment_repository
 from ..services.terrain_evolution import TerrainEvolutionService
@@ -31,7 +31,7 @@ class ResetRequest(BaseModel):
 
 class TerrainSimRequest(BaseModel):
     turns: int = 5
-    width: int = 80
+    width: int = 126
     height: int = 40
 
 @router.get("/health")
@@ -84,7 +84,6 @@ def reset_world(request: ResetRequest) -> dict:
         # 1. 重置数据库
         with session_scope() as session:
             # 删除历史记录
-            session.exec(delete(HistoryRecord))
             session.exec(delete(TurnLog))
             
             # 删除非初始物种

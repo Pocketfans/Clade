@@ -1,25 +1,20 @@
 ﻿# 物种列表 – `GET /species/list`
 
 - **Method**: `GET`
-- **Path**: `/api/species/list?limit=&offset=&tier=&keyword=`
-- **实现**: `backend/app/api/routes.py:492`
+- **Path**: `/api/species/list`
+- **实现**: `backend/app/api/routes.py`
 - **响应模型**: `SpeciesList`
 
+## 描述
+获取当前所有存活或灭绝物种的简要列表。
+
 ## 参数
-- `limit` (int, default 50)
-- `offset` (int, default 0)
-- `tier` (optional, `critical/focus/background`)
-- `keyword` (optional, 搜索中文/拉丁名)
+当前版本暂不支持分页或过滤参数，返回全量数据。
 
 ## 数据来源
-- `species_repository.search_species`
-- `tiering_service` 决定默认排序
+- `species_repository.list_species`
+- 包含字段：谱系代码、拉丁名、俗名、种群数量、状态、生态角色。
 
 ## 前端
-- `frontend/src/services/api.ts` 尚需实现 `fetchSpeciesList`（TODO）。
-- UI：Species 列表视图（`frontend/src/components/SpeciesList.tsx` 计划）。
-
-## 示例
-```bash
-curl "http://localhost:8000/api/species/list?limit=20&tier=critical"
-```
+- `frontend/src/services/api.ts`: `fetchSpeciesList`
+- UI：Species 列表视图。

@@ -1,30 +1,46 @@
 ﻿# 生态位对比 – `/niche/compare`
 
 - **Method**: `POST`
-- **实现**: `backend/app/api/routes.py:821`
+- **实现**: `backend/app/api/routes.py`
 - **请求模型**: `NicheCompareRequest`
+  ```json
+  {
+    "species_a": "A1",
+    "species_b": "B1"
+  }
+  ```
 - **响应模型**: `NicheCompareResult`
 
 ## 用例
-- 比较两个或多个物种在资源使用、环境偏好方面的相似度。
-- 支持前端对比视图或研究报告。
+- 比较两个物种在资源使用、环境偏好方面的相似度。
+- 计算竞争强度（Competition Intensity）和重叠度（Overlap）。
 
 ## 流程
-1. `NicheAnalyzer` 读取物种向量（EmbeddingService）。
-2. 计算余弦相似度、资源重叠度。
-3. 返回 `scores`, `overlaps`, 建议行动（ex: 竞争、共存）。
+1. `NicheAnalyzer` 读取物种向量（EmbeddingService，要求真实 Embedding）。
+2. 计算向量余弦相似度。
+3. 结合种群规模计算竞争强度。
+4. 对比关键形态和抽象特征维度。
 
-## 请求示例
+## 响应示例
 ```json
 {
-  "primary_lineage": "CRIT-001",
-  "comparisons": ["FOC-100", "FOC-221"],
-  "dimensions": ["habitat", "diet", "behavior"]
+  "species_a": { ... },
+  "species_b": { ... },
+  "similarity": 0.85,
+  "overlap": 0.85,
+  "competition_intensity": 0.42,
+  "niche_dimensions": {
+    "种群数量": { "species_a": 1000, "species_b": 800 },
+    "体长(cm)": { ... },
+    ...
+  }
 }
 ```
 
 ## 前端
-- 待实现 `compareNiche` API 函数与 UI 组件。
+- `compareNiche` (api.ts)
+- 用于“生态位分析”或“物种对比”视图。
 
 ## 性能注意
-- 每次调用需要多次向量检索，建议限制 `comparisons` 数量 <= 5。
+- 调用 Embedding Service，可能产生 API 延迟。
+- 依赖 OpenAI 或其他 Embedding Provider。

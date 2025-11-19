@@ -1,7 +1,7 @@
 ﻿# 地形演化流程
 
 - **服务**: `backend/app/services/terrain_evolution.py`
-- **触发**: Turn 执行后或管理端调用（未来 `/map/evolve`）
+- **触发**: Turn 执行后或管理端调用 `/admin/simulate-terrain`
 - **输入**: 当前 `EnvironmentSystem`、`MigrationAdvisor` 建议、压力上下文
 - **输出**: 更新的地形、资源分布
 
@@ -12,7 +12,7 @@
 
 ## 配置
 - `settings.map_width/height` 控制栅格大小。
-- `settings.terrain_event_intensity`（TODO）
 
-## 文档 TODO
-- 当 `/map/evolve` 端点就绪后补充请求/响应示例。
+## 调试
+- 开发者可使用 `/admin/simulate-terrain` 接口在不影响游戏存档的情况下运行地形演化模拟。
+- 详见 [Admin Ops 文档](../saves-ops/admin-ops.md)。

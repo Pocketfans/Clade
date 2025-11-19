@@ -41,6 +41,13 @@ class Species(SQLModel, table=True):
     dormant_genes: dict = Field(default={}, sa_column=Column(JSON))
     stress_exposure: dict = Field(default={}, sa_column=Column(JSON))
 
+    # 历史高光时刻（用于LLM Context）
+    history_highlights: list[str] = Field(default=[], sa_column=Column(JSON))
+    # 累积漂移分数（用于触发描述更新）
+    accumulated_adaptation_score: float = 0.0
+    # 上次描述更新的回合
+    last_description_update_turn: int = 0
+
 class PopulationSnapshot(SQLModel, table=True):
     __tablename__ = "population_snapshots"
 

@@ -21,7 +21,7 @@ class MapStateManager:
         self.height = height
         self.repo = environment_repository
 
-    def ensure_initialized(self) -> None:
+    def ensure_initialized(self, map_seed: int | None = None) -> None:
         print(f"[地图管理器] 确保地图列已存在...")
         self.repo.ensure_tile_columns()
         
@@ -31,7 +31,7 @@ class MapStateManager:
         
         if not tiles:
             print(f"[地图管理器] 生成新地图 ({self.width}×{self.height})...")
-            generated = self._generate_grid()
+            generated = self._generate_grid(map_seed)
             print(f"[地图管理器] 生成了 {len(generated)} 个地块，正在保存...")
             self.repo.upsert_tiles(generated)
             print(f"[地图管理器] 地块保存完成")
@@ -102,10 +102,11 @@ class MapStateManager:
             
             if new_biome != old_biome:
                 tile.biome = new_biome
-                # 重新计算cover时使用随机噪声，或者保留一些一致性
-                # 这里简单使用随机，因为reclassify通常是大范围变动
-                import random
-                tile.cover = self._infer_cover(new_biome, random.random())
+                # 重新计算cover时使用确定性的伪随机（基于坐标）
+                # 这样在相同种子下会得到相同结果
+                coord_hash = (tile.x * 73856093) ^ (tile.y * 19349663)
+                pseudo_rand = (coord_hash % 1000) / 1000.0
+                tile.cover = self._infer_cover(new_biome, pseudo_rand)
                 updated_tiles.append(tile)
         
         if updated_tiles:
@@ -172,8 +173,9 @@ class MapStateManager:
         tile_limit: int = 3200, 
         habitat_limit: int = 3200,
         view_mode: ViewMode = "terrain",
+        species_id: int | None = None,
     ) -> MapOverview:
-        print(f"[地图管理器] 获取概览，地块限制={tile_limit}, 栖息地限制={habitat_limit}, 视图模式={view_mode}")
+        print(f"[地图管理器] 获取概览，地块限制={tile_limit}, 栖息地限制={habitat_limit}, 视图模式={view_mode}, 物种ID={species_id}")
         
         tiles = self.repo.list_tiles(limit=tile_limit)
         print(f"[地图管理器] 查询到 {len(tiles)} 个地块")
@@ -184,7 +186,9 @@ class MapStateManager:
             tiles = self.repo.list_tiles(limit=tile_limit)
             print(f"[地图管理器] 初始化后查询到 {len(tiles)} 个地块")
         
-        habitats = self.repo.latest_habitats(limit=habitat_limit)
+        # 如果指定了物种，优先查询该物种的栖息地
+        species_ids = [species_id] if species_id else None
+        habitats = self.repo.latest_habitats(limit=habitat_limit, species_ids=species_ids)
         print(f"[地图管理器] 查询到 {len(habitats)} 个栖息地记录")
         
         species_map = {sp.id: sp for sp in species_repository.list_species()}
@@ -291,8 +295,16 @@ class MapStateManager:
             turn_index=turn_idx,
         )
 
-    def _generate_grid(self) -> list[MapTile]:
+    def _generate_grid(self, map_seed: int | None = None) -> list[MapTile]:
         tiles: list[MapTile] = []
+        
+        # 初始化随机种子（基于时间戳，确保每次生成不同的地图）
+        import time
+        if map_seed is None:
+            map_seed = int(time.time() * 1000000) % 2147483647
+        print(f"[地图管理器] 使用随机种子: {map_seed}")
+        random.seed(map_seed)
+        np.random.seed(map_seed % (2**32))  # numpy也需要设置种子
         
         # 1. 生成基于高斯大陆+噪声的全局高度图 (用于严格控制海陆比)
         # 返回的是 0-1 的 percentile 矩阵，值越高海拔越高
@@ -352,6 +364,13 @@ class MapStateManager:
         
         # 修正海岸判定和识别湖泊
         self._classify_water_bodies(tiles)
+        
+        # 保存地图种子到状态（用于未来重现）
+        map_state = self.repo.get_state()
+        if map_state:
+            map_state.map_seed = map_seed
+            self.repo.save_state(map_state)
+            print(f"[地图管理器] 地图种子已保存: {map_seed}")
         
         return tiles
 
@@ -483,9 +502,7 @@ class MapStateManager:
         在海洋中生成5-10个随机岛屿，增加地形随机性
         每个岛屿包含3-15个地块
         """
-        import random
-        import time
-        random.seed(int(time.time() * 1000000) % 2147483647)  # 使用时间戳种子
+        # 注意：不要在这里重新设置seed，使用主种子的随机序列
         
         # 构建坐标到地块的映射
         tile_map = {(tile.x, tile.y): tile for tile in tiles}
@@ -531,7 +548,6 @@ class MapStateManager:
                     # 重新推断生物群系
                     tile.biome = self._infer_biome(tile.temperature, tile.humidity, tile.elevation)
                     # 岛屿上植被稍显茂盛，noise 给稍高一点的均值随机
-                    import random
                     tile_noise = random.uniform(0.3, 0.8)
                     tile.cover = self._infer_cover(tile.biome, tile_noise)
                 
@@ -540,16 +556,15 @@ class MapStateManager:
                     neighbors = self._get_neighbor_offsets(x, y)
                     random.shuffle(neighbors)
                     for nx, ny in neighbors:
-                        if 0 <= nx < self.width and 0 <= ny < self.height:
-                            if (nx, ny) not in visited:
-                                neighbor_tile = tile_map.get((nx, ny))
-                                # 只扩展到海洋地块
-                                if neighbor_tile and neighbor_tile.elevation < 0:
-                                    visited.add((nx, ny))
-                                    island_tiles.append((nx, ny))
-                                    queue.append((nx, ny, dist + 1))
-                                    if len(island_tiles) >= island_size:
-                                        break
+                        if (nx, ny) not in visited:
+                            neighbor_tile = tile_map.get((nx, ny))
+                            # 只扩展到海洋地块
+                            if neighbor_tile and neighbor_tile.elevation < 0:
+                                visited.add((nx, ny))
+                                island_tiles.append((nx, ny))
+                                queue.append((nx, ny, dist + 1))
+                                if len(island_tiles) >= island_size:
+                                    break
     
     def _adjust_coastal_depth(self, tiles: list[MapTile]) -> None:
         """
@@ -584,16 +599,15 @@ class MapStateManager:
                     # 距陆地4格内：逐渐加深
                     if min_distance == 1:
                         # 1格内：-1m到-30m（海岸浅海）
-                        import random
-                        import time
-                        random.seed(int((tile.x * 1000 + tile.y * 10000 + time.time() * 10) * 54321) % 2147483647)
-                        tile.elevation = -1 - random.random() * 29  # -1到-30m
+                        # 使用确定性的伪随机（基于坐标），这样相同种子会得到相同结果
+                        coord_hash = (tile.x * 73856093) ^ (tile.y * 19349663)
+                        pseudo_rand = (coord_hash % 1000) / 1000.0
+                        tile.elevation = -1 - pseudo_rand * 29  # -1到-30m
                     elif min_distance == 2:
                         # 2格内：-30m到-100m
-                        import random
-                        import time
-                        random.seed(int((tile.x * 1000 + tile.y * 10000 + time.time() * 100) * 54321) % 2147483647)
-                        tile.elevation = -30 - random.random() * 70  # -30到-100m
+                        coord_hash = (tile.x * 73856093) ^ (tile.y * 19349663)
+                        pseudo_rand = (coord_hash % 1000) / 1000.0
+                        tile.elevation = -30 - pseudo_rand * 70  # -30到-100m
                     elif min_distance == 3:
                         # 3格内：-100m到-300m
                         tile.elevation = max(-300, min(-100, tile.elevation * 0.4))
@@ -669,16 +683,16 @@ class MapStateManager:
             x, y = queue.pop(0)
             
             # 检查是否到达地图边界（说明连通到外海）
-            if x == 0 or x == self.width - 1 or y == 0 or y == self.height - 1:
+            # 注意：X轴是循环的，所以只有Y轴边界（南北极）算作"地图边界"
+            # 如果到达南北极的水域，视为连通大洋
+            if y == 0 or y == self.height - 1:
                 tile = tile_map.get((x, y))
                 if tile and tile.elevation < 0:
                     return False  # 连通到边界海洋
             
             # 扩展到相邻水域
             for dx, dy in self._get_neighbor_offsets(x, y):
-                # 注意：不使用横向循环，因为湖泊判定需要明确边界
-                if dx < 0 or dx >= self.width or dy < 0 or dy >= self.height:
-                    continue
+                # _get_neighbor_offsets 已经处理了X循环和Y越界
                 
                 if (dx, dy) in visited:
                     continue
@@ -692,19 +706,29 @@ class MapStateManager:
         return True
     
     def _get_neighbor_offsets(self, x: int, y: int) -> list[tuple[int, int]]:
-        """获取六边形相邻格子的坐标偏移（odd-q布局）"""
+        """获取六边形相邻格子的坐标 (odd-q布局)，处理东西方向循环"""
+        offsets = []
         if y & 1:  # 奇数行
-            return [
+            candidates = [
                 (x, y - 1), (x + 1, y - 1),  # 上方两个
                 (x - 1, y), (x + 1, y),      # 左右
                 (x, y + 1), (x + 1, y + 1),  # 下方两个
             ]
         else:  # 偶数行
-            return [
+            candidates = [
                 (x - 1, y - 1), (x, y - 1),  # 上方两个
                 (x - 1, y), (x + 1, y),      # 左右
                 (x - 1, y + 1), (x, y + 1),  # 下方两个
             ]
+            
+        for cx, cy in candidates:
+            # 处理X轴循环 (世界是圆的)
+            nx = cx % self.width
+            # Y轴不循环
+            if 0 <= cy < self.height:
+                offsets.append((nx, cy))
+                
+        return offsets
 
     def _elevation(self, lat: float, lon: float) -> float:
         """
@@ -750,11 +774,11 @@ class MapStateManager:
             math.sin((lon + lat) * math.pi * 19.1) * 0.04
         ) * 0.2
         
-        # 随机扰动（保持每次不同，权重10%）
-        import random
-        import time
-        random.seed(int((lon * 1000 + lat * 10000 + time.time()) * 12345) % 2147483647)
-        random_noise = (random.random() - 0.5) * 0.15
+        # 随机扰动（使用确定性伪随机，基于坐标，权重10%）
+        # 使用坐标哈希而非时间戳，确保相同种子下地图可重现
+        coord_hash = int((lon * 1000 + lat * 10000) * 12345) % 2147483647
+        pseudo_rand = (coord_hash % 10000) / 10000.0
+        random_noise = (pseudo_rand - 0.5) * 0.15
         
         # 综合噪声（应用纬度权重）
         combined = (plate_noise + mountain_noise + local_noise + random_noise) * lat_weight

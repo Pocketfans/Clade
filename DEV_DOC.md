@@ -11,8 +11,8 @@
 
 1.  **环境输入 (Rules)**：解析温度、湿度、海平面变化。
 2.  **地形演化 (Hybrid)**：
-    *   **Rules**: 板块运动阶段（稳定/分裂/碰撞）决定大趋势。
-    *   **AI**: 决定具体发生在哪里（如“赤道附近的火山爆发”），并生成地质描述。
+    *   **Rules**: `MapEvolutionService` 管理板块运动阶段（稳定/分裂/碰撞）与全球气候参数。
+    *   **AI**: `TerrainEvolutionService` 决定具体地质事件（如“火山造山”、“海岸侵蚀”），并生成地质描述。
 3.  **营养级互动 (Rules)**：
     *   计算全图生物量（Biomass）。
     *   自下而上（Bottom-up）计算资源限制：植物 -> 食草 -> 食肉。
@@ -35,8 +35,11 @@
     *   综合考虑 5 种压力：环境不适、生态位重叠、资源匮乏、被捕食、自然衰老。
     *   引入 **最小生存阈值**，防止种群无限趋近于零而不灭绝。
 *   **`GeneticDistanceCalculator` (遗传距离)**：
-    *   基于形态学差异、器官差异、分化时间计算 0.0-1.0 的距离。
+    *   基于形态与基因特征计算 0.0-1.0 的距离。
     *   **硬约束**：距离 > 0.5 的物种绝对无法杂交。
+*   **`SpeciesTieringService` (物种分级)**：
+    *   **性能优化**：将物种分为 `Critical` (焦点)、`Normal` (普通) 和 `Background` (背景)。
+    *   **背景物种**：数量庞大但关注度低的物种仅进行数值模拟，不消耗 AI Token。
 
 #### 🎨 创意层 (The Brush)
 这些服务负责提供无限的可能性：
@@ -47,16 +50,18 @@
 *   **`NicheAnalyzer` (生态位分析)**：
     *   使用 Embedding 向量化物种描述。
     *   计算物种间的余弦相似度，判断它们是在“激烈竞争”还是“互利共生”。
+*   **`TerrainEvolutionService` (地形演化)**：
+    *   利用 AI 模拟地质变迁，生成河流改道、山脉隆起等动态地图事件。
 
 #### 🧬 适应层 (The Adapter)
 这些服务负责物种在个体系内的动态调整与资源分配：
 
 *   **`GeneActivationService` (基因激活)**：
     *   **表观遗传机制**：当物种面临极高死亡率（>50%）时，沉睡的“休眠基因”会被唤醒。
-    *   **压力特异性**：干旱压力激活耐旱基因，寒冷压力激活皮毛基因。这是拉马克式演化在系统中的体现——“用进废退”的紧急版本。
+    *   **压力特异性**：干旱压力激活耐旱基因，寒冷压力激活皮毛基因。
 *   **`FocusBatchProcessor` (焦点叙事)**：
     *   **算力分配**：系统不会对所有 100+ 个物种都进行详尽的 AI 叙事。
-    *   **智能聚焦**：只对“主角”（发生重大变异、濒临灭绝或种群激增的物种）调用昂贵的 GPT-4 模型生成详细战报，其他物种仅做数值更新。
+    *   **智能聚焦**：只对“主角”（发生重大变异、濒临灭绝或种群激增的物种）调用昂贵的 GPT-4 模型生成详细战报。
 
 ## 2. 数据模型设计
 
@@ -64,7 +69,9 @@
 物种不仅仅是一段文本，它是一个结构化的对象：
 *   `morphology_stats`: 数值属性（体长、体重、代谢率）。
 *   `abstract_traits`: 适应性评分（耐寒: 8.5, 耐旱: 3.0）。
-*   `organs`: 结构化器官库（`{ "movement": { "type": "wings", "cost": 0.2 } }`）。
+*   `organs`: **[新增]** 结构化器官库（`{ "movement": { "type": "wings", "cost": 0.2 } }`）。
+*   `capabilities`: **[新增]** 能力标签列表（如 `["photosynthesis", "flight"]`）。
+*   `trophic_level`: **[新增]** 营养级数值（1.0 - 5.0）。
 *   `lineage_code`: 唯一标识符（如 "A1-B2"），蕴含了演化路径信息。
 
 ### 2.2 地图 (MapTile)
@@ -77,14 +84,16 @@
 ```text
 backend/
 ├── app/
-│   ├── ai/                 # LLM 集成
-│   │   ├── model_router.py # 智能路由（根据任务分发给不同模型）
-│   │   └── prompts/        # 精心调优的 Prompt 模板
+│   ├── ai/                 # LLM 集成 (Model Router, Prompts)
+│   ├── api/                # FastAPI 路由定义
 │   ├── core/               # 基础设施 (DB, Config)
 │   ├── models/             # SQLModel 数据定义
-│   ├── services/           # 业务逻辑 (上述算法的实现地)
-│   │   ├── adaptation.py   # 渐进演化
-│   │   ├── speciation.py   # 物种分化
+│   ├── repositories/       # 数据访问层 (CRUD)
+│   ├── schemas/            # Pydantic 请求/响应模型
+│   ├── services/           # 业务逻辑 (核心算法)
+│   │   ├── map_evolution.py     # 全球地图参数演化
+│   │   ├── terrain_evolution.py # 局部地形事件生成
+│   │   ├── tiering.py           # 物种分级管理
 │   │   └── ...
 │   └── simulation/         # 引擎主循环
 ├── tests/                  # 单元测试
@@ -95,12 +104,15 @@ backend/
 
 前端是一个独立的 React 应用，负责可视化复杂的演化数据。
 
-*   **技术栈**: Vite + React + TypeScript + D3.js
-*   **核心目录**:
-    *   `components/GenealogyGraphView.tsx`: 使用 D3.js 绘制交互式族谱树。
-    *   `components/MapPanel.tsx`: 六边形地图渲染器。
-    *   `services/api.ts`: 强类型的 API 客户端，与后端 `API_GUIDE.md` 保持同步。
-    *   `hooks/useGameState.ts`: 全局状态管理（当前回合、选中物种等）。
+*   **技术栈**: Vite + React + TypeScript + D3.js + Recharts
+*   **核心组件**:
+    *   `components/GlobalTrendsPanel.tsx`: 全球趋势仪表盘，展示环境与生物量历史曲线。
+    *   `components/SpeciesLedger.tsx`: 物种总账，提供可排序、筛选的物种列表视图。
+    *   `components/OrganismBlueprint.tsx`: 生物蓝图，可视化展示物种的器官结构与数值面板。
+    *   `components/FoodWebGraph.tsx`: 食物网关系图，展示捕食与被捕食关系。
+    *   `components/MapPanel.tsx`: 六边形地图渲染器，支持地形/生物量/温度等多种视图模式。
+    *   `components/GenealogyGraphView.tsx`: 交互式族谱树。
+    *   `services/api.ts`: 强类型的 API 客户端。
 
 ## 5. 数据库管理 (Database Management)
 
@@ -109,52 +121,37 @@ backend/
 *   **自动建表**: 系统启动时会自动检查并创建缺失的表 (`backend/app/core/database.py:init_db`)。
 *   **无迁移工具**: 目前未集成 Alembic。
     *   ⚠️ **注意**: 如果你修改了 `backend/app/models/` 下的模型定义，必须删除 `data/db/egame.db` 文件，重启后端以触发重建。
-    *   或者使用 `scripts/reset_to_initial_species.py` 进行重置。
+    *   或者使用前端的“重置世界”功能。
 
 ## 6. 运维与调试工具 (Scripts & Ops)
 
-为了简化开发流程，我们将核心运维工具集成到了前端 UI 的 **"开发者工具 (Admin Panel)"** 中。你可以在游戏设置菜单中找到它。
+为了简化开发流程，我们将核心运维工具集成到了前端 UI 的 **"设置 -> 开发者工具"** 中。
 
 ### 6.1 开发者工具面板 (Admin Panel)
 前端面板 (`frontend/src/components/AdminPanel.tsx`) 提供了以下功能：
 
-*   **系统健康 (System Health)**:
-    *   实时检查后端 API 连通性。
-    *   验证数据库完整性（初始物种是否存在）。
-    *   检查关键数据目录 (`data/db`, `data/logs` 等) 是否正常。
-*   **重置世界 (Reset World)**:
-    *   **一键重置**：清空数据库，删除所有存档，仅保留初始物种。
-    *   **选项**：支持保留存档文件 (`keep_saves`) 或地图演化历史 (`keep_map`)。
-    *   *对应后端接口*: `POST /api/admin/reset`
-*   **地形沙盒 (Terrain Sandbox)**:
-    *   独立运行地形演化模拟，不影响主游戏进度。
-    *   实时查看 AI 生成的地质事件日志。
-    *   *对应后端接口*: `POST /api/admin/simulate-terrain`
+*   **系统健康 (System Health)**: 检查 API、数据库及关键目录状态。
+*   **重置世界 (Reset World)**: 一键清空数据，支持保留存档或地图。
+*   **地形沙盒 (Terrain Sandbox)**: 独立测试地形演化算法。
 
 ### 6.2 命令行脚本 (Legacy Scripts)
-虽然推荐使用前端面板，但 `scripts/` 目录下仍保留了对应的 Python 脚本，供 CI/CD 或无头模式下使用：
-
-*   `scripts/health_check.py`: 命令行版的系统健康检查。
-*   `scripts/reset_world.py`: 命令行版的重置工具。
-*   `scripts/simulate_terrain.py`: 命令行版的地形演化模拟器。
+`scripts/` 目录下保留了对应的 Python 脚本，供 CI/CD 使用：
+*   `scripts/health_check.py`
+*   `scripts/reset_world.py`
+*   `scripts/simulate_terrain.py`
 
 ## 7. 开发指南
 
 ### 7.1 如何新增一种环境压力？
 1.  在 `backend/app/schemas/requests.py` 的 `PressureConfig` 中定义。
 2.  在 `backend/app/services/environment_system.py` 中添加解析逻辑。
-3.  在 `backend/app/services/mortality_engine.py` 中添加该压力对死亡率的影响公式。
+3.  在 `backend/app/simulation/species.py` 中添加该压力对死亡率的影响公式。
 
 ### 7.2 如何调整 AI 的创造力？
 *   修改 `backend/app/ai/prompts/` 下的模板。
 *   在 `data/settings.json` 中调整 `temperature` 参数。
 
 ### 7.3 AI 模型配置 (Model Router)
-系统支持多模型路由，可在 `.env` 中配置：
-*   `AI_BASE_URL`: 兼容 OpenAI 接口的 API 地址（如本地 vLLM 或第三方服务）。
-*   `AI_API_KEY`: 对应的 API Key。
+系统支持多模型路由，可在 `.env` 或前端设置中配置：
 *   **路由逻辑**: `backend/app/ai/model_router.py` 负责将不同任务（如 `narrative`, `speciation`）分发给不同的模型配置。
-
-### 7.4 调试建议
-*   **日志**：系统日志输出在 `data/logs/simulation.log`，包含详细的决策过程。
-*   **可视化**：使用前端的“族谱树”功能，可以直观地看到一次代码修改对物种演化路径的影响。
+*   **UI 配置**: 前端设置页面可以直接修改不同能力的模型参数。

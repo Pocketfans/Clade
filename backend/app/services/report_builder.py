@@ -12,7 +12,7 @@ class ReportBuilder:
     def __init__(self, router) -> None:
         self.router = router
 
-    def build_turn_narrative(
+    async def build_turn_narrative_async(
         self,
         species: Sequence[SpeciesSnapshot],
         pressures: Sequence[ParsedPressure],
@@ -22,7 +22,7 @@ class ReportBuilder:
         map_changes: Sequence | None = None,
         migration_events: Sequence | None = None,
     ) -> str:
-        """生成结构化、易读的回合叙事。"""
+        """生成结构化、易读的回合叙事 (Async)。"""
         
         # 构建数据摘要供 AI 使用
         pressure_lines = ", ".join(p.narrative for p in pressures) or "环境平稳"
@@ -42,7 +42,7 @@ class ReportBuilder:
             "migrations": [f"{item.lineage_code}迁徙" for item in (migration_events or [])[:3]],
         }
         
-        response = self.router.invoke("turn_report", payload)
+        response = await self.router.ainvoke("turn_report", payload)
         content = response.get("content") if isinstance(response, dict) else None
         
         # 解析 AI 响应
@@ -104,3 +104,6 @@ class ReportBuilder:
                 sections.append(f"- {change.stage}：{change.description}（{change.affected_region}）")
         
         return "\n".join(sections)
+
+    def build_turn_narrative(self, *args, **kwargs):
+        raise NotImplementedError("Use build_turn_narrative_async instead")

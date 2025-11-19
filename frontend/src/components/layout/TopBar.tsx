@@ -8,6 +8,8 @@ interface Props {
   scenarioInfo?: string;
   onOpenSettings: () => void;
   onSaveGame: () => void;
+  onOpenTrends: () => void;
+  onOpenLedger: () => void;
 }
 
 export function TopBar({ 
@@ -17,17 +19,19 @@ export function TopBar({
   saveName,
   scenarioInfo,
   onOpenSettings,
-  onSaveGame
+  onSaveGame,
+  onOpenTrends,
+  onOpenLedger
 }: Props) {
   return (
     <div style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
       {/* Left: Time and Status */}
       <div className="resource-group">
-        <div className="resource-item">
+        <div className="resource-item clickable" onClick={onOpenTrends} title="查看全球趋势">
           <span className="resource-label">回合 (Turn)</span>
           <span className="resource-value">{turnIndex}</span>
         </div>
-        <div className="resource-item">
+        <div className="resource-item clickable" onClick={onOpenLedger} title="查看物种统计">
           <span className="resource-label">物种 (Species)</span>
           <span className="resource-value">{speciesCount}</span>
         </div>

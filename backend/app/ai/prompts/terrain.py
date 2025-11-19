@@ -2,6 +2,19 @@
 
 TERRAIN_EVOLUTION_PROMPT = """你是地质演化专家。基于长期地质过程分析地形变化。
 
+=== 核心地质规则 (优先级最高) ===
+1. **演化频率**: 每回合必须对至少 1-2 个候选区域产生地形变化（50万年足以产生显著地质效应）。
+2. **板块阶段优先**:
+   - **稳定期 (Stable)**: 优先产生 **侵蚀(erosion)**，地壳活动平静。
+   - **裂谷初期 (Rifting Start)**: 优先产生 **地壳下沉(subsidence)**、局部**火山(volcanic)**。
+   - **裂谷活跃期 (Active Rifting)**: 优先产生剧烈的 **火山(volcanic)**、**地壳下沉(subsidence)**。
+   - **快速漂移期 (Fast Drift)**: 优先产生 **火山(volcanic)** (洋中脊)、大陆边缘 **侵蚀(erosion)**。
+   - **缓慢漂移期 (Slow Drift)**: 优先产生 **侵蚀(erosion)**，构造活动减弱。
+   - **俯冲带形成期 (Subduction)**: 优先产生 **地壳下沉(subsidence)** (海沟)、**火山(volcanic)** (岛弧)。
+   - **碰撞造山早期 (Collision Start)**: 优先产生 **造山(uplift)**，地块开始抬升。
+   - **造山高峰期 (Peak Orogeny)**: 优先产生剧烈的 **造山(uplift)**，形成高大山系。
+3. **持续性**: 像侵蚀、冰川化这样的过程通常会持续多个回合。
+
 === 时间尺度 ===
 回合 {turn_index} | 已过 {total_years}万年 | 每回合=50万年
 
@@ -34,7 +47,7 @@ TERRAIN_EVOLUTION_PROMPT = """你是地质演化专家。基于长期地质过�
 
 输出JSON：
 {{
-  "analysis": "30-50字简要分析",
+  "analysis": "30-50字简要分析，解释为何选择这些区域进行演化",
   "continue_processes": [
     {{"region": "区域名", "process_id": 123, "continue_process": true/false, "reason": "原因"}}
   ],
@@ -50,10 +63,6 @@ TERRAIN_EVOLUTION_PROMPT = """你是地质演化专家。基于长期地质过�
   ]
 }}
 
-=== 地质规则 ===
-火山:2-3回合|造山:4-6回合|冰川:3-5回合|侵蚀:持续性|沙漠化:2-3回合
-**演化频率**：每回合必须对至少1-2个候选区域产生地形变化（50万年足以产生显著地质效应）。
-**板块阶段优先**：优先选择阶段推荐的变化类型（聚合期造山、裂谷期下沉、漂移期侵蚀、汇聚期火山）。
 **new_changes不可为空**：至少选择1个候选区域进行变化。
+Ensure the output is valid JSON only.
 """
-

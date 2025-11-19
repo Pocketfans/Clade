@@ -3,7 +3,7 @@
 ## 编辑
 - **Method**: `POST`
 - **Path**: `/api/species/edit`
-- **实现**: `routes.py:265`
+- **实现**: `backend/app/api/routes.py`
 - **请求模型**: `SpeciesEditRequest`
 - **响应**: `LineageNode`（更新后的节点）
 
@@ -15,7 +15,7 @@
 ## AI 生成
 - **Method**: `POST`
 - **Path**: `/api/species/generate`
-- **实现**: `routes.py:695`
+- **实现**: `backend/app/api/routes.py`
 - **请求模型**: `GenerateSpeciesRequest`
 - **响应**: `{ success, species }`
 - **服务**: `SpeciesGenerator`, `ModelRouter`, `EmbeddingService`
@@ -28,7 +28,7 @@
 
 ## 前端
 - `editSpecies` 已在 `api.ts` 中实现。
-- `generateSpecies` 函数待实现（TODO），UI 预计为“AI 实验室”模块。
+- `generateSpecies` 已在 `api.ts` 中实现，用于创建存档时的自定义物种生成。
 
 ## 错误处理
 - 400：参数缺失或无效。

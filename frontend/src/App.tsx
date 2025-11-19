@@ -10,7 +10,7 @@ import { ContextDrawer } from "./components/layout/ContextDrawer";
 
 // 现有组件 (复用)
 import { MainMenu, type StartPayload } from "./components/MainMenu";
-import { MapPanel } from "./components/MapPanel";
+import { CanvasMapPanel } from "./components/CanvasMapPanel";
 import { SpeciesDetailPanel } from "./components/SpeciesDetailPanel";
 import { TileDetailPanel } from "./components/TileDetailPanel";
 import type { ViewMode } from "./components/MapViewSelector";
@@ -24,6 +24,9 @@ import { PressureModal } from "./components/PressureModal";
 import { GameSettingsMenu } from "./components/GameSettingsMenu";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { CreateSpeciesModal } from "./components/CreateSpeciesModal";
+import { GlobalTrendsPanel } from "./components/GlobalTrendsPanel";
+import { SpeciesLedger } from "./components/SpeciesLedger";
+import { FoodWebGraph } from "./components/FoodWebGraph";
 
 // API 与类型
 import type {
@@ -53,7 +56,7 @@ import {
 } from "./services/api";
 
 type Scene = "menu" | "game";
-type OverlayView = "none" | "genealogy" | "chronicle" | "niche";
+type OverlayView = "none" | "genealogy" | "chronicle" | "niche" | "foodweb";
 type DrawerMode = "none" | "tile" | "species";
 type StoredSession = {
   scene: Scene;
@@ -78,6 +81,8 @@ function useQueue() {
 }
 
 const defaultConfig: UIConfig = {
+  providers: {},
+  capability_routes: {},
   ai_provider: null,
   ai_model: null,
   ai_timeout: 60,
@@ -116,6 +121,8 @@ export default function App() {
   const [showGameSettings, setShowGameSettings] = useState(false); // In-game menu
   const [showPressureModal, setShowPressureModal] = useState(false);
   const [showCreateSpecies, setShowCreateSpecies] = useState(false);
+  const [showTrends, setShowTrends] = useState(false);
+  const [showLedger, setShowLedger] = useState(false);
 
   // Working Data
   const [pendingPressures, setPendingPressures] = useState<PressureDraft[]>([]);
@@ -157,6 +164,7 @@ export default function App() {
       if (key === "g") setOverlay("genealogy");
       else if (key === "h") setOverlay("chronicle");
       else if (key === "n") setOverlay("niche");
+      else if (key === "f") setOverlay("foodweb");
       else if (key === "p") setShowPressureModal(true);
       else if (key === "escape") {
         setOverlay("none");
@@ -221,7 +229,8 @@ export default function App() {
 
   async function refreshMap() {
     try {
-      const data = await fetchMapOverview(viewMode);
+      const speciesCode = viewMode === "suitability" ? selectedSpeciesId || undefined : undefined;
+      const data = await fetchMapOverview(viewMode, speciesCode);
       setMapData(data);
       if (data.tiles.length > 0 && selectedTileId == null) {
         setSelectedTileId(data.tiles[0].id);
@@ -233,7 +242,10 @@ export default function App() {
 
   const handleViewModeChange = (mode: ViewMode) => {
     setViewMode(mode);
-    if (mapData && mapData.tiles.length > 0 && mapData.tiles[0].colors) {
+    if (mode === "suitability") {
+      const speciesCode = selectedSpeciesId || undefined;
+      fetchMapOverview(mode, speciesCode).then(setMapData).catch(console.error);
+    } else if (mapData && mapData.tiles.length > 0 && mapData.tiles[0].colors) {
       const updatedTiles = mapData.tiles.map(tile => ({
         ...tile,
         color: tile.colors?.[mode] || tile.color
@@ -252,6 +264,19 @@ export default function App() {
   const handleSpeciesSelect = (id: string) => {
     setSelectedSpeciesId(id);
     setDrawerMode("species");
+    // Auto-switch to suitability lens
+    if (viewMode !== "suitability") {
+      // This will trigger handleViewModeChange which uses the state... 
+      // BUT state update is async. We should pass the ID explicitly if possible, 
+      // but handleViewModeChange relies on state for other things? 
+      // Actually handleViewModeChange uses selectedSpeciesId from closure.
+      // We should manually call fetch here to be safe or rely on effect?
+      // Let's manually call fetch to ensure we use the NEW id.
+      setViewMode("suitability");
+      fetchMapOverview("suitability", id).then(setMapData).catch(console.error);
+    } else {
+      fetchMapOverview("suitability", id).then(setMapData).catch(console.error);
+    }
   };
 
   async function executeTurn(drafts: PressureDraft[]) {
@@ -344,7 +369,9 @@ export default function App() {
     showSettings || 
     showPressureModal || 
     showCreateSpecies || 
-    showGameSettings
+    showGameSettings ||
+    showTrends ||
+    showLedger
   );
 
   // 3. Modals Layer
@@ -385,6 +412,16 @@ export default function App() {
           <FullscreenOverlay title="生态位对比" onClose={() => setOverlay("none")}>
             <NicheCompareView onClose={() => setOverlay("none")} />
           </FullscreenOverlay>
+        )}
+        {overlay === "foodweb" && (
+          <FoodWebGraph
+            speciesList={speciesList}
+            onClose={() => setOverlay("none")}
+            onSelectSpecies={(id) => {
+              handleSpeciesSelect(id);
+              setOverlay("none");
+            }}
+          />
         )}
 
         {/* Dialogs */}
@@ -438,6 +475,26 @@ export default function App() {
             }}
           />
         )}
+        {showTrends && (
+          <GlobalTrendsPanel
+            reports={reports}
+            onClose={() => setShowTrends(false)}
+          />
+        )}
+        {showLedger && (
+          <SpeciesLedger
+            speciesList={speciesList}
+            onClose={() => setShowLedger(false)}
+            onSelectSpecies={(id) => {
+              handleSpeciesSelect(id);
+              // Optional: close ledger on select, or keep it open? 
+              // Vic3 usually keeps ledger open, but here we have a drawer.
+              // Let's keep it open for now, or maybe close it if it covers the drawer.
+              // Given it's a modal, let's close it to show the drawer.
+              setShowLedger(false);
+            }}
+          />
+        )}
       </>
     );
   };
@@ -445,13 +502,14 @@ export default function App() {
   return (
     <GameLayout
       mapLayer={
-        <MapPanel
+        <CanvasMapPanel
           map={mapData}
           onRefresh={refreshMap}
           selectedTile={selectedTile}
           onSelectTile={handleTileSelect}
           viewMode={viewMode}
           onViewModeChange={handleViewModeChange}
+          highlightSpeciesId={selectedSpeciesId}
         />
       }
       topBar={
@@ -466,6 +524,8 @@ export default function App() {
              try { await saveGame(currentSaveName); alert("保存成功！"); }
              catch (e: any) { setError(`保存失败: ${e.message}`); }
           }}
+          onOpenTrends={() => setShowTrends(true)}
+          onOpenLedger={() => setShowLedger(true)}
         />
       }
       outliner={
@@ -483,6 +543,7 @@ export default function App() {
           onToggleGenealogy={() => setOverlay("genealogy")}
           onToggleHistory={() => setOverlay("chronicle")}
           onToggleNiche={() => setOverlay("niche")}
+          onToggleFoodWeb={() => setOverlay("foodweb")}
         />
       }
       drawer={renderDrawerContent()}

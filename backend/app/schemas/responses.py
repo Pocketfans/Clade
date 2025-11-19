@@ -21,6 +21,7 @@ class SpeciesSnapshot(BaseModel):
     resource_pressure: float | None = None
     is_background: bool | None = None
     tier: str | None = None
+    trophic_level: float | None = None
     grazing_pressure: float | None = None  # 新增：承受的啃食压力
     predation_pressure: float | None = None  # 新增：承受的捕食压力
 

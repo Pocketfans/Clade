@@ -1,7 +1,19 @@
 import { useEffect, useState } from "react";
+import { 
+  Play, 
+  BookOpen, 
+  Settings, 
+  Plus, 
+  Globe, 
+  Cpu, 
+  ArrowLeft, 
+  Trash2, 
+  Save,
+  Clock
+} from "lucide-react";
 
 import type { UIConfig } from "../services/api.types";
-import { listSaves, createSave, loadGame, generateSpecies, deleteSave } from "../services/api";
+import { listSaves, createSave, loadGame, deleteSave } from "../services/api";
 
 export interface StartPayload {
   mode: "create" | "load";
@@ -19,7 +31,7 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
   const [stage, setStage] = useState<"root" | "create" | "load" | "blank">("root");
   const [saves, setSaves] = useState<any[]>([]);
   const [saveName, setSaveName] = useState("");
-  const [selectedScenario, setSelectedScenario] = useState("");
+  const [mapSeed, setMapSeed] = useState("");
   const [speciesPrompts, setSpeciesPrompts] = useState<string[]>(["", "", ""]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +54,6 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
 
   async function handleCreateSave(scenario: string) {
     if (scenario === "空白剧本 · 从零塑造") {
-      setSelectedScenario("空白剧本");
       setStage("blank");
       return;
     }
@@ -59,6 +70,7 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
         save_name: saveName,
         scenario,
         species_prompts: undefined,
+        map_seed: mapSeed.trim() ? parseInt(mapSeed) : undefined,
       });
       onStart({ mode: "create", scenario, save_name: saveName });
     } catch (error: any) {
@@ -83,11 +95,11 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
     setLoading(true);
     setError(null);
     try {
-      console.log("[前端] 创建空白剧本存档，物种描述:", validPrompts);
       await createSave({
         save_name: saveName,
         scenario: "空白剧本",
         species_prompts: validPrompts,
+        map_seed: mapSeed.trim() ? parseInt(mapSeed) : undefined,
       });
       onStart({ mode: "create", scenario: "空白剧本", save_name: saveName });
     } catch (error: any) {
@@ -131,108 +143,199 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
 
   return (
     <div className="main-menu">
-      <div className="menu-hero">
-        <div className="menu-crest">EVO</div>
+      {/* 动态背景粒子 */}
+      <div className="animated-bg">
+        {Array.from({ length: 20 }).map((_, i) => (
+          <div 
+            key={i} 
+            className="bg-particle" 
+            style={{
+              left: `${Math.random() * 100}%`,
+              width: `${Math.random() * 4 + 1}px`,
+              height: `${Math.random() * 4 + 1}px`,
+              animationDuration: `${Math.random() * 10 + 10}s`,
+              animationDelay: `${Math.random() * 5}s`
+            }}
+          />
+        ))}
+      </div>
+
+      <div className="menu-hero fade-in">
+        <div className="menu-crest" style={{ background: 'rgba(255,255,255,0.1)', border: 'none' }}>EVO</div>
         <div>
-          <h1>EvoSandbox</h1>
-          <p>化身诸神视角，操控压力、塑造生态、见证族群谱系的沉浮。</p>
-          <p className="hint">
-            当前 AI：
-            {uiConfig?.ai_provider ? `${uiConfig.ai_provider} · ${uiConfig.ai_model || "默认模型"}` : "未配置"}
-          </p>
+          <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>EvoSandbox</h1>
+          <p style={{ fontSize: '1.1rem', opacity: 0.8 }}>化身诸神视角，操控压力、塑造生态、见证族群谱系的沉浮。</p>
         </div>
       </div>
+
       {error && (
-        <div className="error-banner" style={{ position: 'relative', top: 'auto', left: 'auto', transform: 'none', margin: '0 1rem 1rem' }}>
+        <div className="error-banner">
           <span>{error}</span>
-          <button
-            onClick={() => setError(null)}
-            className="btn-icon-sm"
-            style={{ background: 'rgba(255,255,255,0.2)' }}
-            aria-label="关闭错误提示"
-          >
-            ×
-          </button>
+          <button onClick={() => setError(null)} className="btn-icon-sm">×</button>
         </div>
       )}
-      <div className="menu-shell">
-        <aside className="menu-sidebar">
+
+      <div className="menu-shell fade-in" style={{ animationDelay: '0.1s', maxWidth: '1000px', margin: '0 auto', width: '100%' }}>
+        
+        {/* 侧边导航 */}
+        <aside className="menu-sidebar" style={{ minWidth: '240px' }}>
           <button
-            className={stage === "create" ? "menu-nav active" : "menu-nav"}
-            onClick={() => setStage("create")}
+            className={`menu-nav ${stage === "root" || stage === "create" || stage === "blank" ? "active" : ""}`}
+            onClick={() => setStage("root")}
           >
-            开始新纪元
+            <Play size={18} style={{ marginRight: 8 }} /> 开始新纪元
           </button>
           <button
-            className={stage === "load" ? "menu-nav active" : "menu-nav"}
+            className={`menu-nav ${stage === "load" ? "active" : ""}`}
             onClick={() => setStage("load")}
           >
-            读取编年史
+            <BookOpen size={18} style={{ marginRight: 8 }} /> 读取编年史
           </button>
           <button className="menu-nav" onClick={onOpenSettings}>
-            设置与 AI
+            <Settings size={18} style={{ marginRight: 8 }} /> 设置与 AI
           </button>
+          
+          <div style={{ marginTop: 'auto', padding: '1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '12px' }}>
+            <p className="hint" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Cpu size={14} />
+              AI 引擎状态
+            </p>
+            <p style={{ fontSize: '0.85rem', margin: '0.5rem 0 0', opacity: 0.9 }}>
+              {uiConfig?.ai_provider ? `${uiConfig.ai_provider} · ${uiConfig.ai_model || "默认"}` : "未配置"}
+            </p>
+          </div>
         </aside>
-        <section className="menu-panel">
-          {stage === "create" && (
-            <div className="menu-card">
-              <h2>成就新世界</h2>
-              <p>选择一份起源设定，稍后可在游戏中继续雕刻细节。</p>
-              <div style={{ marginBottom: "16px" }}>
-                <label className="text-sm font-medium mb-xs" style={{ display: "block" }}>存档名称：</label>
-                <input
-                  type="text"
-                  value={saveName}
-                  onChange={(e) => setSaveName(e.target.value)}
-                  placeholder="输入存档名称..."
-                  className="field-input"
-                  style={{ width: "100%" }}
-                />
+
+        {/* 主内容区 */}
+        <section style={{ flex: 1 }}>
+          
+          {/* 首页：选择模式 */}
+          {stage === "root" && (
+            <div className="grid grid-cols-1 gap-6 fade-in">
+              <div 
+                className="menu-visual-card"
+                onClick={() => setStage("create")}
+              >
+                <div className="menu-icon-wrapper">
+                  <Globe />
+                </div>
+                <div>
+                  <h3 className="menu-card-title">原初大陆 · 三族起源</h3>
+                  <p className="menu-card-desc">经典开局。从三个基础物种开始，观察它们如何在标准环境中竞争与演化。</p>
+                </div>
               </div>
-              <div className="menu-options">
-                <button
-                  className="menu-option"
-                  onClick={() => handleCreateSave("原初大陆 · 三族起源")}
-                  disabled={loading}
-                >
-                  原初大陆 · 三族起源
-                </button>
-                <button
-                  className="menu-option"
-                  onClick={() => handleCreateSave("空白剧本 · 从零塑造")}
-                  disabled={loading}
-                >
-                  空白剧本 · 从零塑造
-                </button>
+
+              <div 
+                className="menu-visual-card"
+                onClick={() => setStage("blank")}
+              >
+                <div className="menu-icon-wrapper" style={{ background: 'rgba(16, 185, 129, 0.2)', color: '#34d399' }}>
+                  <Plus />
+                </div>
+                <div>
+                  <h3 className="menu-card-title">空白剧本 · 从零塑造</h3>
+                  <p className="menu-card-desc">完全自由。使用自然语言描述你想要的初始物种，由 AI 为你生成独一无二的开局。</p>
+                </div>
               </div>
-              <p className="hint">原初大陆包含3个默认物种，空白剧本可用AI生成物种。</p>
             </div>
           )}
-          {stage === "blank" && (
-            <div className="menu-card">
-              <h2>空白剧本 - AI 生成物种</h2>
-              <p>用自然语言描述你想要的物种，AI会帮你生成符合数据库要求的物种数据。</p>
-              <div style={{ marginBottom: "16px" }}>
-                <label style={{ display: "block", marginBottom: "8px" }}>存档名称：</label>
+
+          {/* 创建普通存档 */}
+          {stage === "create" && (
+            <div className="glass-card fade-in">
+              <div className="flex justify-between items-center mb-lg">
+                <h2 className="text-xl font-display">新纪元配置</h2>
+                <button className="btn btn-ghost btn-sm" onClick={() => setStage("root")}>
+                  <ArrowLeft size={16} style={{ marginRight: 4 }} /> 返回
+                </button>
+              </div>
+              
+              <div className="form-field mb-xl">
+                <label className="field-label mb-xs">存档名称</label>
                 <input
                   type="text"
                   value={saveName}
                   onChange={(e) => setSaveName(e.target.value)}
-                  placeholder="输入存档名称..."
-                  style={{
-                    width: "100%",
-                    padding: "8px",
-                    borderRadius: "4px",
-                    border: "1px solid #444",
-                    backgroundColor: "#222",
-                    color: "white",
-                    marginBottom: "16px",
-                  }}
+                  placeholder="为这个新世界命名..."
+                  className="input-visual"
+                  autoFocus
                 />
+              </div>
+
+              <div className="form-field mb-xl">
+                <label className="field-label mb-xs">
+                  地图种子
+                  <span className="text-xs text-muted ml-2">(选填，留空则随机生成)</span>
+                </label>
+                <input
+                  type="text"
+                  value={mapSeed}
+                  onChange={(e) => setMapSeed(e.target.value.replace(/\D/g, ''))}
+                  placeholder="例如: 12345 (仅数字)"
+                  className="input-visual"
+                />
+                <p className="text-xs text-muted mt-1">使用相同种子可以重现相同的地图形状</p>
+              </div>
+
+              <div className="p-lg rounded-lg bg-white/5 mb-xl border border-white/10">
+                <h4 className="font-medium mb-sm text-info">剧本：原初大陆</h4>
+                <p className="text-sm text-muted">包含生产者、食草动物和食肉动物的基本生态平衡。</p>
+              </div>
+
+              <button
+                className="btn btn-primary btn-lg w-full justify-center"
+                onClick={() => handleCreateSave("原初大陆 · 三族起源")}
+                disabled={loading}
+                style={{ width: '100%' }}
+              >
+                {loading ? <span className="spinner mr-sm"/> : <Play size={20} className="mr-sm" />}
+                {loading ? "正在创世纪..." : "启动模拟"}
+              </button>
+            </div>
+          )}
+
+          {/* 空白剧本创建 */}
+          {stage === "blank" && (
+            <div className="glass-card fade-in">
+              <div className="flex justify-between items-center mb-lg">
+                <h2 className="text-xl font-display">智能物种生成</h2>
+                <button className="btn btn-ghost btn-sm" onClick={() => setStage("root")}>
+                  <ArrowLeft size={16} style={{ marginRight: 4 }} /> 返回
+                </button>
+              </div>
+
+              <div className="form-field mb-xl">
+                <label className="field-label mb-xs">存档名称</label>
+                <input
+                  type="text"
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  placeholder="为这个新世界命名..."
+                  className="input-visual"
+                />
+              </div>
+
+              <div className="form-field mb-xl">
+                <label className="field-label mb-xs">
+                  地图种子
+                  <span className="text-xs text-muted ml-2">(选填，留空则随机生成)</span>
+                </label>
+                <input
+                  type="text"
+                  value={mapSeed}
+                  onChange={(e) => setMapSeed(e.target.value.replace(/\D/g, ''))}
+                  placeholder="例如: 12345 (仅数字)"
+                  className="input-visual"
+                />
+                <p className="text-xs text-muted mt-1">使用相同种子可以重现相同的地图形状</p>
+              </div>
+
+              <div className="space-y-4 mb-xl">
                 {[0, 1, 2].map((i) => (
-                  <div key={i} style={{ marginBottom: "12px" }}>
-                    <label style={{ display: "block", marginBottom: "4px" }}>
-                      物种 {i + 1}：
+                  <div key={i} className="form-field fade-in" style={{ animationDelay: `${i * 0.1}s` }}>
+                    <label className="field-label mb-xs flex justify-between">
+                      <span>初始物种 {i + 1}</span>
+                      <span className="text-xs text-muted">{i === 0 ? "必填" : "选填"}</span>
                     </label>
                     <textarea
                       value={speciesPrompts[i]}
@@ -241,88 +344,79 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
                         newPrompts[i] = e.target.value;
                         setSpeciesPrompts(newPrompts);
                       }}
-                      placeholder="例如：一种生活在深海的发光水母，靠捕食小型浮游生物为生..."
-                      rows={3}
-                      style={{
-                        width: "100%",
-                        padding: "8px",
-                        borderRadius: "4px",
-                        border: "1px solid #444",
-                        backgroundColor: "#222",
-                        color: "white",
-                        fontFamily: "inherit",
-                        resize: "vertical",
-                      }}
+                      placeholder={i === 0 ? "例如：一种生活在深海的发光水母，靠捕食小型浮游生物为生..." : "描述另一个物种..."}
+                      rows={2}
+                      className="input-visual resize-y"
                     />
                   </div>
                 ))}
               </div>
-              <div style={{ display: "flex", gap: "12px" }}>
-                <button
-                  className="menu-option"
-                  onClick={handleCreateBlankSave}
-                  disabled={loading}
-                  style={{ flex: 1 }}
-                >
-                  {loading ? "生成中..." : "创建并生成物种"}
-                </button>
-                <button
-                  className="menu-option"
-                  onClick={() => setStage("create")}
-                  style={{ flex: 0, minWidth: "100px", backgroundColor: "#666" }}
-                >
-                  返回
-                </button>
-              </div>
-              <p className="hint">至少输入1个物种描述，最多3个。生成可能需要几秒钟。</p>
+
+              <button
+                className="btn btn-success btn-lg w-full justify-center"
+                onClick={handleCreateBlankSave}
+                disabled={loading}
+                style={{ width: '100%' }}
+              >
+                {loading ? <span className="spinner mr-sm"/> : <Cpu size={20} className="mr-sm" />}
+                {loading ? "AI 正在构思物种..." : "生成并开始"}
+              </button>
             </div>
           )}
+
+          {/* 读取存档 */}
           {stage === "load" && (
-            <div className="menu-card">
-              <h2>编年史</h2>
+            <div className="glass-card fade-in">
+              <h2 className="text-xl font-display mb-lg">编年史记录</h2>
               {saves.length === 0 ? (
-                <p className="hint">还没有存档，请先创建新游戏。</p>
+                <div className="text-center p-xl text-muted border border-dashed border-white/20 rounded-lg">
+                  <BookOpen size={48} style={{ margin: '0 auto 1rem', opacity: 0.3 }} />
+                  <p>暂无历史记录，请先开创新纪元。</p>
+                </div>
               ) : (
-                <ul className="save-list">
-                  {saves.map((save) => (
-                    <li key={save.save_name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{ flex: 1 }}>
-                        <strong>{save.save_name}</strong>
-                        <span>
-                          {save.scenario} · 回合 {save.turn_index} · {save.species_count} 物种
-                        </span>
-                        <small>{new Date(save.last_saved).toLocaleString("zh-CN")}</small>
+                <div className="flex flex-col gap-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                  {saves.map((save, idx) => (
+                    <div 
+                      key={save.save_name} 
+                      className="p-md rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-all flex justify-between items-center list-item"
+                      style={{ animationDelay: `${idx * 0.05}s` }}
+                    >
+                      <div>
+                        <h4 className="font-medium text-lg mb-1">{save.save_name}</h4>
+                        <div className="flex gap-4 text-sm text-muted">
+                          <span className="flex items-center gap-1"><Globe size={12}/> {save.scenario}</span>
+                          <span className="flex items-center gap-1"><Clock size={12}/> 回合 {save.turn_index}</span>
+                          <span>{save.species_count} 物种</span>
+                        </div>
+                        <div className="text-xs text-muted mt-1 opacity-60">
+                          {new Date(save.last_saved).toLocaleString("zh-CN")}
+                        </div>
                       </div>
-                      <div style={{ display: 'flex', gap: '8px' }}>
+                      <div className="flex gap-2">
                         <button
                           onClick={() => handleLoadSave(save.save_name)}
                           disabled={loading}
                           className="btn btn-primary btn-sm"
+                          title="读取存档"
                         >
-                          {loading ? "加载..." : "继续"}
+                          <Play size={16} />
                         </button>
                         <button
                           onClick={(e) => handleDeleteSave(e, save.save_name)}
                           disabled={loading}
-                          className="btn btn-sm"
-                          style={{ backgroundColor: '#d32f2f', color: 'white', border: 'none' }}
+                          className="btn btn-danger btn-sm"
                           title="删除存档"
                         >
-                          删除
+                          <Trash2 size={16} />
                         </button>
                       </div>
-                    </li>
+                    </div>
                   ))}
-                </ul>
+                </div>
               )}
             </div>
           )}
-          {stage === "root" && (
-            <div className="menu-card">
-              <h2>欢迎回来</h2>
-              <p>在左侧选择"开始"或"读取"，也可以先配置 AI 服务商与模型。</p>
-            </div>
-          )}
+
         </section>
       </div>
     </div>

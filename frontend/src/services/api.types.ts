@@ -26,6 +26,9 @@ export interface SpeciesSnapshot {
   resource_pressure?: number;
   is_background?: boolean;
   tier?: string | null;
+  trophic_level?: number;
+  grazing_pressure?: number;
+  predation_pressure?: number;
 }
 
 export interface BackgroundSummary {
@@ -90,6 +93,7 @@ export interface MapTileInfo {
     elevation: string;
     biodiversity: string;
     climate: string;
+    suitability?: string;
   };
 }
 
@@ -120,6 +124,8 @@ export interface TurnReport {
   map_changes: MapChange[];
   migration_events: MigrationEvent[];
   branching_events: BranchingEvent[];
+  sea_level: number;
+  global_temperature: number;
 }
 
 export interface LineageNode {
@@ -149,29 +155,50 @@ export interface LineageTree {
   nodes: LineageNode[];
 }
 
-export interface CapabilityModelConfig {
-  provider: string;
-  model: string;
+// --- 新增配置接口 ---
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  type: string;
   base_url?: string | null;
   api_key?: string | null;
+  models: string[];
+}
+
+export interface CapabilityRouteConfig {
+  provider_id?: string | null;
+  model?: string | null;
   timeout: number;
+  enable_thinking?: boolean;
 }
 
 export interface UIConfig {
-  // 全局默认配置（向后兼容）
+  // 1. 服务商库
+  providers: Record<string, ProviderConfig>;
+  
+  // 2. 全局默认设置
+  default_provider_id?: string | null;
+  default_model?: string | null;
+  
+  // 3. 功能路由表
+  capability_routes: Record<string, CapabilityRouteConfig>;
+  
+  // 4. Embedding 配置
+  embedding_provider_id?: string | null;
+  embedding_model?: string | null;
+
+  // --- Legacy Fields (For backward compatibility types) ---
   ai_provider?: string | null;
   ai_model?: string | null;
   ai_base_url?: string | null;
   ai_api_key?: string | null;
-  ai_timeout: number;
-  // 分功能配置（新增）
-  capability_configs?: Record<string, CapabilityModelConfig> | null;
-  // Embedding 配置（会根据配置完整性自动启用）
+  ai_timeout?: number;
+  capability_configs?: Record<string, any> | null;
   embedding_provider?: string | null;
-  embedding_model?: string | null;
   embedding_base_url?: string | null;
   embedding_api_key?: string | null;
 }
+
 export interface PressureDraft {
   kind: string;
   intensity: number;
@@ -220,4 +247,3 @@ export interface NicheCompareResult {
   competition_intensity: number;
   niche_dimensions: Record<string, Record<string, number>>;
 }
-

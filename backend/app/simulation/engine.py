@@ -99,7 +99,7 @@ class SimulationEngine:
     def update_watchlist(self, codes: set[str]) -> None:
         self.watchlist = set(codes)
 
-    def _calculate_trophic_interactions(self, species_list: list[Species]) -> dict[str, float]:
+    def _calculate_trophic_interactions(self, species_list: list) -> dict[str, float]:
         """计算营养级互动压力 (Scheme B)
         
         1. 计算每一层的总生物量
@@ -166,7 +166,7 @@ class SimulationEngine:
                     
         return interactions
 
-    def run_turns(self, command: TurnCommand) -> list[TurnReport]:
+    async def run_turns_async(self, command: TurnCommand) -> list[TurnReport]:
         reports: list[TurnReport] = []
         for turn_num in range(command.rounds):
             logger.info(f"执行第 {turn_num + 1}/{command.rounds} 回合, turn_counter={self.turn_counter}")
@@ -213,16 +213,16 @@ class SimulationEngine:
                         if abs(sea_level_change) > 0.5:
                             self.map_manager.reclassify_terrain_by_sea_level(new_sea_level)
                 
-                # 2.5. AI驱动的地形演化
-                logger.info(f"地形演化...")
+                # 2.5. AI驱动的地形演化 (Async)
+                logger.info(f"地形演化 (AI)...")
                 tiles = environment_repository.list_tiles()
                 prev_state = environment_repository.get_state() if self.turn_counter > 0 else None
-                updated_tiles, terrain_events = self.terrain_evolution.evolve_terrain(
+                updated_tiles, terrain_events = await self.terrain_evolution.evolve_terrain_async(
                     tiles, pressures, current_map_state, prev_state, self.turn_counter
                 )
                 if updated_tiles:
                     environment_repository.upsert_tiles(updated_tiles)
-                    print(f"[����] ������ {len(updated_tiles)} ���ؿ�")
+                    print(f"[地形] 更新了 {len(updated_tiles)} 个地块")
                 if terrain_events:
                     map_changes.extend(terrain_events)
                 
@@ -259,10 +259,13 @@ class SimulationEngine:
                     tiered.background, modifiers, niche_metrics, tier="background", trophic_interactions=trophic_interactions
                 )
                 
-                # 6. AI增润
-                logger.info(f"AI增润...")
-                self.critical_analyzer.enhance(critical_results)
-                self.focus_processor.enhance(focus_results)
+                # 6. AI增润 (Async)
+                logger.info(f"AI增润 (Critical)...")
+                await self.critical_analyzer.enhance_async(critical_results)
+                
+                logger.info(f"AI增润 (Focus)...")
+                await self.focus_processor.enhance_async(focus_results)
+                
                 combined_results = critical_results + focus_results + background_results
                 
                 # 7. 更新种群（死亡后的存活者）
@@ -291,7 +294,7 @@ class SimulationEngine:
                 
                 # 8.5. 应用渐进演化和退化机制
                 logger.info(f"应用适应性演化（渐进演化+退化）...")
-                adaptation_events = self.adaptation_service.apply_adaptations(
+                adaptation_events = await self.adaptation_service.apply_adaptations_async(
                     species_batch, modifiers, self.turn_counter
                 )
                 # 更新适应后的物种数据
@@ -328,15 +331,15 @@ class SimulationEngine:
                 if promotion_count > 0:
                     logger.info(f"{promotion_count}个亚种晋升为独立种")
                 
-                # 9. 分化处理（传递地图变化和重大事件以支持多样化分化）
-                logger.info(f"处理物种分化...")
-                branching = self.speciation.process(
+                # 9. 分化处理 (Async)
+                logger.info(f"处理物种分化 (AI)...")
+                branching = await self.speciation.process_async(
                     mortality_results=critical_results + focus_results,
                     existing_codes={s.lineage_code for s in species_batch},
                     average_pressure=sum(modifiers.values()) / (len(modifiers) or 1),
                     turn_index=self.turn_counter,
-                    map_changes=map_changes,  # P3-3: 传递地图变化
-                    major_events=major_events,  # P3-3: 传递重大事件
+                    map_changes=map_changes,
+                    major_events=major_events,
                 )
                 logger.info(f"分化事件数: {len(branching)}")
                 
@@ -358,9 +361,9 @@ class SimulationEngine:
                     critical_results + focus_results, modifiers, major_events, map_changes
                 )
                 
-                # 12. 构建报告
-                logger.info(f"构建回合报告...")
-                report = self._build_report(
+                # 12. 构建报告 (Async)
+                logger.info(f"构建回合报告 (AI)...")
+                report = await self._build_report_async(
                     combined_results,
                     pressures,
                     branching,
@@ -399,6 +402,7 @@ class SimulationEngine:
             except Exception as e:
                 logger.error(f"回合 {turn_num + 1} 执行失败: {str(e)}")
                 import traceback
+                print(traceback.format_exc())
                 
                 # 继续执行下一回合，不要完全中断
                 continue
@@ -406,7 +410,11 @@ class SimulationEngine:
         logger.info(f"所有回合完成，共生成 {len(reports)} 个报告")
         return reports
 
-    def _build_report(
+    # 保留 run_turns 方法以兼容旧调用
+    def run_turns(self, *args, **kwargs):
+        raise NotImplementedError("Use run_turns_async instead")
+
+    async def _build_report_async(
         self,
         mortality,
         pressures,
@@ -440,11 +448,13 @@ class SimulationEngine:
                     resource_pressure=item.resource_pressure,
                     is_background=item.is_background,
                     tier=item.tier,
+                    trophic_level=item.species.trophic_level,
                     grazing_pressure=item.grazing_pressure,
                     predation_pressure=item.predation_pressure,
                 )
             )
-        narrative = self.report_builder.build_turn_narrative(
+        
+        narrative = await self.report_builder.build_turn_narrative_async(
             species_snapshots,
             pressures,
             background_summary,

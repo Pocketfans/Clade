@@ -60,6 +60,13 @@ export function MapLegend({ viewMode, seaLevel = 0, temperature = 15 }: Props) {
       { color: "#fdd835", label: "亚热带 (15~20°C)" },
       { color: "#ff6f00", label: "热带 (>20°C)" },
     ],
+    suitability: [
+      { color: "#00ff00", label: "极高 (0.8-1.0)" },
+      { color: "#76ff03", label: "高 (0.6-0.8)" },
+      { color: "#ffff00", label: "中 (0.4-0.6)" },
+      { color: "#ff9800", label: "低 (0.2-0.4)" },
+      { color: "#f44336", label: "极低 (0-0.2)" },
+    ],
   };
 
   const currentLegend = legends[viewMode];

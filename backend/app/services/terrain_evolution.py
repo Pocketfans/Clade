@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import random
@@ -97,18 +98,7 @@ class TerrainEvolutionService:
         """
         计算地块的资源丰富度（绝对值：1-1000）
         与 MapStateManager._resources 保持一致
-        
-        Args:
-            temperature: 温度（°C）
-            elevation: 海拔（m）
-            humidity: 湿度（0-1）
-            latitude: 纬度（0-1，0.5为赤道）
-        
-        Returns:
-            资源值（1-1000）
         """
-        import math
-        
         base_resources = 100.0
         
         # 1. 温度因子（-30°C到35°C是最佳范围）
@@ -166,7 +156,7 @@ class TerrainEvolutionService:
         # 限制在1-1000范围
         return max(1.0, min(1000.0, total_resources))
     
-    def evolve_terrain(
+    async def evolve_terrain_async(
         self,
         tiles: list[MapTile],
         pressures: Sequence[ParsedPressure],
@@ -174,7 +164,7 @@ class TerrainEvolutionService:
         prev_state: MapState | None,
         turn_index: int,
     ) -> tuple[list[MapTile], list[MapChange]]:
-        """执行地形演化，返回更新的地块和多个地图事件"""
+        """执行地形演化，返回更新的地块和多个地图事件 (Async)"""
         logger.info(f"[地形演化] 回合 {turn_index} 开始...")
         logger.info(f"[地形演化] 板块阶段: {map_state.stage_name} ({map_state.stage_progress}/{map_state.stage_duration})")
         
@@ -200,7 +190,7 @@ class TerrainEvolutionService:
         
         # 4. 调用AI推理
         try:
-            ai_result = self._call_ai(context)
+            ai_result = await self._call_ai_async(context)
             logger.info(f"[地形演化] AI分析: {ai_result.analysis}")
             logger.info(f"[地形演化] 持续过程: {len(ai_result.continue_processes)}个, 新变化: {len(ai_result.new_changes)}个")
             
@@ -209,7 +199,6 @@ class TerrainEvolutionService:
                 logger.warning(f"[地形演化] AI未返回任何地形变化，强制触发备用演化...")
                 # 自动选择第一个候选区域，执行侵蚀
                 if candidates:
-                    from ..schemas.terrain import NewTerrainChange
                     ai_result.new_changes = [
                         NewTerrainChange(
                             region_name=candidates[0].name,
@@ -249,6 +238,9 @@ class TerrainEvolutionService:
         logger.info(f"[地形演化] 完成，更新了 {len(updated_tiles)} 个地块")
         return updated_tiles, change_events
     
+    def evolve_terrain(self, *args, **kwargs):
+        raise NotImplementedError("Use evolve_terrain_async instead")
+
     def _get_ongoing_processes(self, turn_index: int) -> list[TerrainEvolutionHistory]:
         """获取正在进行的地质过程"""
         with session_scope() as session:
@@ -463,7 +455,6 @@ class TerrainEvolutionService:
             return []
 
         height = max(t.y for t in tiles) + 1
-        width = max(t.x for t in tiles) + 1
         band = max(1, height // 3)
         regions: list[CandidateRegion] = []
 
@@ -594,11 +585,11 @@ class TerrainEvolutionService:
 海拔: 平均{avg_elev:.0f}m | 最高{max_elev:.0f}m | 最低{min_elev:.0f}m
 Top3生物群系: {biome_dist}"""
     
-    def _call_ai(self, context: dict) -> TerrainEvolutionResult:
-        """调用AI进行地形演化推理"""
+    async def _call_ai_async(self, context: dict) -> TerrainEvolutionResult:
+        """调用AI进行地形演化推理 (Async)"""
         prompt = TERRAIN_EVOLUTION_PROMPT.format(**context)
         
-        response = self.router.call_capability(
+        response = await self.router.acall_capability(
             capability="terrain_evolution",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
@@ -741,7 +732,8 @@ Top3生物群系: {biome_dist}"""
                 
                 # 重新计算资源（海拔、温度、湿度变化会影响资源）
                 # 需要知道纬度来计算资源
-                latitude = tile.y / 39.0 if hasattr(tile, 'y') else 0.5  # 假设地图高度为40
+                latitude = tile.y / 39.0 if hasattr(tile, 'y') else 0.5  # 兼容旧版
+                
                 tile.resources = self._calculate_resources(tile.temperature, tile.elevation, tile.humidity, latitude)
                 
                 updated_tiles.append(tile)
@@ -819,7 +811,8 @@ Top3生物群系: {biome_dist}"""
         """
         # 构建坐标到地块的映射
         tile_map = {(tile.x, tile.y): tile for tile in tiles}
-        width = max(t.x for t in tiles) + 1 if tiles else 80
+        # 动态获取尺寸
+        width = max(t.x for t in tiles) + 1 if tiles else 126
         height = max(t.y for t in tiles) + 1 if tiles else 40
         
         # 第一遍：识别海岸
@@ -827,7 +820,7 @@ Top3生物群系: {biome_dist}"""
             if (tile.elevation - sea_level) < 0:
                 # 检查是否邻近陆地（一格之内）
                 has_land_neighbor = False
-                for dx, dy in self._get_hex_neighbor_offsets(tile.x, tile.y):
+                for dx, dy in self._get_hex_neighbor_offsets(tile.x, tile.y, width, height):
                     neighbor = tile_map.get((dx, dy))
                     if neighbor and (neighbor.elevation - sea_level) >= 0:
                         has_land_neighbor = True
@@ -864,20 +857,27 @@ Top3生物群系: {biome_dist}"""
                 else:
                     tile.is_lake = False
     
-    def _get_hex_neighbor_offsets(self, x: int, y: int) -> list[tuple[int, int]]:
-        """获取六边形邻居坐标偏移（odd-q坐标）"""
+    def _get_hex_neighbor_offsets(self, x: int, y: int, width: int, height: int) -> list[tuple[int, int]]:
+        """获取六边形邻居坐标 (odd-q坐标)，支持X轴循环"""
         if y & 1:  # 奇数列
-            return [
+            candidates = [
                 (x, y - 1), (x + 1, y - 1),
                 (x - 1, y), (x + 1, y),
                 (x, y + 1), (x + 1, y + 1),
             ]
         else:  # 偶数列
-            return [
+            candidates = [
                 (x - 1, y - 1), (x, y - 1),
                 (x - 1, y), (x + 1, y),
                 (x - 1, y + 1), (x, y + 1),
             ]
+        
+        valid = []
+        for cx, cy in candidates:
+            nx = cx % width
+            if 0 <= cy < height:
+                valid.append((nx, cy))
+        return valid
     
     def _is_landlocked_tile(
         self, start_tile: MapTile, tile_map: dict[tuple[int, int], MapTile], 
@@ -894,17 +894,14 @@ Top3生物群系: {biome_dist}"""
         while queue:
             x, y = queue.pop(0)
             
-            # 检查是否到达地图边界
-            if x == 0 or x == width - 1 or y == 0 or y == height - 1:
+            # 检查是否到达地图南北边界
+            if y == 0 or y == height - 1:
                 tile = tile_map.get((x, y))
                 if tile and (tile.elevation - sea_level) < 0:
                     return False  # 连通边界海洋
             
             # 扩展到邻近水域
-            for dx, dy in self._get_hex_neighbor_offsets(x, y):
-                if dx < 0 or dx >= width or dy < 0 or dy >= height:
-                    continue
-                
+            for dx, dy in self._get_hex_neighbor_offsets(x, y, width, height):
                 if (dx, dy) in visited:
                     continue
                 

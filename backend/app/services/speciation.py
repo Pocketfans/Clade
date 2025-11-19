@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Iterable
@@ -25,7 +26,7 @@ class SpeciationService:
         self.genetic_calculator = GeneticDistanceCalculator()
         self.gene_library_service = GeneLibraryService()
 
-    def process(
+    async def process_async(
         self,
         mortality_results,
         existing_codes: set[str],
@@ -34,24 +35,14 @@ class SpeciationService:
         map_changes: list = None,
         major_events: list = None,
     ) -> list[BranchingEvent]:
-        """处理物种分化 - 基于体型和生态策略的动态门槛。
-        
-        分化条件：
-        1. 种群达到动态门槛（基于体型、繁殖策略、代谢率）
-        2. 演化潜力>0.6
-        3. 有环境压力（2.0-15.0）或资源饱和>0.8
-        4. 死亡率在适应范围内（10-50%）
-        5. 随机性（基于演化潜力）
-        
-        分化门槛设计原理：
-        - 微生物（r策略）：需要大种群（百万级）才有意义分化
-        - 小型生物：十万级
-        - 中型生物（鱼类、鸟类）：万级
-        - 大型生物（哺乳动物）：千级
-        - 超大型生物（大象、鲸鱼）：百级
-        """
+        """处理物种分化 (异步并发版)"""
         events: list[BranchingEvent] = []
         import random
+        
+        # 1. 准备阶段：筛选候选并生成任务
+        tasks = []
+        # 存储每个任务对应的上下文数据，以便在回调时使用
+        task_contexts = [] 
         
         for result in mortality_results:
             species = result.species
@@ -59,57 +50,45 @@ class SpeciationService:
             death_rate = result.death_rate
             resource_pressure = result.resource_pressure
             
-            # 条件1：计算该物种的动态分化门槛（提高60%以进一步降低分化频率）
+            # 条件1：计算该物种的动态分化门槛
             base_threshold = self._calculate_speciation_threshold(species)
-            min_population = int(base_threshold * 1.6)  # P3-4: 从1.4提高到1.6，降低物种增长速度
-            
-            # 调试日志：输出分化门槛信息
-            logger.debug(f"[分化检查] {species.common_name} ({species.lineage_code}): "
-                  f"存活{survivors:,} / 门槛{min_population:,} (基准{base_threshold:,}) "
-                  f"体长{species.morphology_stats.get('body_length_cm', 0):.4f}cm")
+            min_population = int(base_threshold * 1.6)
             
             if survivors < min_population:
                 continue
             
-            # 条件2：演化潜力（提高要求以降低分化频率）
+            # 条件2：演化潜力
             evo_potential = species.hidden_traits.get("evolution_potential", 0.0)
-            if evo_potential < 0.7:  # P1-1: 从0.6提高到0.7
+            if evo_potential < 0.7:
                 continue
             
-            # 条件3：压力显著或资源饱和（降低压力要求）
-            # 环境压力或资源竞争都可能导致分化
+            # 条件3：压力或资源饱和
             has_pressure = (1.5 <= average_pressure <= 15.0) or (resource_pressure > 0.8)
             
-            # P3-5: 自然辐射演化（无压力时也有极小概率分化）
+            # 自然辐射演化
             if not has_pressure:
-                # 如果种群巨大且无压力，可能有1%的基础概率发生自然分化
                 if survivors > min_population * 2 and random.random() < 0.01:
                     has_pressure = True
                     speciation_type = "辐射演化"
                 else:
                     continue
             
-            # 条件4：适应压力（放宽死亡率窗口）
-            # 降低下限以允许在较低压力下分化，保持上限防止在灭绝边缘分化
-            if death_rate < 0.05 or death_rate > 0.60:  # P1-1: 从0.12-0.45放宽到0.05-0.60
+            # 条件4：适应压力
+            if death_rate < 0.05 or death_rate > 0.60:
                 continue
             
-            # 条件5：随机性（进一步降低概率）
-            # 演化潜力0.7：22%概率
-            # 演化潜力0.8：27%概率
-            # 演化潜力1.0：37%概率
-            base_chance = (0.2 + (evo_potential * 0.5)) * 0.55  # P3-4: 从0.7降到0.55，进一步降低分化率
+            # 条件5：随机性
+            base_chance = (0.2 + (evo_potential * 0.5)) * 0.55
             
-            # P3-3: 增加多样性分化类型的概率修正
             speciation_bonus = 0.0
-            speciation_type = "生态隔离"  # 默认类型
+            speciation_type = "生态隔离"
             
             # 检测地理隔离机会
             if map_changes:
                 for change in (map_changes or []):
                     change_type = change.get("change_type", "") if isinstance(change, dict) else getattr(change, "change_type", "")
                     if change_type in ["uplift", "volcanic", "glaciation"]:
-                        speciation_bonus += 0.15  # 地理隔离提升15%分化概率
+                        speciation_bonus += 0.15
                         speciation_type = "地理隔离"
                         break
             
@@ -118,56 +97,50 @@ class SpeciationService:
                 for event in (major_events or []):
                     severity = event.get("severity", "") if isinstance(event, dict) else getattr(event, "severity", "")
                     if severity in ["extreme", "catastrophic"]:
-                        speciation_bonus += 0.10  # 极端环境提升10%分化概率
+                        speciation_bonus += 0.10
                         speciation_type = "极端环境特化"
                         break
             
-            # 检测捕食者-被捕食者协同演化
-            # 如果该物种与其他物种有显著生态位重叠，可能触发协同演化
+            # 检测协同演化
             if result.niche_overlap > 0.4:
-                speciation_bonus += 0.08  # 协同演化提升8%分化概率
+                speciation_bonus += 0.08
                 speciation_type = "协同演化"
             
             speciation_chance = base_chance + speciation_bonus
             if random.random() > speciation_chance:
                 continue
             
-            # 决定分化出几个子种（2-3个）
-            num_offspring = random.choice([2, 2, 3])  # 2个的概率更高
+            # 决定分化出几个子种
+            num_offspring = random.choice([2, 2, 3])
             logger.info(f"[分化] {species.common_name} 将分化出 {num_offspring} 个子种")
             
-            # 生成多个谱系编码
+            # 生成编码
             new_codes = self._generate_multiple_lineage_codes(
                 species.lineage_code, existing_codes, num_offspring
             )
             for code in new_codes:
                 existing_codes.add(code)
             
-            # 种群分配：奠基者效应
-            # 父代保留大部分(60-80%)，子代瓜分剩余的小部分(Founder Effect)
+            # 种群分配
             retention_ratio = random.uniform(0.60, 0.80)
             parent_remaining = max(100, int(survivors * retention_ratio))
             
-            # 更新父系物种种群
+            # 立即更新父系物种种群（保持数据库状态一致性）
             species.morphology_stats["population"] = parent_remaining
             species_repository.upsert(species)
             
-            # 剩余种群分配给子种（略有不均以模拟适应性差异）
-            # 子代作为奠基者群体，数量较少
             remaining_pop = survivors - parent_remaining
             pop_splits = []
             for i in range(num_offspring):
                 if i == num_offspring - 1:
-                    # 最后一个获得剩余
                     pop_splits.append(remaining_pop)
                 else:
-                    # 随机分配20-40%的剩余种群
                     ratio = random.uniform(0.25, 0.40)
                     allocated = int(remaining_pop * ratio)
                     pop_splits.append(allocated)
                     remaining_pop -= allocated
             
-            # 为每个子种调用AI并创建物种
+            # 为每个子种创建任务
             for idx, (new_code, population) in enumerate(zip(new_codes, pop_splits)):
                 ai_payload = {
                     "parent_lineage": species.lineage_code,
@@ -180,84 +153,105 @@ class SpeciationService:
                     "map_changes_summary": self._summarize_map_changes(map_changes) if map_changes else "",
                     "major_events_summary": self._summarize_major_events(major_events) if major_events else "",
                     "parent_trophic_level": species.trophic_level,
-                    "offspring_index": idx + 1,  # 第几个子种
-                    "total_offspring": num_offspring,  # 总共几个子种
+                    "offspring_index": idx + 1,
+                    "total_offspring": num_offspring,
                 }
                 
-                ai_response = self.router.invoke("speciation", ai_payload)
-                # 调试：输出完整的AI响应
-                logger.debug(f"[分化AI调用] 完整响应: {list(ai_response.keys()) if isinstance(ai_response, dict) else type(ai_response)}")
-                if "error" in ai_response:
-                    logger.error(f"[分化AI错误] {ai_response['error']}")
-                if "content" not in ai_response:
-                    logger.warning(f"[分化AI警告] 响应中没有content字段，provider={ai_response.get('provider')}, model={ai_response.get('model')}")
-                    logger.warning(f"[分化AI警告] 完整响应: {ai_response}")
-                
-                ai_content = ai_response.get("content") if isinstance(ai_response, dict) else {}
+                tasks.append(self.router.ainvoke("speciation", ai_payload))
+                task_contexts.append({
+                    "parent": species,
+                    "new_code": new_code,
+                    "population": population,
+                    "ai_payload_input": ai_payload, # 原始输入，用于fallback
+                    "speciation_type": speciation_type
+                })
+        
+        if not tasks:
+            return []
+
+        logger.info(f"[分化] 并发执行 {len(tasks)} 个分化任务...")
+        # 2. 并发执行
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 3. 结果处理与写入
+        for res, ctx in zip(results, task_contexts):
+            if isinstance(res, Exception):
+                logger.error(f"[分化AI异常] {res}")
+                # 这里可以做一个简单的 fallback 处理，或者直接跳过
+                # 为保证稳定性，我们做一个简单的 fallback
+                ai_content = {}
+            else:
+                ai_content = res.get("content") if isinstance(res, dict) else {}
                 if not isinstance(ai_content, dict):
-                    logger.warning(f"[分化AI警告] content不是字典: {type(ai_content)}")
                     ai_content = {}
-                
-                new_species = self._create_species(
-                    parent=species,
-                    new_code=new_code,
-                    survivors=population,
-                    turn_index=turn_index,
-                    ai_payload=ai_content,
-                    average_pressure=average_pressure,
+
+            new_species = self._create_species(
+                parent=ctx["parent"],
+                new_code=ctx["new_code"],
+                survivors=ctx["population"],
+                turn_index=turn_index,
+                ai_payload=ai_content,
+                average_pressure=average_pressure,
+            )
+            species_repository.upsert(new_species)
+            
+            self._update_genetic_distances(new_species, ctx["parent"], turn_index)
+            
+            if ai_content.get("genetic_discoveries") and new_species.genus_code:
+                self.gene_library_service.record_discovery(
+                    genus_code=new_species.genus_code,
+                    discoveries=ai_content["genetic_discoveries"],
+                    discoverer_code=new_species.lineage_code,
+                    turn=turn_index
                 )
-                species_repository.upsert(new_species)
-                
-                self._update_genetic_distances(new_species, species, turn_index)
-                
-                if ai_content.get("genetic_discoveries") and new_species.genus_code:
-                    self.gene_library_service.record_discovery(
-                        genus_code=new_species.genus_code,
-                        discoveries=ai_content["genetic_discoveries"],
-                        discoverer_code=new_species.lineage_code,
-                        turn=turn_index
-                    )
-                
-                if new_species.genus_code:
-                    genus = genus_repository.get_by_code(new_species.genus_code)
-                    if genus:
-                        self.gene_library_service.inherit_dormant_genes(species, new_species, genus)
-                        species_repository.upsert(new_species)
-                
-                species_repository.log_event(
-                    LineageEvent(
-                        lineage_code=new_code,
-                        event_type="speciation",
-                        payload={"parent": species.lineage_code, "turn": turn_index},
-                    )
+            
+            if new_species.genus_code:
+                genus = genus_repository.get_by_code(new_species.genus_code)
+                if genus:
+                    self.gene_library_service.inherit_dormant_genes(ctx["parent"], new_species, genus)
+                    species_repository.upsert(new_species)
+            
+            species_repository.log_event(
+                LineageEvent(
+                    lineage_code=ctx["new_code"],
+                    event_type="speciation",
+                    payload={"parent": ctx["parent"].lineage_code, "turn": turn_index},
                 )
-                
-                event_desc = ai_content.get("event_description") if ai_content else None
-                if not event_desc:
-                    event_desc = f"{species.common_name}在压力{average_pressure:.1f}条件下分化出{new_code}"
-                
-                # 生成分化原因
-                reason_text = ai_content.get("reason") or ai_content.get("speciation_reason")
-                if not reason_text:
-                    if speciation_type == "地理隔离":
-                        reason_text = f"{species.common_name}因地形剧变导致种群地理隔离，各隔离群体独立演化产生生殖隔离"
-                    elif speciation_type == "极端环境特化":
-                        reason_text = f"{species.common_name}在极端环境压力下，部分种群演化出特化适应能力，与原种群形成生态分离"
-                    elif speciation_type == "协同演化":
-                        reason_text = f"{species.common_name}与竞争物种的生态位重叠导致竞争排斥，促使种群分化到不同资源梯度"
-                    else:
-                        reason_text = f"{species.common_name}种群在演化压力下发生生态位分化"
-                
-                events.append(
-                    BranchingEvent(
-                        parent_lineage=species.lineage_code,
-                        new_lineage=new_code,
-                        description=event_desc,
-                        timestamp=datetime.utcnow(),
-                        reason=reason_text,
-                    )
+            )
+            
+            event_desc = ai_content.get("event_description") if ai_content else None
+            if not event_desc:
+                event_desc = f"{ctx['parent'].common_name}在压力{average_pressure:.1f}条件下分化出{ctx['new_code']}"
+            
+            reason_text = ai_content.get("reason") or ai_content.get("speciation_reason")
+            if not reason_text:
+                if ctx["speciation_type"] == "地理隔离":
+                    reason_text = f"{ctx['parent'].common_name}因地形剧变导致种群地理隔离，各隔离群体独立演化产生生殖隔离"
+                elif ctx["speciation_type"] == "极端环境特化":
+                    reason_text = f"{ctx['parent'].common_name}在极端环境压力下，部分种群演化出特化适应能力，与原种群形成生态分离"
+                elif ctx["speciation_type"] == "协同演化":
+                    reason_text = f"{ctx['parent'].common_name}与竞争物种的生态位重叠导致竞争排斥，促使种群分化到不同资源梯度"
+                else:
+                    reason_text = f"{ctx['parent'].common_name}种群在演化压力下发生生态位分化"
+            
+            events.append(
+                BranchingEvent(
+                    parent_lineage=ctx["parent"].lineage_code,
+                    new_lineage=ctx["new_code"],
+                    description=event_desc,
+                    timestamp=datetime.utcnow(),
+                    reason=reason_text,
                 )
+            )
+            
         return events
+
+    # 保留 process 方法以兼容旧调用，直到全部迁移
+    def process(self, *args, **kwargs):
+        logger.warning("Deprecated: calling synchronous process(). Use process_async() instead.")
+        # 临时实现：抛出错误提示修改，或者用 asyncio.run (不推荐在已有循环中)
+        # 由于我们是一次性重构，可以假设不会再调用同步版，或者如果调用了说明漏改了
+        raise NotImplementedError("Use process_async instead")
 
     def _next_lineage_code(self, parent_code: str, existing_codes: set[str]) -> str:
         """生成单个子代编码（保留用于向后兼容）"""
@@ -320,24 +314,10 @@ class SpeciationService:
         - 原物种保留60-80%
         - 总数略减（模拟分化过程的损耗）
         """
-        # 计算分离比例（子代更适应，获得更多个体）
-        import random
-        
-        # 父代保留大部分
-        parent_retention = random.uniform(0.60, 0.80)
-        parent_remaining = max(100, int(survivors * parent_retention))
-        
-        # 新物种获得剩余部分的一定比例 (Founder Effect)
-        remaining = survivors - parent_remaining
-        new_population = max(50, int(remaining * random.uniform(0.6, 0.8)))
-        
-        # 更新父系物种的种群数量（在数据库中）
-        parent.morphology_stats["population"] = parent_remaining
-        from ..repositories.species_repository import species_repository
-        species_repository.upsert(parent)
+        # 种群分配逻辑已在上层处理，这里只负责对象创建
         
         morphology = dict(parent.morphology_stats)
-        morphology["population"] = new_population
+        morphology["population"] = survivors
         
         hidden = dict(parent.hidden_traits)
         hidden["gene_diversity"] = min(1.0, hidden.get("gene_diversity", 0.5) + 0.05)
@@ -396,21 +376,35 @@ class SpeciationService:
         common = self._ensure_unique_common_name(common, new_code)
         
         # 计算新物种的营养级
-        all_species = species_repository.list_species()
-        new_trophic = self.trophic_calculator.calculate_trophic_level(
-            Species(
-                lineage_code=new_code,
-                latin_name=latin,
-                common_name=common,
-                description=description,
-                morphology_stats=morphology,
-                abstract_traits=abstract,
-                hidden_traits=hidden,
-                ecological_vector=None,
-                trophic_level=parent.trophic_level  # 临时值
-            ),
-            all_species
-        )
+        ai_trophic = ai_payload.get("trophic_level")
+        if ai_trophic is not None:
+            try:
+                new_trophic = float(ai_trophic)
+                # 简单的范围钳制
+                new_trophic = max(1.0, min(6.0, new_trophic))
+                logger.info(f"[分化] 使用AI判定的营养级: {new_trophic}")
+            except (ValueError, TypeError):
+                logger.warning(f"[分化] AI返回的营养级格式错误: {ai_trophic}，转为自动计算")
+                new_trophic = None
+        else:
+            new_trophic = None
+
+        if new_trophic is None:
+            all_species = species_repository.list_species()
+            new_trophic = self.trophic_calculator.calculate_trophic_level(
+                Species(
+                    lineage_code=new_code,
+                    latin_name=latin,
+                    common_name=common,
+                    description=description,
+                    morphology_stats=morphology,
+                    abstract_traits=abstract,
+                    hidden_traits=hidden,
+                    ecological_vector=None,
+                    trophic_level=parent.trophic_level  # 临时值
+                ),
+                all_species
+            )
         
         # 【克莱伯定律修正】基于体重和营养级重算代谢率
         # SMR ∝ Mass^-0.25

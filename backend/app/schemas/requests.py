@@ -54,6 +54,7 @@ class CreateSaveRequest(BaseModel):
     save_name: str = Field(min_length=1, max_length=50)
     scenario: str = Field(default="原初大陆")
     species_prompts: list[str] | None = None  # 用于空白剧本的物种描述
+    map_seed: int | None = None  # 可选的地图种子
 
 
 class SaveGameRequest(BaseModel):

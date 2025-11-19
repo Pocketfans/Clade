@@ -17,16 +17,16 @@ SPECIES_PROMPTS = {
         "metabolic_rate": "代谢率（0.1-10.0）"
     }},
     "abstract_traits": {{
-        "耐寒性": "0-10整数",
-        "耐热性": "0-10整数",
-        "耐旱性": "0-10整数",
-        "耐盐性": "0-10整数",
-        "耐酸碱性": "0-10整数",
-        "光照需求": "0-10整数",
-        "氧气需求": "0-10整数",
-        "繁殖速度": "0-10整数",
-        "运动能力": "0-10整数",
-        "社会性": "0-10整数"
+        "耐寒性": "0.0-15.0浮点数",
+        "耐热性": "0.0-15.0浮点数",
+        "耐旱性": "0.0-15.0浮点数",
+        "耐盐性": "0.0-15.0浮点数",
+        "耐酸碱性": "0.0-15.0浮点数",
+        "光照需求": "0.0-15.0浮点数",
+        "氧气需求": "0.0-15.0浮点数",
+        "繁殖速度": "0.0-15.0浮点数",
+        "运动能力": "0.0-15.0浮点数",
+        "社会性": "0.0-15.0浮点数"
     }},
     "hidden_traits": {{
         "gene_diversity": "0.0-1.0",
@@ -37,268 +37,187 @@ SPECIES_PROMPTS = {
     }}
 }}
 
+【JSON 示例（One-Shot）】
+{{
+    "description": "一种生活在深海热泉附近的化学合成细菌，体型微小，呈杆状。通过氧化硫化物获取能量，无需光照。具有厚实的细胞壁以抵抗高压和高温。繁殖迅速，常形成菌席。",
+    "morphology_stats": {{
+        "body_length_cm": 0.0002,
+        "body_weight_g": 0.000001,
+        "lifespan_days": 3,
+        "generation_time_days": 0.5,
+        "metabolic_rate": 8.5
+    }},
+    "abstract_traits": {{
+        "耐寒性": 2.0,
+        "耐热性": 9.5,
+        "耐旱性": 5.0,
+        "耐盐性": 8.2,
+        "耐酸碱性": 7.5,
+        "光照需求": 0.1,
+        "氧气需求": 1.0,
+        "繁殖速度": 9.0,
+        "运动能力": 2.5,
+        "社会性": 6.0
+    }},
+    "hidden_traits": {{
+        "gene_diversity": 0.8,
+        "environment_sensitivity": 0.3,
+        "evolution_potential": 0.7,
+        "mutation_rate": 0.6,
+        "adaptation_speed": 0.8
+    }}
+}}
+
 要求：
 - description严格100-120字，精简但包含所有关键生态信息
 - 根据体型设置合理数量：微生物(10^5-10^6)、小型(10^4-10^5)、中型(10^3-10^4)、大型(10^2-10^3)
 - 所有数值必须合理且符合生物学规律
-- 只返回JSON，不要其他内容
+- Ensure the output is valid JSON only.
 """,
-    "speciation": """你是演化生物学家，为分化物种生成完整演化数据（包含命名）。
-
-【父系物种】
-代码：{parent_lineage}
-学名：{latin_name}
-俗名：{common_name}
-完整描述：{traits}
-
-【演化环境】
-环境压力：{environment_pressure:.2f}/10
+    "speciation": """你是演化生物学家，负责推演物种分化事件。基于父系特征、环境压力和分化类型，生成新物种的详细演化数据。
+    
+    === 系统上下文 ===
+    【父系物种】
+    代码：{parent_lineage}
+    学名：{latin_name}
+    俗名：{common_name}
+    完整描述：{traits}
+    历史高光：{history_highlights}
+    父系营养级：{parent_trophic_level:.2f}
+    
+    【演化环境】
+    环境压力：{environment_pressure:.2f}/10
 幸存者：{survivors:,}个体
 分化类型：{speciation_type}
 地形变化：{map_changes_summary}
 重大事件：{major_events_summary}
 
-【任务】
-返回JSON对象：
+=== 任务目标 ===
+生成一个新物种（JSON格式），它必须：
+1. **继承**父系的核心特征（如基本体型、代谢模式）。
+2. **创新**以适应当前压力（如耐旱、耐寒、新器官）。
+3. **符合**生物学数值规律（不违反能量守恒，属性有增必有减）。
+
+=== 输出格式规范 ===
+返回标准 JSON 对象：
 {{
-    "latin_name": "拉丁学名（Genus species格式）",
-    "common_name": "中文俗名",
-    "description": "120-180字完整生物学描述",
-    "key_innovations": ["1-3个关键演化创新"],
-    "trait_changes": {{"trait_name": "+2.0或-1.5等浮点数变化"}},
-    "morphology_changes": {{"stat_name": 变化倍数(0.8-1.5)}},
-    "event_description": "30-50字描述分化事件（如：一小群个体因...隔离）",
-    "speciation_type": "地理隔离|生态隔离|时间隔离|竞争排斥",
-    "reason": "详细说明导致分化的生态学或地质学机制",
-    
+    "latin_name": "拉丁学名（Genus species格式，使用拉丁词根体现特征）",
+    "common_name": "中文俗名（特征词+类群名，可适当发挥）",
+    "description": "120-180字完整生物学描述，强调演化差异。必须包含明确的食性描述。",
+    "trophic_level": "1.0-5.5浮点数 (根据食性判断)",
+    "key_innovations": ["1-3个关键演化创新点"],
+    "trait_changes": {{"特质名称": "+数值"}}, 
+    "morphology_changes": {{"统计名称": 倍数}},
+    "event_description": "30-50字分化事件摘要",
+    "speciation_type": "{speciation_type}",
+    "reason": "详细的生态学/地质学分化机制解释",
     "structural_innovations": [
         {{
-            "category": "器官类别(locomotion/sensory/metabolic/digestive/defense/respiratory)",
-            "type": "具体器官类型（中文，如'鞭毛'、'叶绿体'）",
-            "parameters": {{
-                "具体参数名": 数值,
-                "efficiency": 相对父代的效率倍数(0.8-2.0)
-            }},
-            "description": "器官功能简述"
+            "category": "locomotion/sensory/metabolic/digestive/defense",
+            "type": "具体器官名",
+            "parameters": {{"参数名": 数值, "efficiency": 倍数}},
+            "description": "功能简述"
         }}
     ],
-    
     "genetic_discoveries": {{
-        "new_traits": {{
-            "特质名": {{
-                "max_value": 最大潜力值(1.0-15.0),
-                "description": "特质描述",
-                "activation_pressure": ["压力类型"]
-            }}
-        }},
-        "new_organs": {{
-            "器官名": {{
-                "category": "器官类别",
-                "type": "器官类型（中文）",
-                "parameters": {{}},
-                "description": "器官描述",
-                "activation_pressure": ["压力类型"]
-            }}
-        }}
+        "new_traits": {{"特质名": {{"max_value": 15.0, "description": "...", "activation_pressure": ["..."]}}}},
+        "new_organs": {{"器官名": {{"category": "...", "type": "...", "parameters": {{}}, "description": "...", "activation_pressure": ["..."]}}}}
     }}
 }}
 
-【命名要求（必须唯一且有区分度）】
-拉丁学名：
-- 保留父系属名（如父系Protoflagella，子代也用Protoflagella）
-- 种加词必须体现新物种的核心创新特征，禁止重复使用相同种加词
-- 优先使用形态/生态/功能特征的拉丁词根：
-  * 形态：longus(长), brevis(短), robustus(强壮), gracilis(纤细), acutus(尖锐), globosus(球形)
-  * 运动：velox(快速), lentus(缓慢), natans(游泳), reptans(爬行)
-  * 生态：profundus(深海), littoralis(浅海), thermophilus(喜热), cryophilus(喜冷)
-  * 功能：vorax(贪食), filtrans(滤食), photosyntheticus(光合)
-- 示例：Protoflagella velox（快速鞭毛虫）、Protoflagella profundus（深海鞭毛虫）
+=== 关键规则 ===
+1. **属性权衡 (Trade-offs)**:
+   - 属性变化 (`trait_changes`) 的总和必须在 [-5.0, +8.0] 之间。
+   - 如果有属性显著增强 (+3.0)，必须有其他属性削弱 (-2.0) 以维持平衡。
+   - 单个属性变化幅度限制在 ±4.0 以内。
 
-中文俗名：
-- 结构：【1-2个字特征词】+【类群名】
-- 特征词必须从key_innovations中提取最显著的一个
-- 类群名保持与父系一致（如父系"鞭毛虫"，子代也用"鞭毛虫"）
-- 示例特征词：快游、深水、透明、多鞭、耐盐、滤食、夜行、群居
+2. **形态稳定性**:
+   - `morphology_changes` 是相对于父系的倍数（如 1.2 表示增大 20%）。
+   - 体长 (`body_length_cm`) 变化应限制在 0.8 - 1.3 倍之间，避免突变成怪物。
 
-【营养级与属性上限】
-父系营养级：{parent_trophic_level:.2f}
-根据description中的食性判断新物种营养级（T），并遵守属性上限：
-- T 1.0-1.9（生产者/分解者）：基础上限5，特化上限8，总和≤30
-- T 2.0-2.9（主要草食）：基础上限7，特化上限10，总和≤50
-- T 3.0-3.9（中层捕食者）：基础上限9，特化上限12，总和≤80
-- T 4.0-4.9（高层捕食者）：基础上限12，特化上限14，总和≤105
-- T 5.0+（顶级掠食者）：基础上限14，特化上限15，总和≤135
+3. **营养级判定 (Trophic Level)**:
+   - 请根据新物种的食性描述，给出一个合理的营养级数值 (1.0 - 5.5)。
+   - 1.0: 生产者 (光合自养)
+   - 1.5: 分解者 (腐食)
+   - 2.0: 初级消费者 (食草/滤食)
+   - 3.0: 次级消费者 (捕食草食动物)
+   - 5.0+: 顶级掠食者 (捕食其他肉食动物)
+   - 必须在 `description` 中明确指出其食物来源与食性。
 
-营养级计算：T = 1 + Σ(prey_proportion × prey_T)
-- 若以70%藻类(T=1.0) + 30%碎屑(T=1.0)为食 → T = 1 + 1.0 = 2.0（草食）
-- 若捕食草食动物(T=2.0) → T = 1 + 2.0 = 3.0（中层捕食）
-- 营养级提升时，允许属性总和+5（体现生物复杂度提升）
+4. **命名规则**:
+   - 拉丁名：保留属名，种加词使用拉丁词根（如 `velox` 快, `robustus` 强, `cryophilus` 耐寒）。
+   - 中文名：提取最显著特征（如"耐寒"、"长鞭"）+ 父系类群名（如"藻"、"虫"）。
 
-【属性权衡原则（强制）】
-1. 属性总和变化：-5 ≤ Δ总和 ≤ +8（营养级提升时可+8）
-2. 单属性变化：-4 ≤ Δ单属性 ≤ +4
-3. 必须权衡：有属性+3则必须有属性-2；有+2则必须有-1
-4. 特化税：每个属性超过基础上限1点，需要2点其他属性降低作为代价
-5. 最多2个属性可超过基础上限（特化方向）
-6. **支持动态属性**：你可以提出新的环境适应属性（如"耐高压"、"耐酸性"），只要符合营养级总和上限即可
-
-【description要求（120-180字）】
-必须包含以下所有要素：
-1. 【父系继承】：保留的核心特征（如体型范围、基本形态、主要生理功能）
-2. 【演化创新】：具体的结构或功能变化（不能笼统说"适应"）
-   - 微生物级别：鞭毛数量/长度、膜结构变化、代谢途径转换、细胞器分化
-   - 小型生物：触角/口器/壳体结构、运动方式变化、感官强化
-   - 大型生物：器官分化、骨骼变化、感觉系统强化
-3. 【生态位分化】：新物种与父系在资源利用上的明确差异
-   - 空间：栖息深度/纬度/微环境的变化
-   - 时间：昼夜活动节律、季节性变化
-   - 资源：食物类型、粒径、营养模式的差异
-4. 【适应形态】：针对当前压力的形态调整
-   - 温度压力：耐热蛋白、脂质膜调整、体型变化
-   - 干旱压力：保水结构、休眠机制、渗透压调节
-   - 竞争压力：资源利用效率提升、生态位分离
-
-【key_innovations要求】
-必须列出1-3个具体的演化创新，禁止空洞描述：
-- ✅ 好的例子："鞭毛由2根增至4根，游动速度提升50%"、"出现原始光感器，可感知光照梯度"、"壳体厚度增加，抗捕食能力增强"
-- ❌ 禁止："适应能力增强"、"演化出新特征"、"变得更强"
-
-【structural_innovations要求（新增，必须提供）】
-必须为每个key_innovation提供对应的结构化器官数据：
-1. **运动器官示例** (locomotion):
-   - 鞭毛: {{"category": "locomotion", "type": "鞭毛", "parameters": {{"count": 4, "length_um": 12, "efficiency": 1.6}}, "description": "四根鞭毛，游动效率提升60%"}}
-   - 纤毛: {{"category": "locomotion", "type": "纤毛", "parameters": {{"coverage": 0.8, "beat_frequency": 20}}, "description": "体表纤毛覆盖率80%"}}
-
-2. **感觉器官示例** (sensory):
-   - 眼点: {{"category": "sensory", "type": "简单眼点", "parameters": {{"light_sensitivity": 0.3, "wavelength_min": 400, "wavelength_max": 700}}, "description": "原始光感器，可感知400-700nm光"}}
-   - 化学感受器: {{"category": "sensory", "type": "化学感受器", "parameters": {{"sensitivity": 0.5, "range_cm": 5}}, "description": "化学感受器，感知5cm内化学信号"}}
-
-3. **代谢器官示例** (metabolic):
-   - 叶绿体: {{"category": "metabolic", "type": "叶绿体", "parameters": {{"count": 10, "efficiency": 1.2}}, "description": "10个叶绿体，光合效率提升20%"}}
-
-4. **防御结构示例** (defense):
-   - 壳体: {{"category": "defense", "type": "钙质外壳", "parameters": {{"thickness_mm": 0.5, "hardness": 7}}, "description": "0.5mm厚壳体，硬度7级"}}
-
-**注意**：
-- 如果父系已有某器官，parameters中必须体现相对变化（如count从2→4）
-- efficiency参数表示相对父代的效率（1.0=不变，1.5=提升50%，0.8=降低20%）
-- 每个structural_innovation必须对应一个key_innovation
-
-【genetic_discoveries要求（可选，极端环境时提供）】
-此字段记录未立即表达的"遗传潜力"，这些基因会作为休眠基因存入属基因库，未来后代在相同压力下可能激活。
-
-**触发条件**（满足任一即可考虑提供）：
-- 环境极端：深海(>1000m)、极地、火山口、高盐湖等
-- 压力强度：死亡率预期>60%的极端选择压力
-- 生态位空白：进入全新未占领生态位
-
-**示例1：极寒环境分化**
-```json
-"genetic_discoveries": {{
-  "new_traits": {{
-    "耐极寒": {{
-      "max_value": 15.0,
-      "description": "极端寒冷环境适应能力",
-      "activation_pressure": ["extreme_cold", "polar"]
-    }}
-  }}
-}}
-```
-
-**示例2：深海环境分化**
-```json
-"genetic_discoveries": {{
-  "new_traits": {{
-    "耐高压": {{
-      "max_value": 14.0,
-      "description": "深海高压环境适应",
-      "activation_pressure": ["deep_ocean", "high_pressure"]
-    }}
-  }},
-  "new_organs": {{
-    "bioluminescence": {{
-      "category": "sensory",
-      "type": "发光器",
-      "parameters": {{"intensity": 0.8, "wavelength": 480}},
-      "description": "生物发光器官，480nm蓝光",
-      "activation_pressure": ["darkness", "deep_ocean"]
-    }}
-  }}
-}}
-```
-
-**命名规范**：
-- new_traits: 使用现有特质体系（耐寒性、耐热性等）或新环境特质（耐极寒、耐高压等）
-- new_organs: 使用中文名（发光器、电器官、抗冻腺体等）
-
-**注意**：
-- 不是每次分化都需要genetic_discoveries
-- 只在极端环境、重大演化事件时提供
-- 提供的基因应与当前环境压力强相关
-
-【trait_changes要求】
-基于环境压力，合理调整3-5个属性（支持浮点数精度）：
-- 温度压力高 → 耐寒性/耐热性 +1.0到+3.5
-- 干旱压力高 → 耐旱性 +2.0到+4.0
-- 资源竞争激烈 → 繁殖速度 +1.0，运动能力 +1.5
-- 所有变化值必须在±4.0以内，避免极端变化
-- 支持小数调整（如+0.5），累积微小变化更符合渐进演化
-
-    【morphology_changes要求】
-    形态学变化应适度且合理：
-    - body_length_cm: 0.8-1.3（微调，避免剧烈体型变化）
-    - body_weight_g: 0.8-1.3（体重变化会通过Kleiber定律影响代谢率）
-    - generation_time_days: 0.8-1.2
-    - 注意：系统会自动根据体重计算代谢率，无需手动调整metabolic_rate
-
-【speciation_type说明】
-- 地理隔离：海平面上升、陆地分裂、火山形成障碍、冰川推进隔断种群
-- 生态隔离：资源分化、栖息层分离、食性转变、繁殖时间错开
-- 协同演化：捕食者-被捕食者军备竞赛、寄生-宿主协同演化、互利共生物种分化
-- 极端环境特化：极端温度/压力/化学环境驱动的快速适应和种群分离
-
-【重要】请根据{speciation_type}调整description：
-- 地理隔离：强调形态分化（地理屏障两侧不同选择压力）
-- 生态隔离：强调资源利用方式差异（同域物种的生态位分化）
-- 协同演化：强调与其他物种的互动关系变化
-- 极端环境特化：强调生理生化适应（耐受极限的突破）
-
-【示例（仅供参考结构）】
+=== JSON 示例 (One-Shot) ===
 {{
-    "latin_name": "Protoflagella velox",
-    "common_name": "快游鞭毛虫",
-    "description": "原始鞭毛虫在干旱压力下分化形成快游型亚种。继承父系的梨形体态（体长15微米）和异养食性，但鞭毛数量由2根增至4根，游动速度提升约60%，能更快逃离不利水域。膜系统发展出更高效的渗透压调节蛋白，耐盐性显著增强。栖息环境向浅海高盐度区域转移，通过快速游动捕食微藻碎屑，与父系形成纵向分层的空间隔离。世代时间缩短至8天，繁殖速率提高，种群恢复能力更强。",
-    "key_innovations": ["4根鞭毛系统，游动效率提升60%", "高效渗透压调节蛋白", "缩短世代时间至8天"],
-    "trait_changes": {{"耐盐性": "+3.0", "运动能力": "+2.0", "繁殖速度": "+1.0"}},
-    "morphology_changes": {{"generation_time_days": 0.8, "metabolic_rate": 1.1}},
-    "event_description": "干旱压力驱动原始鞭毛虫分化，形成快游高盐耐受型，与父系实现空间生态位分离",
+    "latin_name": "Protoflagella salinus",
+    "common_name": "耐盐鞭毛虫",
+    "description": "在干旱导致的高盐环境中分化出的耐盐亚种。继承了父系的单细胞结构，但细胞膜上演化出高效的钠钾泵系统，能主动排出多余盐分。体型略微缩小以减少渗透压负担。原有的单根鞭毛分化为双鞭毛，虽然单根长度变短，但协调摆动增强了在粘稠盐水中的游动能力。主要以耐盐的蓝藻和有机碎屑为食（混合营养）。主要栖息在浅海蒸发泻湖。",
+    "trophic_level": 1.5,
+    "key_innovations": ["高效钠钾泵系统", "双鞭毛结构", "细胞体积缩小"],
+    "trait_changes": {{
+        "耐盐性": "+4.0",
+        "运动能力": "+1.5",
+        "代谢率": "+0.5",
+        "繁殖速度": "-1.0",
+        "体型大小": "-0.5"
+    }},
+    "morphology_changes": {{
+        "body_length_cm": 0.9,
+        "body_weight_g": 0.85,
+        "metabolic_rate": 1.1
+    }},
+    "event_description": "干旱导致泻湖盐度升高，种群发生生态隔离，演化出耐盐特质",
     "speciation_type": "生态隔离",
-    "reason": "干旱导致浅海盐度升高，种群中耐盐性强且游速快的个体在高盐环境存活率更高，逐渐与栖息中层水域的原种群产生生殖隔离",
+    "reason": "持续的高盐度环境构成了强烈的选择压力，拥有耐盐基因突变的个体存活率显著高于普通个体，随着时间推移，两个种群在生理和生殖上产生隔离。",
     "structural_innovations": [
         {{
-            "category": "locomotion",
-            "type": "四鞭毛",
-            "parameters": {{
-                "count": 4,
-                "base_count": 2,
-                "length_um": 12,
-                "efficiency": 1.6
-            }},
-            "description": "鞭毛从2根进化到4根，长度12微米，游动效率提升60%"
+            "category": "metabolic",
+            "type": "钠钾泵",
+            "parameters": {{"efficiency": 1.8, "energy_cost": 1.2}},
+            "description": "高效排出盐分，维持渗透压平衡"
         }},
         {{
-            "category": "metabolic",
-            "type": "渗透压调节蛋白",
-            "parameters": {{
-                "efficiency": 1.8,
-                "salt_tolerance_ppt": 45
-            }},
-            "description": "高效渗透压调节蛋白，耐受盐度45ppt"
+            "category": "locomotion",
+            "type": "双鞭毛",
+            "parameters": {{"count": 2, "length_um": 8, "efficiency": 1.3}},
+            "description": "双鞭毛协同摆动，适应高粘度水体"
         }}
-    ]
+    ],
+    "genetic_discoveries": {{
+        "new_traits": {{
+            "极端耐盐": {{
+                "max_value": 14.0,
+                "description": "适应盐度超过100ppt的卤水环境",
+                "activation_pressure": ["high_salinity", "drought"]
+            }}
+        }}
+    }}
 }}
 
-只返回JSON，无需任何解释。
+    Ensure the output is valid JSON only.
 """,
-}
+    "species_description_update": """你是科学记录员。该物种经历了漫长的渐进式演化，其数值特征已发生显著变化，但文字描述尚未更新。请重写描述以匹配当前数值。
 
+=== 物种档案 ===
+【基本信息】
+学名：{latin_name} ({common_name})
+原描述：{old_description}
+
+【数值变化检测】
+{trait_diffs}
+
+=== 任务要求 ===
+1. 重写 `description`（120-150字）：
+   - 必须保留原物种的核心身份（如"它仍是一种鱼"）。
+   - 必须将【数值变化】转化为生物学特征（例如：耐寒性大幅提升 -> "演化出了厚实的皮下脂肪层"）。
+   - 如果有属性退化，也要提及（例如：视觉退化 -> "眼睛逐渐退化为感光点"）。
+2. 保持科学性与沉浸感。
+
+=== 输出格式 ===
+返回标准 JSON 对象：
+{{
+    "new_description": "更新后的生物学描述..."
+}}
+"""
+}

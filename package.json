@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "react-force-graph-2d": "^1.29.0",
+    "recharts": "^3.4.1"
+  }
+}

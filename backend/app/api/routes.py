@@ -1,13 +1,16 @@
 ﻿from __future__ import annotations
 
 from pathlib import Path
+import uuid
+import json
+import httpx
 
 from fastapi import APIRouter, HTTPException
 from sqlmodel import select
 
 from ..core.config import get_settings
 from ..ai.prompts import PROMPT_TEMPLATES
-from ..models.config import UIConfig
+from ..models.config import UIConfig, ProviderConfig, CapabilityRouteConfig
 from ..repositories.genus_repository import genus_repository
 from ..repositories.history_repository import history_repository
 from ..repositories.environment_repository import environment_repository
@@ -125,7 +128,7 @@ reproduction_service = ReproductionService(
     global_carrying_capacity=settings.global_carrying_capacity,  # 从配置读取
     turn_years=500_000,  # 每回合50万年
 )
-adaptation_service = AdaptationService()
+adaptation_service = AdaptationService(model_router)
 genetic_distance_calculator = GeneticDistanceCalculator()
 hybridization_service = HybridizationService(genetic_distance_calculator)
 gene_flow_service = GeneFlowService()
@@ -146,51 +149,119 @@ pressure_queue: list[list[PressureConfig]] = []
 
 
 def apply_ui_config(config: UIConfig) -> UIConfig:
-    # 如果提供了分功能配置，优先使用
-    if config.capability_configs:
-        print(f"[配置] 应用capability_configs: {list(config.capability_configs.keys())}")
-        for capability, cap_config in config.capability_configs.items():
-            if capability in model_router.routes:
-                route = model_router.routes[capability]
-                # 更新路由配置
-                model_router.routes[capability] = ModelConfig(
-                    provider=cap_config.provider,
-                    model=cap_config.model,
-                    endpoint=route.endpoint,
-                )
-                # 设置该能力的专属 override
-                if not model_router.overrides:
-                    model_router.overrides = {}
-                model_router.overrides[capability] = {
-                    "base_url": cap_config.base_url,
-                    "api_key": cap_config.api_key,
-                    "timeout": cap_config.timeout,
-                }
-                print(f"[配置] 已设置{capability}的override: provider={cap_config.provider}, base_url={'***' if cap_config.base_url else None}, api_key={'***' if cap_config.api_key else None}")
-    # 否则使用全局配置（向后兼容）
-    else:
-        model_router.api_base_url = (config.ai_base_url or settings.ai_base_url)
-        model_router.api_key = config.ai_api_key or settings.ai_api_key
-        model_router.timeout = config.ai_timeout or settings.ai_request_timeout
-        if config.ai_provider or config.ai_model:
-            for capability, route in model_router.routes.items():
-                model_router.routes[capability] = ModelConfig(
-                    provider=config.ai_provider or route.provider,
-                    model=config.ai_model or route.model,
-                    endpoint=route.endpoint,
-                )
+    """应用 UI 配置到运行时服务，包含旧配置迁移逻辑"""
     
-    # Embedding 配置（默认启用）
-    embedding_service.provider = config.embedding_provider or settings.embedding_provider
-    embedding_service.api_base_url = config.embedding_base_url
-    embedding_service.api_key = config.embedding_api_key
-    embedding_service.model = config.embedding_model
-    # 如果配置了完整的 embedding 信息，则启用；否则禁用
-    embedding_service.enabled = bool(
-        config.embedding_api_key and 
-        config.embedding_base_url and 
-        config.embedding_model
-    )
+    # --- 1. 数据迁移：旧配置 -> 新多服务商配置 ---
+    has_legacy_config = config.ai_api_key and not config.providers
+    if has_legacy_config:
+        print("[配置] 检测到旧版配置，正在迁移到多服务商结构...")
+        default_provider_id = str(uuid.uuid4())[:8]
+        provider = ProviderConfig(
+            id=default_provider_id,
+            name="Default Provider",
+            type=config.ai_provider or "openai",
+            base_url=config.ai_base_url,
+            api_key=config.ai_api_key,
+        )
+        config.providers[default_provider_id] = provider
+        config.default_provider_id = default_provider_id
+        config.default_model = config.ai_model
+        
+        # 迁移旧的 capability_configs
+        if config.capability_configs and isinstance(config.capability_configs, dict):
+            first_val = next(iter(config.capability_configs.values()), None)
+            if first_val and isinstance(first_val, dict) and "api_key" in first_val:
+                for cap, old_conf in config.capability_configs.items():
+                    if old_conf.get("api_key") or old_conf.get("base_url"):
+                        custom_pid = f"custom_{cap}"
+                        custom_provider = ProviderConfig(
+                            id=custom_pid,
+                            name=f"Custom for {cap}",
+                            type=old_conf.get("provider", "openai"),
+                            base_url=old_conf.get("base_url") or config.ai_base_url,
+                            api_key=old_conf.get("api_key") or config.ai_api_key
+                        )
+                        config.providers[custom_pid] = custom_provider
+                        config.capability_routes[cap] = CapabilityRouteConfig(
+                            provider_id=custom_pid,
+                            model=old_conf.get("model"),
+                            timeout=old_conf.get("timeout", 60)
+                        )
+                    else:
+                        config.capability_routes[cap] = CapabilityRouteConfig(
+                            provider_id=default_provider_id,
+                            model=old_conf.get("model"),
+                            timeout=old_conf.get("timeout", 60)
+                        )
+    
+    # 2. 应用配置到 ModelRouter ---
+    model_router.overrides = {}
+    
+    # 设置并发限制
+    if config.ai_concurrency_limit > 0:
+        model_router.set_concurrency_limit(config.ai_concurrency_limit)
+    
+    # 2.1 设置默认值
+    default_provider = config.providers.get(config.default_provider_id) if config.default_provider_id else None
+    
+    if default_provider:
+        model_router.api_base_url = default_provider.base_url
+        model_router.api_key = default_provider.api_key
+    
+    # 2.2 应用 Capability Routes
+    for capability, route_config in config.capability_routes.items():
+        if capability not in model_router.routes:
+            continue
+            
+        provider = config.providers.get(route_config.provider_id)
+        active_provider = provider or default_provider
+        
+        if active_provider:
+            # 构建 extra_body
+            extra_body = None
+            if route_config.enable_thinking:
+                extra_body = {
+                    "enable_thinking": True,
+                    "thinking_budget": 4096 # 默认 budget
+                }
+
+            # 更新路由配置
+            model_router.routes[capability] = ModelConfig(
+                provider=active_provider.type,
+                model=route_config.model or config.default_model or "gpt-3.5-turbo",
+                endpoint=model_router.routes[capability].endpoint,
+                extra_body=extra_body
+            )
+            
+            # 设置 override
+            model_router.overrides[capability] = {
+                "base_url": active_provider.base_url,
+                "api_key": active_provider.api_key,
+                "timeout": route_config.timeout,
+                "model": route_config.model,
+                "extra_body": extra_body
+            }
+            print(f"[配置] 已设置 {capability} -> Provider: {active_provider.name}, Model: {route_config.model}, Thinking: {route_config.enable_thinking}")
+
+    # --- 3. Embedding 配置 ---
+    emb_provider = config.providers.get(config.embedding_provider_id)
+    
+    if emb_provider:
+        embedding_service.provider = emb_provider.type
+        embedding_service.api_base_url = emb_provider.base_url
+        embedding_service.api_key = emb_provider.api_key
+        embedding_service.model = config.embedding_model
+        embedding_service.enabled = True
+    elif config.embedding_api_key and config.embedding_base_url:
+        # 旧配置回退
+        embedding_service.provider = config.embedding_provider or settings.embedding_provider
+        embedding_service.api_base_url = config.embedding_base_url
+        embedding_service.api_key = config.embedding_api_key
+        embedding_service.model = config.embedding_model
+        embedding_service.enabled = True
+    else:
+        embedding_service.enabled = False
+
     return config
 
 
@@ -238,7 +309,7 @@ def initialize_environment() -> None:
 
 
 @router.post("/turns/run", response_model=list[TurnReport])
-def run_turns(command: TurnCommand) -> list[TurnReport]:
+async def run_turns(command: TurnCommand) -> list[TurnReport]:
     import traceback
     try:
         print(f"[推演开始] 回合数: {command.rounds}, 压力数: {len(command.pressures)}")
@@ -250,7 +321,7 @@ def run_turns(command: TurnCommand) -> list[TurnReport]:
             action_queue["queued_rounds"] = max(action_queue["queued_rounds"] - 1, 0)
         command.pressures = pressures
         print(f"[推演执行] 应用压力: {[p.kind for p in pressures]}")
-        reports = simulation_engine.run_turns(command)
+        reports = await simulation_engine.run_turns_async(command)
         print(f"[推演完成] 生成了 {len(reports)} 个报告")
         action_queue["running"] = False
         action_queue["queued_rounds"] = max(action_queue["queued_rounds"] - command.rounds, 0)
@@ -295,11 +366,7 @@ def get_watchlist() -> dict[str, list[str]]:
 
 @router.post("/watchlist")
 def update_watchlist(request: WatchlistRequest) -> dict[str, list[str]]:
-    """更新玩家关注的物种列表（Critical 层）
-    
-    最多可以关注 critical_limit 个物种（通常是3个）。
-    这些物种将获得最详细的 AI 分析和报告。
-    """
+    """更新玩家关注的物种列表（Critical 层）"""
     watchlist.clear()
     watchlist.update(request.lineage_codes)
     simulation_engine.update_watchlist(watchlist)
@@ -345,7 +412,7 @@ def get_lineage_tree() -> LineageTree:
             )
             peak_pop = session.exec(peak_query).first() or 0
         
-        # 推断生态角色 (基于描述中的关键词)
+        # 推断生态角色
         desc_lower = species.description.lower()
         if any(kw in desc_lower for kw in ["植物", "藻类", "光合", "生产者", "plant", "algae"]):
             ecological_role = "producer"
@@ -358,10 +425,10 @@ def get_lineage_tree() -> LineageTree:
         else:
             ecological_role = "unknown"
         
-        # 推断tier (基于是否为背景物种)
+        # 推断tier
         tier = "background" if species.is_background else None
         
-        # 推断灭绝回合 (如果已灭绝)
+        # 推断灭绝回合
         extinction_turn = None
         if species.status == "extinct":
             with session_scope() as session:
@@ -440,16 +507,25 @@ def list_exports() -> list[ExportRecord]:
 
 @router.get("/map", response_model=MapOverview)
 def get_map_overview(
-    limit_tiles: int = 3200, 
+    limit_tiles: int = 6000, 
     limit_habitats: int = 500,
     view_mode: str = "terrain",
+    species_code: str | None = None,
 ) -> MapOverview:
     try:
-        print(f"[地图查询] 请求地块数: {limit_tiles}, 栖息地数: {limit_habitats}, 视图模式: {view_mode}")
+        print(f"[地图查询] 请求地块数: {limit_tiles}, 栖息地数: {limit_habitats}, 视图模式: {view_mode}, 物种: {species_code}")
+        
+        species_id = None
+        if species_code:
+            species = species_repository.get_by_lineage(species_code)
+            if species:
+                species_id = species.id
+        
         overview = map_manager.get_overview(
             tile_limit=limit_tiles, 
             habitat_limit=limit_habitats,
             view_mode=view_mode,  # type: ignore
+            species_id=species_id,
         )
         print(f"[地图查询] 返回地块数: {len(overview.tiles)}, 栖息地数: {len(overview.habitats)}")
         return overview
@@ -623,8 +699,8 @@ def create_save(request: CreateSaveRequest) -> dict:
         print(f"[存档API] 数据清空完成")
         
         # 2. 初始化地图
-        print(f"[存档API] 初始化地图...")
-        map_manager.ensure_initialized()
+        print(f"[存档API] 初始化地图，种子: {request.map_seed if request.map_seed else '随机'}")
+        map_manager.ensure_initialized(map_seed=request.map_seed)
         
         # 3. 初始化物种
         if request.scenario == "空白剧本" and request.species_prompts:
@@ -737,14 +813,12 @@ def generate_species(request: GenerateSpeciesRequest) -> dict:
 @router.post("/config/test-api")
 def test_api_connection(request: dict) -> dict:
     """测试 API 连接是否有效"""
-    import httpx
-    import json
     
     api_type = request.get("type", "chat")  # chat 或 embedding
     base_url = request.get("base_url", "").rstrip("/")
     api_key = request.get("api_key", "")
     model = request.get("model", "")
-    provider = request.get("provider", "")
+    # provider = request.get("provider", "") # 可选，用于更精细的逻辑
     
     if not base_url or not api_key:
         return {"success": False, "message": "请提供 API Base URL 和 API Key"}
@@ -764,7 +838,6 @@ def test_api_connection(request: dict) -> dict:
             
             print(f"[测试 Embedding] URL: {url}")
             print(f"[测试 Embedding] Model: {model}")
-            print(f"[测试 Embedding] API Key 前缀: {api_key[:10]}...")
             
             response = httpx.post(url, json=body, headers=headers, timeout=10)
             response.raise_for_status()
@@ -785,7 +858,26 @@ def test_api_connection(request: dict) -> dict:
                 }
         else:
             # 测试 chat API
-            url = f"{base_url}/chat/completions"
+            # URL 构建优化：自动适配不同的 API Base 风格
+            if base_url.endswith("/v1"):
+                url = f"{base_url}/chat/completions"
+            elif "openai.azure.com" in base_url:
+                 # Azure 特殊处理 (示例)
+                 # .../openai/deployments/{model}/chat/completions?api-version=...
+                 # 这里暂不处理复杂情况，假设用户填写的 Base URL 能适配
+                 url = f"{base_url}/chat/completions"
+            else:
+                # 默认行为，尝试追加 /chat/completions
+                # 如果用户填写的是 host (e.g., https://api.deepseek.com)，则追加 /chat/completions
+                # 如果用户漏了 /v1，通常 API 文档会要求带上。
+                # 这里我们做一个简单的检查，如果 base_url 不含 chat/completions，就加上
+                if "chat/completions" not in base_url:
+                     url = f"{base_url}/chat/completions"
+                else:
+                     url = base_url
+
+            print(f"[测试 Chat] URL: {url} | Model: {model}")
+
             body = {
                 "model": model or "gpt-3.5-turbo",
                 "messages": [{"role": "user", "content": "hi"}],

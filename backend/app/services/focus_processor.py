@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
@@ -19,8 +20,12 @@ class FocusBatchProcessor:
         self.router = router
         self.batch_size = max(1, batch_size)
 
-    def enhance(self, results: list[MortalityResult]) -> None:
-        for chunk in chunk_iter(results, self.batch_size):
+    async def enhance_async(self, results: list[MortalityResult]) -> None:
+        """异步批量增强"""
+        chunks = list(chunk_iter(results, self.batch_size))
+        tasks = []
+        
+        for chunk in chunks:
             payload = [
                 {
                     "lineage_code": item.species.lineage_code,
@@ -30,20 +35,36 @@ class FocusBatchProcessor:
                 }
                 for item in chunk
             ]
-            response = self.router.invoke("focus_batch", {"batch": payload})
-            # 从响应中提取 content
+            tasks.append(self.router.ainvoke("focus_batch", {"batch": payload}))
+            
+        if not tasks:
+            return
+
+        ai_responses = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for chunk, response in zip(chunks, ai_responses):
+            if isinstance(response, Exception):
+                # Handle exception or log error
+                continue
+            
             content = response.get("content") if isinstance(response, dict) else None
             details = content.get("details") if isinstance(content, dict) else None
+            
             if not isinstance(details, list):
                 details = []
+                
             for item, detail in zip(chunk, details, strict=False):
+                summary = None
                 if isinstance(detail, dict):
                     summary = detail.get("summary") or detail.get("text")
                 elif isinstance(detail, str):
                     summary = detail
-                else:
-                    summary = None
+                
                 if summary:
                     item.notes.append(str(summary))
                 else:
                     item.notes.append("重点批次分析完成")
+
+    def enhance(self, results: list[MortalityResult]) -> None:
+        # Deprecated sync wrapper
+        raise NotImplementedError("Use enhance_async instead")
