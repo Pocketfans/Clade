@@ -1,0 +1,185 @@
+2025-11-19 01:33:11,173 [INFO] === STARTING 'EARTH-LIKE' EVOLUTION SIMULATION (15 TURNS) ===
+2025-11-19 01:33:11,173 [INFO] Checking server connectivity...
+2025-11-19 01:33:11,814 [INFO] HTTP Request: GET http://localhost:8000/api/saves/list "HTTP/1.1 200 OK"
+2025-11-19 01:33:11,815 [INFO] Server is online.
+2025-11-19 01:33:12,349 [INFO] [Setup] Creating new save: sim_earth_evo_1763487191
+2025-11-19 01:33:14,495 [INFO] HTTP Request: POST http://localhost:8000/api/saves/create "HTTP/1.1 200 OK"
+2025-11-19 01:33:14,499 [INFO] HTTP Request: GET http://localhost:8000/api/species/list "HTTP/1.1 200 OK"
+2025-11-19 01:33:14,499 [INFO] [Setup] Initial World: 3 species.
+2025-11-19 01:33:14,499 [INFO]   - Algaprimordia pelagica (海洋微藻): 5000000 | producer
+2025-11-19 01:33:14,499 [INFO]   - Protoflagella vorax (原始鞭毛虫): 3000000 | producer
+2025-11-19 01:33:14,499 [INFO]   - Thiobacter obstinata (硫细菌): 2000000 | producer
+2025-11-19 01:33:49,052 [INFO] HTTP Request: POST http://localhost:8000/api/turns/run "HTTP/1.1 200 OK"
+2025-11-19 01:33:49,069 [INFO] HTTP Request: GET http://localhost:8000/api/species/list "HTTP/1.1 200 OK"
+2025-11-19 01:33:49,069 [INFO] --- Turn 1 Summary ---
+2025-11-19 01:33:49,069 [INFO] Time: 34.55s | Pop: 13,453,694 | Species: 3
+2025-11-19 01:33:49,069 [INFO]   [Map Changes] 3 events recorded.
+2025-11-19 01:33:49,069 [INFO]     - 稳定期: 构造活动平静，地壳稳定，以侵蚀和沉积作用为主。（阶段进度 2/8）
+2025-11-19 01:33:49,069 [INFO]     - 稳定期: 侵蚀作用(轻微): 稳定期海岸侵蚀作用主导，缓慢降低海拔
+2025-11-19 01:33:49,069 [INFO]     - 稳定期: 侵蚀作用(轻微): 近海区域受波浪冲刷持续侵蚀
+2025-11-19 01:34:20,348 [INFO] HTTP Request: POST http://localhost:8000/api/turns/run "HTTP/1.1 200 OK"
+2025-11-19 01:34:20,366 [INFO] HTTP Request: GET http://localhost:8000/api/species/list "HTTP/1.1 200 OK"
+2025-11-19 01:34:20,367 [INFO] --- Turn 2 Summary ---
+2025-11-19 01:34:20,367 [INFO] Time: 31.28s | Pop: 20,902,210 | Species: 3
+2025-11-19 01:34:20,367 [INFO]   [Map Changes] 3 events recorded.
+2025-11-19 01:34:20,367 [INFO]     - 稳定期: 构造活动平静，地壳稳定，以侵蚀和沉积作用为主。（阶段进度 3/8）
+2025-11-19 01:34:20,367 [INFO]     - 稳定期: 侵蚀作用(轻微): 稳定期海岸持续受波浪冲刷和风化剥蚀
+2025-11-19 01:34:20,367 [INFO]     - 稳定期: 侵蚀作用(轻微): 近海平面区域易受海蚀和沉积物搬运影响
+2025-11-19 01:34:49,861 [INFO] HTTP Request: POST http://localhost:8000/api/turns/run "HTTP/1.1 200 OK"
+2025-11-19 01:34:49,876 [INFO] HTTP Request: GET http://localhost:8000/api/species/list "HTTP/1.1 200 OK"
+2025-11-19 01:34:49,876 [INFO] --- Turn 3 Summary ---
+2025-11-19 01:34:49,876 [INFO] Time: 29.49s | Pop: 25,021,323 | Species: 3
+2025-11-19 01:34:49,876 [INFO]   [Map Changes] 3 events recorded.
+2025-11-19 01:34:49,876 [INFO]     - 稳定期: 构造活动平静，地壳稳定，以侵蚀和沉积作用为主。（阶段进度 4/8）
+2025-11-19 01:34:49,876 [INFO]     - 稳定期: 侵蚀作用(轻微): 稳定期海岸侵蚀持续作用，降低海拔高度
+2025-11-19 01:34:49,876 [INFO]     - 稳定期: 侵蚀作用(轻微): 海平面附近区域易受波浪侵蚀作用影响
+2025-11-19 01:35:17,443 [INFO] HTTP Request: POST http://localhost:8000/api/turns/run "HTTP/1.1 200 OK"
+2025-11-19 01:35:17,459 [INFO] HTTP Request: GET http://localhost:8000/api/species/list "HTTP/1.1 200 OK"
+2025-11-19 01:35:17,459 [INFO] --- Turn 4 Summary ---
+2025-11-19 01:35:17,459 [INFO] Time: 27.57s | Pop: 34,477,058 | Species: 3
+2025-11-19 01:35:17,459 [INFO]   [Map Changes] 3 events recorded.
+2025-11-19 01:35:17,459 [INFO]     - 稳定期: 构造活动平静，地壳稳定，以侵蚀和沉积作用为主。（阶段进度 5/8）
+2025-11-19 01:35:17,459 [INFO]     - 稳定期: 侵蚀作用(轻微): 稳定期海岸受波浪侵蚀持续作用
+2025-11-19 01:35:17,459 [INFO]     - 稳定期: 侵蚀作用(轻微): 海平面附近岩层易受风化剥蚀
+2025-11-19 01:35:17,459 [INFO] >>> EVENT: COOLING PERIOD (Intensity 5)
+2025-11-19 01:36:44,010 [INFO] HTTP Request: POST http://localhost:8000/api/turns/run "HTTP/1.1 200 OK"
+2025-11-19 01:36:44,013 [INFO] HTTP Request: GET http://localhost:8000/api/species/list "HTTP/1.1 200 OK"
+2025-11-19 01:36:44,013 [INFO] --- Turn 5 Summary ---
+2025-11-19 01:36:44,014 [INFO] Time: 86.55s | Pop: 23,481,645 | Species: 5
+2025-11-19 01:36:44,014 [INFO]   [Map Changes] 4 events recorded.
+2025-11-19 01:36:44,014 [INFO]     - 稳定期: 构造活动平静，地壳稳定，以侵蚀和沉积作用为主。（阶段进度 6/8）
+2025-11-19 01:36:44,014 [INFO]     - 稳定期: 全球平均温度上升1.5°C，海平面上升3.8米
+2025-11-19 01:36:44,014 [INFO]     - 稳定期: 侵蚀作用(轻微): 稳定期海岸侵蚀持续，波浪作用削减陆地高程
+2025-11-19 01:36:44,014 [INFO]   [Speciation] 2 new species!
+2025-11-19 01:36:44,014 [INFO]     -> C1a from C1 (深海热液喷口环境中，个体间通过群体感应形成生物膜的种群在资源获取和环境抗逆性上具有显著优势，逐渐排挤独立生活的个体，形成新的合作型物种)
+2025-11-19 01:36:44,014 [INFO]     -> C1b from C1 (深海热液环境波动性增强，部分硫细菌进化出与管虫共生的能力，通过直接能量交换获得更稳定的生存环境，与独立生存的父系种群产生生态隔离)
+2025-11-19 01:38:27,588 [INFO] HTTP Request: POST http://localhost:8000/api/turns/run "HTTP/1.1 200 OK"
+2025-11-19 01:38:27,624 [INFO] HTTP Request: GET http://localhost:8000/api/species/list "HTTP/1.1 200 OK"
+2025-11-19 01:38:27,625 [INFO] --- Turn 6 Summary ---
+2025-11-19 01:38:27,625 [INFO] Time: 103.57s | Pop: 16,036,681 | Species: 7
+2025-11-19 01:38:27,625 [INFO]   [Map Changes] 3 events recorded.
+2025-11-19 01:38:27,625 [INFO]     - 稳定期: 构造活动平静，地壳稳定，以侵蚀和沉积作用为主。（阶段进度 7/8）
+2025-11-19 01:38:27,625 [INFO]     - 稳定期: 侵蚀作用(轻微): 波浪冲刷与海蚀作用持续改造海岸带
+2025-11-19 01:38:27,625 [INFO]     - 稳定期: 侵蚀作用(轻微): 海平面波动导致沉积物再分配与海岸后退
+2025-11-19 01:38:27,625 [INFO]   [Speciation] 2 new species!
+2025-11-19 01:38:27,625 [INFO]     -> A1a from A1 (浅海地区浮游动物捕食压力增大，能够形成胶团群体的微藻因减少被捕食概率而获得生存优势，与单细胞漂浮的父系种群在栖息深度和生存策略上产生分化)
+2025-11-19 01:38:27,625 [INFO]     -> A1b from A1 (海洋地形变化导致深海区域扩大，种群中具有弱光适应能力和压力耐受性的个体在新环境中获得生存优势，逐渐与浅海原种群产生生殖隔离)
+2025-11-19 01:39:04,991 [INFO] HTTP Request: POST http://localhost:8000/api/turns/run "HTTP/1.1 200 OK"
+2025-11-19 01:39:04,994 [INFO] HTTP Request: GET http://localhost:8000/api/species/list "HTTP/1.1 200 OK"
+2025-11-19 01:39:04,994 [INFO] --- Turn 7 Summary ---
+2025-11-19 01:39:04,994 [INFO] Time: 37.37s | Pop: 24,341,326 | Species: 7
+2025-11-19 01:39:04,994 [INFO]   [Map Changes] 3 events recorded.
+2025-11-19 01:39:04,994 [INFO]     - 稳定期: 构造活动平静，地壳稳定，以侵蚀和沉积作用为主。（阶段进度 8/8）
+2025-11-19 01:39:04,994 [INFO]     - 稳定期: 侵蚀作用(轻微): 海平面稳定期波浪能量持续作用于陆架前缘
+2025-11-19 01:39:04,994 [INFO]     - 稳定期: 侵蚀作用(轻微): 潮汐冲刷导致砂质海岸线缓慢后退
+2025-11-19 01:39:36,304 [INFO] HTTP Request: POST http://localhost:8000/api/turns/run "HTTP/1.1 200 OK"
+2025-11-19 01:39:36,307 [INFO] HTTP Request: GET http://localhost:8000/api/species/list "HTTP/1.1 200 OK"
+2025-11-19 01:39:36,308 [INFO] --- Turn 8 Summary ---
+2025-11-19 01:39:36,308 [INFO] Time: 31.31s | Pop: 28,458,212 | Species: 7
+2025-11-19 01:39:36,308 [INFO]   [Map Changes] 3 events recorded.
+2025-11-19 01:39:36,308 [INFO]     - 稳定期: 构造活动平静，地壳稳定，以侵蚀和沉积作用为主。（阶段进度 1/12）
+2025-11-19 01:39:36,308 [INFO]     - 稳定期: 侵蚀作用(轻微): 稳定期海岸持续受波浪侵蚀作用
+2025-11-19 01:39:36,308 [INFO]     - 稳定期: 侵蚀作用(轻微): 海平面附近区域易受侵蚀改造
+2025-11-19 01:40:08,156 [INFO] HTTP Request: POST http://localhost:8000/api/turns/run "HTTP/1.1 200 OK"
+2025-11-19 01:40:08,177 [INFO] HTTP Request: GET http://localhost:8000/api/species/list "HTTP/1.1 200 OK"
+2025-11-19 01:40:08,177 [INFO] --- Turn 9 Summary ---
+2025-11-19 01:40:08,177 [INFO] Time: 31.85s | Pop: 36,260,263 | Species: 7
+2025-11-19 01:40:08,177 [INFO]   [Map Changes] 3 events recorded.
+2025-11-19 01:40:08,177 [INFO]     - 稳定期: 构造活动平静，地壳稳定，以侵蚀和沉积作用为主。（阶段进度 2/12）
+2025-11-19 01:40:08,177 [INFO]     - 稳定期: 侵蚀作用(轻微): 稳定期海岸侵蚀优先，50万年足以形成显著变化
+2025-11-19 01:40:08,177 [INFO]     - 稳定期: 侵蚀作用(轻微): 临近海平面区域易受侵蚀，保守强度缓慢改变地形
+2025-11-19 01:40:08,177 [INFO] >>> EVENT: THE GREAT FREEZE (Intensity 9)
+2025-11-19 01:42:08,198 [ERROR] [Turn 10] Exception: timed out
+2025-11-19 01:42:08,280 [ERROR] Traceback (most recent call last):
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpx\_transports\default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpx\_transports\default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpcore\_sync\connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpcore\_sync\connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+        pool_request.request
+    )
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpcore\_sync\http_proxy.py", line 206, in handle_request
+    return self._connection.handle_request(proxy_request)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpcore\_sync\connection.py", line 103, in handle_request
+    return self._connection.handle_request(request)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpcore\_sync\http11.py", line 136, in handle_request
+    raise exc
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpcore\_sync\http11.py", line 106, in handle_request
+    ) = self._receive_response_headers(**kwargs)
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpcore\_sync\http11.py", line 177, in _receive_response_headers
+    event = self._receive_event(timeout=timeout)
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpcore\_sync\http11.py", line 217, in _receive_event
+    data = self._network_stream.read(
+        self.READ_NUM_BYTES, timeout=timeout
+    )
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpcore\_backends\sync.py", line 126, in read
+    with map_exceptions(exc_map):
+         ~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.13_3.13.2544.0_x64__qbz5n2kfra8p0\Lib\contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpcore\_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ReadTimeout: timed out
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Sasha\Evolutionary Game\tests\api_simulation_test\run_test.py", line 110, in run_earth_simulation
+    run_resp = client.post("/turns/run", json=payload)
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpx\_client.py", line 1144, in post
+    return self.request(
+           ~~~~~~~~~~~~^
+        "POST",
+        ^^^^^^^
+    ...<11 lines>...
+        extensions=extensions,
+        ^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpx\_client.py", line 825, in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpx\_client.py", line 914, in send
+    response = self._send_handling_auth(
+        request,
+    ...<2 lines>...
+        history=[],
+    )
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpx\_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+        request,
+        follow_redirects=follow_redirects,
+        history=history,
+    )
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpx\_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpx\_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpx\_transports\default.py", line 249, in handle_request
+    with map_httpcore_exceptions():
+         ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.13_3.13.2544.0_x64__qbz5n2kfra8p0\Lib\contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "C:\Users\Sasha\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\httpx\_transports\default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ReadTimeout: timed out
+
+2025-11-19 01:42:08,280 [INFO] 
+=== FINAL EVOLUTIONARY ANALYSIS ===
+2025-11-19 01:42:08,284 [INFO] HTTP Request: GET http://localhost:8000/api/species/list "HTTP/1.1 200 OK"
+2025-11-19 01:42:08,284 [INFO] Species Diversity: 3 -> 9
+2025-11-19 01:42:08,284 [INFO] [PASS] Adaptive radiation occurred.
+2025-11-19 01:42:08,284 [INFO] Ecological Roles Distribution (Count): {'producer': 6, 'unknown': 2, 'carnivore': 1}
+2025-11-19 01:42:08,284 [INFO] [PASS] Consumers exist in the ecosystem.
+2025-11-19 01:42:08,316 [INFO] HTTP Request: GET http://localhost:8000/api/lineage "HTTP/1.1 200 OK"
+2025-11-19 01:42:08,316 [INFO] [PASS] Protoflagella (B) lineage evolved 2 new species.
+2025-11-19 01:42:08,316 [INFO]       Example: Protoflagella gracilis (细游鞭毛虫)
+2025-11-19 01:42:08,316 [INFO] Log saved to tests/api_simulation_test/earth_evo_log.txt
