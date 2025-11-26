@@ -1,0 +1,836 @@
+.game-layout {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background-color: #080a06;
+  color: #f0f4e8;
+  font-family: var(--font-body);
+}
+
+.world-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+/* Map Container Fixes */
+.map-surface {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: 
+    radial-gradient(ellipse at 30% 40%, rgba(45, 212, 191, 0.03) 0%, transparent 50%),
+    radial-gradient(ellipse at 70% 60%, rgba(34, 197, 94, 0.02) 0%, transparent 45%),
+    radial-gradient(circle at 50% 50%, #0d120d 0%, #080a06 100%);
+}
+
+.hex-stage-container {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  touch-action: none;
+}
+
+.hud-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  pointer-events: none; /* Let clicks pass through to map */
+  display: flex;
+  flex-direction: column;
+}
+
+.hud-top {
+  flex: 0 0 auto;
+  pointer-events: auto;
+  background: linear-gradient(to bottom, rgba(8, 12, 8, 0.95) 0%, rgba(8, 12, 8, 0.8) 70%, transparent 100%);
+  padding: 0.6rem 1.25rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(45, 212, 191, 0.08);
+}
+
+.hud-middle {
+  flex: 1 1 auto;
+  display: flex;
+  overflow: hidden;
+}
+
+.hud-left {
+  flex: 0 0 20rem; /* 320px at base 16px */
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+  padding: 1rem;
+  padding-left: 0; /* Flush to edge */
+  transition: flex-basis 0.3s ease; /* Add transition */
+}
+
+.hud-left.collapsed {
+  flex: 0 0 3.75rem; /* 60px at base 16px */
+  padding-right: 0;
+}
+
+.outliner-container {
+  pointer-events: auto;
+  background: linear-gradient(90deg, rgba(12, 18, 12, 0.95) 0%, rgba(8, 12, 8, 0.85) 100%);
+  backdrop-filter: blur(16px);
+  border-right: 1px solid rgba(45, 212, 191, 0.1);
+  border-top-right-radius: 16px;
+  border-bottom-right-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  box-shadow: 
+    4px 0 25px rgba(0, 0, 0, 0.4),
+    0 0 1px rgba(45, 212, 191, 0.1) inset;
+  transition: all 0.3s ease;
+}
+
+/* Remove background when collapsed to make it transparent behind button */
+.hud-left.collapsed .outliner-container {
+  background: transparent;
+  box-shadow: none;
+  border: none;
+  backdrop-filter: none;
+  width: 100%;
+  align-items: center; /* Center the button */
+  padding-top: 1rem;
+}
+
+.hud-center {
+  flex: 1 1 auto;
+  position: relative;
+}
+
+/* Alerts area in top center */
+.alerts-container {
+  position: absolute;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.5rem;
+  pointer-events: auto;
+}
+
+.hud-right {
+  flex: 0 0 26.25rem; /* 420px at base 16px */
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  padding: 1rem;
+  padding-right: 0; /* Flush to edge */
+  transition: transform 0.3s ease;
+}
+
+.drawer-content {
+  pointer-events: auto;
+  background: linear-gradient(-90deg, rgba(12, 18, 12, 0.98) 0%, rgba(8, 12, 8, 0.92) 100%);
+  backdrop-filter: blur(16px);
+  border-left: 1px solid rgba(45, 212, 191, 0.1);
+  border-top-left-radius: 16px;
+  border-bottom-left-radius: 16px;
+  height: 100%;
+  overflow-y: auto;
+  box-shadow: 
+    -4px 0 30px rgba(0, 0, 0, 0.5),
+    0 0 1px rgba(45, 212, 191, 0.1) inset;
+  display: flex;
+  flex-direction: column;
+}
+
+.hud-bottom {
+  flex: 0 0 auto;
+  pointer-events: auto;
+  background: linear-gradient(to top, rgba(8, 12, 8, 0.98) 0%, rgba(8, 12, 8, 0.7) 50%, transparent 100%);
+  padding: 1rem 1rem 1.5rem 1rem;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 1rem;
+}
+
+.modal-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 100;
+  pointer-events: auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(8px);
+}
+
+/* ================= BUTTON STYLES ================= */
+
+/* Card-like Lens Buttons (Vic3 Style) */
+.lens-button {
+  position: relative;
+  background: rgba(30, 35, 50, 0.6);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #ccc;
+  padding: 0.6rem 1.2rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 80px;
+  backdrop-filter: blur(4px);
+}
+
+.lens-button span:first-child {
+  font-size: 1.5rem;
+  margin-bottom: 0.1rem;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+}
+
+.lens-button span:last-child {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.lens-button:hover {
+  background: rgba(50, 60, 80, 0.8);
+  transform: translateY(-4px);
+  box-shadow: 0 6px 12px rgba(0,0,0,0.4);
+  border-color: rgba(255,255,255,0.3);
+  color: #fff;
+}
+
+.lens-button.active {
+  background: linear-gradient(145deg, rgba(46, 125, 50, 0.8), rgba(27, 94, 32, 0.9));
+  border-color: #66bb6a;
+  color: white;
+  box-shadow: 0 0 15px rgba(76, 175, 80, 0.4), inset 0 1px 0 rgba(255,255,255,0.2);
+  transform: translateY(-2px);
+}
+
+.lens-button.active::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40%;
+  height: 2px;
+  background: #66bb6a;
+  box-shadow: 0 0 8px #66bb6a;
+  border-radius: 2px;
+}
+
+/* Functional Lens Buttons (Different Colors) */
+.lens-group-functional {
+  display: flex;
+  gap: 0.75rem;
+  margin-left: 2rem;
+  padding-left: 2rem;
+  border-left: 1px solid rgba(255,255,255,0.1);
+}
+
+.lens-button.functional {
+  background: rgba(40, 30, 20, 0.6);
+  border-color: rgba(255, 152, 0, 0.2);
+}
+
+.lens-button.functional:hover {
+  border-color: rgba(255, 152, 0, 0.5);
+  box-shadow: 0 6px 12px rgba(255, 152, 0, 0.15);
+}
+
+/* Top Bar Icons */
+.btn-icon {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: white;
+  font-size: 1.1rem;
+  width: 40px;
+  height: 40px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.btn-icon:hover {
+  background: rgba(255,255,255,0.15);
+  transform: scale(1.05);
+  box-shadow: 0 0 10px rgba(255,255,255,0.1);
+}
+
+/* Outliner - 演化主题 */
+.outliner-header {
+  padding: 1rem;
+  background: linear-gradient(180deg, rgba(45, 212, 191, 0.06), transparent);
+  border-bottom: 1px solid rgba(45, 212, 191, 0.12);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: rgba(240, 244, 232, 0.7);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.outliner-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 0.5rem;
+}
+
+.outliner-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.outliner-list::-webkit-scrollbar-track {
+  background: rgba(45, 212, 191, 0.05);
+  border-radius: 3px;
+}
+
+.outliner-list::-webkit-scrollbar-thumb {
+  background: rgba(45, 212, 191, 0.2);
+  border-radius: 3px;
+}
+
+.outliner-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(45, 212, 191, 0.35);
+}
+
+.outliner-item {
+  padding: 0.75rem 0.75rem;
+  margin-bottom: 4px;
+  border-radius: 10px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.9rem;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  border-left: 3px solid transparent;
+  background: rgba(45, 212, 191, 0.02);
+}
+
+.outliner-item:hover {
+  background: rgba(45, 212, 191, 0.08);
+  transform: translateX(4px);
+  border-left-color: rgba(45, 212, 191, 0.3);
+}
+
+.outliner-item.selected {
+  background: linear-gradient(90deg, rgba(45, 212, 191, 0.15), rgba(34, 197, 94, 0.08));
+  border-left-width: 3px;
+  border-left-style: solid;
+  box-shadow: 0 2px 8px rgba(45, 212, 191, 0.1);
+}
+
+/* Floating Zoom Controls */
+.map-zoom-controls {
+  position: absolute;
+  bottom: 110px; /* Above Lens Bar */
+  right: 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  z-index: 5;
+  pointer-events: auto;
+}
+
+.zoom-group {
+  display: flex;
+  flex-direction: column;
+  background: rgba(30, 35, 45, 0.9);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+  backdrop-filter: blur(8px);
+}
+
+.zoom-group button {
+  width: 44px;
+  height: 44px;
+  background: transparent;
+  border: none;
+  color: white;
+  font-size: 1.4rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s;
+}
+
+.zoom-group button:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+.zoom-group button:first-child {
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.zoom-reset {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: rgba(30, 35, 45, 0.9);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 20px;
+  color: rgba(255,255,255,0.8);
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+  transition: all 0.2s;
+}
+
+.zoom-reset:hover {
+  background: rgba(255,255,255,0.2);
+  color: white;
+  transform: scale(1.05);
+}
+
+/* ==================== TopBar 演化主题样式 ==================== */
+.topbar-container {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.resource-group {
+  display: flex;
+  gap: 1.5rem;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(135deg, rgba(12, 18, 12, 0.8), rgba(8, 16, 12, 0.9));
+  padding: 0.6rem 1.5rem;
+  border-radius: 16px;
+  border: 1px solid rgba(45, 212, 191, 0.15);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.resource-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  transition: all 0.2s;
+}
+
+.resource-item.clickable {
+  cursor: pointer;
+  padding: 4px 10px;
+  margin: -4px -10px;
+  border-radius: 8px;
+}
+
+.resource-item.clickable:hover {
+  background: rgba(45, 212, 191, 0.12);
+  transform: translateY(-2px);
+}
+
+.resource-label {
+  font-size: 0.7rem;
+  color: rgba(240, 244, 232, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 3px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.resource-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: #2dd4bf;
+  text-shadow: 0 0 10px rgba(45, 212, 191, 0.3);
+}
+
+/* TopBar Center */
+.topbar-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.time-display {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(135deg, rgba(12, 18, 12, 0.8), rgba(8, 16, 12, 0.9));
+  padding: 8px 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(45, 212, 191, 0.15);
+}
+
+.turn-number {
+  font-size: 1rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: #2dd4bf;
+  letter-spacing: 1px;
+}
+
+.time-separator {
+  color: rgba(45, 212, 191, 0.4);
+  font-size: 1.2rem;
+}
+
+.time-era {
+  font-size: 0.9rem;
+  color: rgba(240, 244, 232, 0.8);
+  font-family: var(--font-mono);
+}
+
+/* 压力策划按钮 - 演化主题 */
+.btn-pressure-evolution {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 32px;
+  border: none;
+  border-radius: 50px;
+  background: linear-gradient(135deg, #2dd4bf 0%, #22c55e 100%);
+  color: #0a0d08;
+  font-size: 1rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: all 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  box-shadow: 
+    0 8px 25px rgba(45, 212, 191, 0.35),
+    inset 0 2px 0 rgba(255, 255, 255, 0.25),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.1);
+}
+
+.btn-pressure-evolution:hover {
+  transform: translateY(-4px) scale(1.03);
+  box-shadow: 
+    0 15px 35px rgba(45, 212, 191, 0.5),
+    0 0 40px rgba(45, 212, 191, 0.3),
+    inset 0 2px 0 rgba(255, 255, 255, 0.3),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.1);
+}
+
+.btn-pressure-evolution:active {
+  transform: translateY(-2px) scale(1.01);
+}
+
+.btn-pressure-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.2));
+}
+
+.btn-pressure-text {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.btn-pressure-shine {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 50%;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.35) 0%, transparent 100%);
+  border-radius: 50px 50px 0 0;
+  pointer-events: none;
+}
+
+.btn-pressure-glow {
+  position: absolute;
+  inset: -2px;
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.4), rgba(34, 197, 94, 0.4));
+  border-radius: 52px;
+  opacity: 0;
+  z-index: -1;
+  transition: opacity 0.3s;
+  filter: blur(8px);
+}
+
+.btn-pressure-evolution:hover .btn-pressure-glow {
+  opacity: 1;
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+
+/* TopBar Actions */
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-icon-evo {
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(12, 18, 12, 0.8), rgba(8, 16, 12, 0.9));
+  border: 1px solid rgba(45, 212, 191, 0.15);
+  border-radius: 12px;
+  color: rgba(240, 244, 232, 0.7);
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-icon-evo:hover {
+  background: rgba(45, 212, 191, 0.15);
+  border-color: rgba(45, 212, 191, 0.35);
+  color: #2dd4bf;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(45, 212, 191, 0.2);
+}
+
+/* ==================== LensBar 演化主题样式 ==================== */
+.lensbar-container {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 16px;
+  z-index: 1000;
+  align-items: flex-end;
+}
+
+.lensbar-group {
+  background: linear-gradient(180deg, rgba(12, 18, 12, 0.92), rgba(8, 12, 8, 0.96));
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(45, 212, 191, 0.12);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(45, 212, 191, 0.05) inset;
+  display: flex;
+  gap: 4px;
+}
+
+.lensbar-lenses {
+  padding: 6px 8px;
+  border-radius: 24px;
+}
+
+.lensbar-tools {
+  padding: 6px;
+  border-radius: 16px;
+}
+
+.lensbar-divider {
+  width: 1px;
+  background: linear-gradient(180deg, transparent, rgba(45, 212, 191, 0.2), transparent);
+  margin: 6px 4px;
+}
+
+/* Lens Buttons */
+.lens-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 20px;
+  background: transparent;
+  color: rgba(240, 244, 232, 0.65);
+  font-size: 0.88rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.lens-btn:hover {
+  background: rgba(45, 212, 191, 0.1);
+  color: rgba(240, 244, 232, 0.9);
+}
+
+.lens-btn.active {
+  background: linear-gradient(135deg, var(--lens-color), color-mix(in srgb, var(--lens-color) 70%, #22c55e));
+  color: #0a0d08;
+  font-weight: 600;
+  box-shadow: 
+    0 4px 15px color-mix(in srgb, var(--lens-color) 40%, transparent),
+    0 0 20px color-mix(in srgb, var(--lens-color) 25%, transparent);
+}
+
+.lens-icon {
+  font-size: 1.1rem;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2));
+  transition: transform 0.2s;
+}
+
+.lens-btn:hover .lens-icon {
+  transform: scale(1.1);
+}
+
+.lens-btn.active .lens-icon {
+  transform: scale(1.15);
+}
+
+.lens-label {
+  transition: all 0.2s;
+}
+
+.lens-active-indicator {
+  position: absolute;
+  bottom: -2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40%;
+  height: 3px;
+  background: var(--lens-color);
+  border-radius: 2px;
+  box-shadow: 0 0 8px var(--lens-color);
+}
+
+/* Tool Buttons */
+.tool-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: visible;
+}
+
+.tool-btn:hover {
+  background: rgba(45, 212, 191, 0.12);
+  border-color: rgba(45, 212, 191, 0.2);
+  transform: translateY(-3px);
+}
+
+.tool-btn.hovered {
+  background: color-mix(in srgb, var(--tool-color) 15%, transparent);
+  border-color: color-mix(in srgb, var(--tool-color) 30%, transparent);
+}
+
+.tool-icon {
+  font-size: 1.4rem;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+  transition: transform 0.2s;
+}
+
+.tool-btn:hover .tool-icon {
+  transform: scale(1.15);
+}
+
+.tool-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  background: radial-gradient(circle at center, var(--tool-color), transparent 70%);
+  opacity: 0;
+  transition: opacity 0.25s;
+  pointer-events: none;
+}
+
+.tool-btn:hover .tool-glow {
+  opacity: 0.15;
+}
+
+.tool-tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  padding: 6px 12px;
+  background: rgba(12, 18, 12, 0.95);
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  border-radius: 8px;
+  color: #f0f4e8;
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: tooltip-appear 0.2s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.tool-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: rgba(45, 212, 191, 0.2);
+}
+
+@keyframes tooltip-appear {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(-8px);
+  }
+}
+
+/* 3D Toggle Button */
+.tool-3d {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.tool-3d-text {
+  font-size: 0.9rem;
+  color: rgba(240, 244, 232, 0.7);
+  transition: all 0.2s;
+}
+
+.tool-3d.active {
+  background: rgba(45, 212, 191, 0.2);
+  border-color: rgba(45, 212, 191, 0.3);
+}
+
+.tool-3d.active .tool-3d-text {
+  color: #2dd4bf;
+  text-shadow: 0 0 10px rgba(45, 212, 191, 0.5);
+}
+
+.tool-3d:hover .tool-3d-text {
+  color: #2dd4bf;
+}

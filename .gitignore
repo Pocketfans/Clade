@@ -1,0 +1,115 @@
+# ============================================
+# Python
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# ============================================
+# Node.js
+# ============================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ============================================
+# Build Outputs
+# ============================================
+dist/
+build/
+frontend/dist/
+
+# ============================================
+# Game Data (User-specific, contains API keys!)
+# ============================================
+data/
+!data/.gitkeep
+!data/settings.example.json
+
+# Legacy Data Paths (Keep for safety)
+saves/
+exports/
+reports/
+
+# ============================================
+# Database
+# ============================================
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================
+# Cache & Logs
+# ============================================
+cache/
+.cache/
+*.cache
+*.log
+logs/
+backend/logs/
+
+# ============================================
+# IDE & Editor
+# ============================================
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ============================================
+# OS Generated
+# ============================================
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ============================================
+# Environment Variables (API Keys!)
+# ============================================
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# ============================================
+# Testing
+# ============================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+
+# ============================================
+# Temporary Files
+# ============================================
+*.tmp
+*.temp
+*.bak
+tmp/
+temp/

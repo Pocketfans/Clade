@@ -1,0 +1,13 @@
+{
+  "dependencies": {
+    "@types/d3-delaunay": "^6.0.4",
+    "@types/d3-polygon": "^3.0.2",
+    "@types/three": "^0.181.0",
+    "d3-delaunay": "^6.0.4",
+    "d3-polygon": "^3.0.1",
+    "pixi.js": "^8.14.2",
+    "react-force-graph-2d": "^1.29.0",
+    "recharts": "^3.4.1",
+    "three": "^0.181.2"
+  }
+}
