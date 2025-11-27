@@ -1,22 +1,23 @@
-# Clade 鍋滄鏈嶅姟 - PowerShell 鐗堟湰
-$Host.UI.RawUI.WindowTitle = "Clade - 鍋滄鏈嶅姟"
+# Clade 停止服务 - PowerShell 版本
+$Host.UI.RawUI.WindowTitle = "Clade - 停止服务"
 
 Write-Host ""
 Write-Host "  ============================================================" -ForegroundColor Red
-Write-Host "                  鍋滄 Clade 鏈嶅姟" -ForegroundColor Red
+Write-Host "                  停止 Clade 服务" -ForegroundColor Red
 Write-Host "  ============================================================" -ForegroundColor Red
 Write-Host ""
 
-Write-Host "姝ｅ湪鍋滄鏈嶅姟..." -ForegroundColor Yellow
+Write-Host "正在停止服务..." -ForegroundColor Yellow
 
-# 鍋滄 Node.js 杩涚▼锛堝墠绔級
-Write-Host "  姝ｅ湪鍋滄鍓嶇..." -ForegroundColor Yellow
+# 停止 Node.js 进程 (前端)
+Write-Host "  正在停止前端..." -ForegroundColor Yellow
 Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-# 鍋滄 Python/uvicorn 杩涚▼锛堝悗绔級
-Write-Host "  姝ｅ湪鍋滄鍚庣..." -ForegroundColor Yellow
+# 停止 Python/uvicorn 进程 (后端)
+Write-Host "  正在停止后端..." -ForegroundColor Yellow
 
-# 閫氳繃绔彛鏌ユ壘骞剁粓姝㈣繘绋?$port8000 = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+# 通过端口查找并终止进程
+$port8000 = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
 if ($port8000) {
     foreach ($pid in $port8000) {
         Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
@@ -32,7 +33,7 @@ if ($port5173) {
 
 Write-Host ""
 Write-Host "  ============================================================" -ForegroundColor Green
-Write-Host "                  鎵€鏈夋湇鍔″凡鍋滄" -ForegroundColor Green
+Write-Host "                  所有服务已停止" -ForegroundColor Green
 Write-Host "  ============================================================" -ForegroundColor Green
 Write-Host ""
 
