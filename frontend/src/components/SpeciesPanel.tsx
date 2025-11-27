@@ -19,6 +19,7 @@ interface Props {
   onSelectSpecies: (id: string | null) => void;
   onCollapse?: () => void;
   refreshTrigger?: number;
+  previousPopulations?: Map<string, number>;  // 前一回合的种群数量
 }
 
 // 生态角色颜色和图标映射
@@ -39,12 +40,47 @@ const statusConfig: Record<string, { label: string; color: string; bg: string }>
   endangered: { label: "濒危", color: "#fbbf24", bg: "rgba(251, 191, 36, 0.15)" }
 };
 
-// 趋势判断
-function getTrend(deathRate: number, status: string) {
-  if (status === 'extinct') return { icon: Skull, color: "#64748b", label: "灭绝", bg: "rgba(100, 116, 139, 0.15)" };
-  if (deathRate > 0.15) return { icon: TrendingDown, color: "#ef4444", label: "危急", bg: "rgba(239, 68, 68, 0.15)" };
-  if (deathRate > 0.08) return { icon: TrendingDown, color: "#f97316", label: "衰退", bg: "rgba(249, 115, 22, 0.15)" };
-  if (deathRate < 0.03) return { icon: TrendingUp, color: "#22c55e", label: "繁荣", bg: "rgba(34, 197, 94, 0.15)" };
+// 趋势判断 - 基于种群变化率
+function getTrend(
+  currentPop: number, 
+  previousPop: number | undefined, 
+  status: string
+) {
+  // 灭绝状态
+  if (status === 'extinct') {
+    return { icon: Skull, color: "#64748b", label: "灭绝", bg: "rgba(100, 116, 139, 0.15)" };
+  }
+  
+  // 如果没有历史数据，显示稳定
+  if (previousPop === undefined || previousPop === 0) {
+    return { icon: Minus, color: "#94a3b8", label: "稳定", bg: "rgba(148, 163, 184, 0.15)" };
+  }
+  
+  // 计算变化率
+  const changeRate = (currentPop - previousPop) / previousPop;
+  
+  // 根据变化率判断趋势
+  // 增长超过50%：繁荣
+  if (changeRate > 0.5) {
+    return { icon: TrendingUp, color: "#22c55e", label: "繁荣", bg: "rgba(34, 197, 94, 0.15)" };
+  }
+  // 增长10%-50%：增长
+  if (changeRate > 0.1) {
+    return { icon: TrendingUp, color: "#4ade80", label: "增长", bg: "rgba(74, 222, 128, 0.15)" };
+  }
+  // 下降超过50%：危急
+  if (changeRate < -0.5) {
+    return { icon: TrendingDown, color: "#ef4444", label: "危急", bg: "rgba(239, 68, 68, 0.15)" };
+  }
+  // 下降20%-50%：衰退
+  if (changeRate < -0.2) {
+    return { icon: TrendingDown, color: "#f97316", label: "衰退", bg: "rgba(249, 115, 22, 0.15)" };
+  }
+  // 下降10%-20%：下降
+  if (changeRate < -0.1) {
+    return { icon: TrendingDown, color: "#fbbf24", label: "下降", bg: "rgba(251, 191, 36, 0.15)" };
+  }
+  // 变化在±10%之间：稳定
   return { icon: Minus, color: "#94a3b8", label: "稳定", bg: "rgba(148, 163, 184, 0.15)" };
 }
 
@@ -60,7 +96,8 @@ export function SpeciesPanel({
   selectedSpeciesId, 
   onSelectSpecies, 
   onCollapse,
-  refreshTrigger = 0
+  refreshTrigger = 0,
+  previousPopulations = new Map()
 }: Props) {
   // 详情数据
   const [speciesDetail, setSpeciesDetail] = useState<SpeciesDetail | null>(null);
@@ -231,7 +268,8 @@ export function SpeciesPanel({
       <div className="species-list">
         {filteredList.map((s, index) => {
           const role = roleConfig[s.ecological_role?.toLowerCase()] || roleConfig.unknown;
-          const trend = getTrend(s.death_rate, s.status);
+          const prevPop = previousPopulations.get(s.lineage_code);
+          const trend = getTrend(s.population, prevPop, s.status);
           const TrendIcon = trend.icon;
           const isExtinct = s.status === "extinct";
           const isSelected = s.lineage_code === selectedSpeciesId;
@@ -425,7 +463,8 @@ export function SpeciesPanel({
     ].slice(0, 6);
 
     const role = roleConfig[snapshot?.ecological_role?.toLowerCase() || "unknown"] || roleConfig.unknown;
-    const trend = snapshot ? getTrend(snapshot.death_rate, snapshot.status) : null;
+    const prevPop = previousPopulations.get(species.lineage_code);
+    const trend = snapshot ? getTrend(snapshot.population, prevPop, snapshot.status) : null;
     const statusCfg = statusConfig[species.status] || statusConfig.alive;
 
     return (

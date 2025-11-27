@@ -307,6 +307,20 @@ export default function App() {
 
   const latestReport = useMemo(() => (reports.length > 0 ? reports[reports.length - 1] : null), [reports]);
   
+  // 前一回合的报告（用于计算趋势）
+  const previousReport = useMemo(() => (reports.length > 1 ? reports[reports.length - 2] : null), [reports]);
+  
+  // 前一回合的种群数量映射（用于趋势判断）
+  const previousPopulations = useMemo(() => {
+    const map = new Map<string, number>();
+    if (previousReport?.species) {
+      for (const s of previousReport.species) {
+        map.set(s.lineage_code, s.population);
+      }
+    }
+    return map;
+  }, [previousReport]);
+  
   // 物种列表：合并报告数据和实时数据，确保信息完整
   const speciesList = useMemo(() => {
     const reportSpecies = latestReport?.species || [];
@@ -835,6 +849,7 @@ export default function App() {
             }}
             onCollapse={() => setShowOutliner(false)}
             refreshTrigger={speciesRefreshTrigger}
+            previousPopulations={previousPopulations}
           />
         ) : (
           <div style={{ padding: '8px', display: 'flex', justifyContent: 'center', background: 'rgba(0,0,0,0.2)' }}>
