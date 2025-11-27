@@ -116,7 +116,21 @@ class SimulationEngine:
         self.watchlist = set(codes)
 
     def _calculate_trophic_interactions(self, species_list: list) -> dict[str, float]:
-        """计算营养级互动压力 (按区域细分)。"""
+        """计算营养级互动压力 (按区域细分)。
+        
+        标准5级食物链的压力传导：
+        - T1 受 T2 的采食压力（grazing）
+        - T2 受 T3 的捕食压力（predation_t3）
+        - T3 受 T4 的捕食压力（predation_t4）
+        - T4 受 T5 的捕食压力（predation_t5）
+        - T5 作为顶级捕食者，只受食物匮乏影响
+        
+        同时计算各营养级的食物稀缺度：
+        - t2_scarcity: T2的食物（T1）是否稀缺
+        - t3_scarcity: T3的食物（T2）是否稀缺
+        - t4_scarcity: T4的食物（T3）是否稀缺
+        - t5_scarcity: T5的食物（T4）是否稀缺
+        """
         global_biomass = defaultdict(float)
         region_biomass: dict[str, dict[int, float]] = defaultdict(lambda: defaultdict(float))
         
@@ -132,8 +146,12 @@ class SimulationEngine:
         
         interactions: dict[str, float] = {}
         global_stats = self._compute_trophic_pressures(global_biomass)
+        
+        # 全局稀缺度
         interactions["t2_scarcity"] = global_stats["t2_scarcity"]
         interactions["t3_scarcity"] = global_stats["t3_scarcity"]
+        interactions["t4_scarcity"] = global_stats["t4_scarcity"]
+        interactions["t5_scarcity"] = global_stats["t5_scarcity"]
         
         region_stats: dict[str, dict[str, float]] = {}
         for region, biomap in region_biomass.items():
@@ -141,45 +159,112 @@ class SimulationEngine:
             region_stats[region] = stats
             interactions[f"t2_scarcity_{region}"] = stats["t2_scarcity"]
             interactions[f"t3_scarcity_{region}"] = stats["t3_scarcity"]
+            interactions[f"t4_scarcity_{region}"] = stats["t4_scarcity"]
+            interactions[f"t5_scarcity_{region}"] = stats["t5_scarcity"]
         
+        # 计算每个物种受到的捕食压力
         for sp in species_list:
             region = self._resolve_region_label(sp)
             stats = region_stats.get(region, global_stats)
             lineage_key = f"predation_on_{sp.lineage_code}"
             trophic_level = int(sp.trophic_level)
+            
             if trophic_level == 1:
+                # T1: 受T2采食压力
                 interactions[lineage_key] = stats["grazing_intensity"]
             elif trophic_level == 2:
-                interactions[lineage_key] = stats["predation_intensity"]
+                # T2: 受T3捕食压力
+                interactions[lineage_key] = stats["predation_t3"]
+            elif trophic_level == 3:
+                # T3: 受T4捕食压力
+                interactions[lineage_key] = stats["predation_t4"]
+            elif trophic_level == 4:
+                # T4: 受T5捕食压力
+                interactions[lineage_key] = stats["predation_t5"]
+            # T5: 顶级捕食者，不受捕食压力
         
         return interactions
 
     def _compute_trophic_pressures(self, biomass_map: dict[int, float]) -> dict[str, float]:
+        """计算标准5级食物链的营养级压力
+        
+        压力传导方向（自下而上）：
+        - T1 → 被T2采食
+        - T2 → 被T3捕食
+        - T3 → 被T4捕食
+        - T4 → 被T5捕食
+        - T5 → 顶级（无捕食者）
+        
+        稀缺性计算（自上而下）：
+        - t2_scarcity: T2的食物（T1）短缺程度
+        - t3_scarcity: T3的食物（T2）短缺程度
+        - t4_scarcity: T4的食物（T3）短缺程度
+        - t5_scarcity: T5的食物（T4）短缺程度
+        """
         t1_biomass = biomass_map.get(1, 0.0)
         t2_biomass = biomass_map.get(2, 0.0)
-        predator_biomass = sum(b for level, b in biomass_map.items() if level >= 3)
+        t3_biomass = biomass_map.get(3, 0.0)
+        t4_biomass = biomass_map.get(4, 0.0)
+        t5_biomass = biomass_map.get(5, 0.0)
         
+        # 生态效率系数（用于判断压力）
+        # 每上升一级，可支撑的生物量约为下级的10-15%
+        EFFICIENCY = 0.12
+        
+        # === T1 受 T2 的采食压力 ===
         grazing_intensity = 0.0
         t2_scarcity = 0.0
         if t1_biomass > 0:
-            raw_grazing_ratio = (t2_biomass * 3.0) / max(t1_biomass, 1.0)
-            grazing_intensity = min(raw_grazing_ratio * 0.5, 0.8)
-            t2_scarcity = max(0.0, min(2.0, raw_grazing_ratio - 0.8))
+            # T2 需要的 T1 生物量 = T2 / 效率
+            required_t1 = t2_biomass / EFFICIENCY if t2_biomass > 0 else 0
+            grazing_ratio = required_t1 / max(t1_biomass, 1.0)
+            grazing_intensity = min(grazing_ratio * 0.5, 0.8)
+            t2_scarcity = max(0.0, min(2.0, grazing_ratio - 0.8))
+        elif t2_biomass > 0:
+            t2_scarcity = 2.0  # 没有T1但有T2，T2面临严重食物短缺
         
-        predation_intensity = 0.0
+        # === T2 受 T3 的捕食压力 ===
+        predation_t3 = 0.0
         t3_scarcity = 0.0
         if t2_biomass > 0:
-            raw_predation_ratio = (predator_biomass * 5.0) / t2_biomass
-            predation_intensity = min(raw_predation_ratio * 0.5, 0.8)
-            t3_scarcity = max(0.0, min(2.0, raw_predation_ratio - 0.8))
-        elif predator_biomass > 0:
+            required_t2 = t3_biomass / EFFICIENCY if t3_biomass > 0 else 0
+            predation_ratio = required_t2 / max(t2_biomass, 1.0)
+            predation_t3 = min(predation_ratio * 0.5, 0.8)
+            t3_scarcity = max(0.0, min(2.0, predation_ratio - 0.8))
+        elif t3_biomass > 0:
             t3_scarcity = 2.0
+        
+        # === T3 受 T4 的捕食压力 ===
+        predation_t4 = 0.0
+        t4_scarcity = 0.0
+        if t3_biomass > 0:
+            required_t3 = t4_biomass / EFFICIENCY if t4_biomass > 0 else 0
+            predation_ratio = required_t3 / max(t3_biomass, 1.0)
+            predation_t4 = min(predation_ratio * 0.5, 0.8)
+            t4_scarcity = max(0.0, min(2.0, predation_ratio - 0.8))
+        elif t4_biomass > 0:
+            t4_scarcity = 2.0
+        
+        # === T4 受 T5 的捕食压力 ===
+        predation_t5 = 0.0
+        t5_scarcity = 0.0
+        if t4_biomass > 0:
+            required_t4 = t5_biomass / EFFICIENCY if t5_biomass > 0 else 0
+            predation_ratio = required_t4 / max(t4_biomass, 1.0)
+            predation_t5 = min(predation_ratio * 0.5, 0.8)
+            t5_scarcity = max(0.0, min(2.0, predation_ratio - 0.8))
+        elif t5_biomass > 0:
+            t5_scarcity = 2.0
         
         return {
             "grazing_intensity": grazing_intensity,
-            "predation_intensity": predation_intensity,
+            "predation_t3": predation_t3,
+            "predation_t4": predation_t4,
+            "predation_t5": predation_t5,
             "t2_scarcity": t2_scarcity,
             "t3_scarcity": t3_scarcity,
+            "t4_scarcity": t4_scarcity,
+            "t5_scarcity": t5_scarcity,
         }
 
     def _resolve_region_label(self, species: Species) -> str:
@@ -319,7 +404,9 @@ class SimulationEngine:
                 self._emit_event("info", f"Critical: {len(tiered.critical)}, Focus: {len(tiered.focus)}, Background: {len(tiered.background)}", "生态")
                 
                 logger.info(f"生态位分析（迁徙前）...")
-                niche_metrics = self.niche_analyzer.analyze(species_batch)
+                # 获取栖息地数据用于地块重叠计算
+                all_habitats = environment_repository.latest_habitats()
+                niche_metrics = self.niche_analyzer.analyze(species_batch, habitat_data=all_habitats)
                 
                 # ========== 【方案B：第一阶段】初步死亡率评估（用于迁徙决策） ==========
                 # 5. 第一次死亡率计算（基于当前栖息地）
@@ -379,7 +466,9 @@ class SimulationEngine:
                 if migration_count > 0:
                     logger.info(f"【阶段3】重新分析生态位（迁徙后）...")
                     self._emit_event("stage", "📊 【阶段3】重新分析生态位", "生态")
-                    niche_metrics = self.niche_analyzer.analyze(species_batch)
+                    # 迁徙后重新获取栖息地数据
+                    all_habitats = environment_repository.latest_habitats()
+                    niche_metrics = self.niche_analyzer.analyze(species_batch, habitat_data=all_habitats)
                     logger.info(f"【阶段3】生态位重新分析完成")
                 
                 # 8. 第二次死亡率计算（基于迁徙后的栖息地）
@@ -619,6 +708,7 @@ class SimulationEngine:
                                 map_changes=map_changes,
                                 major_events=major_events,
                                 pressures=pressures,
+                                trophic_interactions=trophic_interactions,  # 传递营养级互动信息
                             ),
                             timeout=600  # 10分钟超时（物种分化可能有很多AI调用）
                         )

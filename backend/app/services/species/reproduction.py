@@ -599,20 +599,37 @@ class ReproductionService:
                 )
                 
                 if available_biomass <= 0:
-                    # 没有猎物时提供保底承载力（杂食/机会主义者）
-                    # 这允许消费者在生态系统早期存活，但增长受限
-                    fallback_capacity = t1_base_capacity * 0.05  # 生产者承载力的5%
+                    # 没有猎物 → 捕食者面临饥荒
+                    # 只提供最小承载力，模拟饥饿状态下的种群崩溃
+                    # 这样当食物链断裂时，会发生真实的级联崩溃
+                    
+                    # 检查是否有任何潜在猎物（可能是迁移或杂食）
+                    has_any_prey = any(
+                        prey_level < t_range 
+                        for prey_level in biomass_pools.keys() 
+                        if biomass_pools[prey_level] > 0
+                    )
+                    
+                    if has_any_prey:
+                        # 有其他食物来源（杂食/机会主义），给予极小的保底
+                        fallback_capacity = t1_base_capacity * 0.01  # 只有1%
+                        logger.debug(
+                            f"[饥荒-杂食] {tx_species[0][0].common_name if tx_species else 'unknown'} "
+                            f"T{t_range} 主食缺乏，杂食模式维持"
+                        )
+                    else:
+                        # 完全没有食物 → 严重饥荒，承载力几乎为0
+                        fallback_capacity = 100  # 绝对最小值，仅防止数值错误
+                        logger.warning(
+                            f"[饥荒-崩溃] T{t_range} 无任何猎物，食物链断裂，即将崩溃"
+                        )
+                    
                     for species, suitability in tx_species:
-                        # 按适宜度分配保底承载力
                         tx_total_suitability = sum(s for _, s in tx_species) or 1.0
                         species_capacity = fallback_capacity * (suitability / tx_total_suitability)
                         species_capacity *= self._get_species_suitability_for_tile(species, tile)
                         species_capacity *= self._get_body_size_modifier(species, is_producer=False)
-                        tile_capacities[(tile_id, species.id)] = max(1000, species_capacity)
-                        logger.debug(
-                            f"[保底承载力] {species.common_name} T{t_range} 无猎物，"
-                            f"分配保底承载力 {species_capacity:.0f}"
-                        )
+                        tile_capacities[(tile_id, species.id)] = max(100, species_capacity)
                     continue
                 
                 # Tx物种之间共享可用生物量
@@ -657,19 +674,26 @@ class ReproductionService:
     def _get_trophic_range(self, trophic_level: float) -> float:
         """将精确营养级映射到0.5间隔的范围
         
-        示例：
-        - 1.0-1.49 → 1.0 (纯生产者)
-        - 1.5-1.99 → 1.5 (杂食植物)
-        - 2.0-2.49 → 2.0 (初级消费者)
-        - 2.5-2.99 → 2.5 (初级杂食者)
-        - 3.0-3.49 → 3.0 (次级消费者)
-        - 3.5+ → 3.5, 4.0, 4.5, 5.0, 5.5 (高级捕食者)
+        标准5级食物链 + 0.5间隔的精细分类：
+        ┌───────────┬─────────────────────────────────────────┐
+        │ 范围      │ 生态角色                                │
+        ├───────────┼─────────────────────────────────────────┤
+        │ 1.0-1.49  │ T1 生产者（光合/化能自养）              │
+        │ 1.5-1.99  │ T1.5 分解者/腐食者                      │
+        │ 2.0-2.49  │ T2 初级消费者（草食/滤食）              │
+        │ 2.5-2.99  │ T2.5 杂食（偏向植物）                   │
+        │ 3.0-3.49  │ T3 次级消费者（捕食草食动物）           │
+        │ 3.5-3.99  │ T3.5 杂食（偏向肉食）                   │
+        │ 4.0-4.49  │ T4 三级消费者（捕食小型捕食者）         │
+        │ 4.5-4.99  │ T4.5 高级捕食者                         │
+        │ 5.0+      │ T5 顶级捕食者（食物链终端）             │
+        └───────────┴─────────────────────────────────────────┘
         
         Args:
             trophic_level: 精确营养级 (1.0-5.5)
             
         Returns:
-            范围基准值 (1.0, 1.5, 2.0, ...)
+            范围基准值 (1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5)
         """
         import math
         # 向下取整到最近的0.5
@@ -717,13 +741,19 @@ class ReproductionService:
     ) -> float:
         """计算捕食者可获得的猎物生物量
         
-        关键改进：杂食动物可以从多个营养级获取能量
-        
-        示例：
-        - T2.0 (初级消费者): 只吃 T1.0-T1.5
-        - T2.5 (初级杂食者): 吃 T1.0-T2.0 (植物+小型动物)
-        - T3.0 (次级消费者): 吃 T1.5-T2.5
-        - T3.5 (次级杂食者): 吃 T2.0-T3.0
+        标准5级食物链捕食关系：
+        ┌────────┬─────────────────┬──────────────────────────────┐
+        │ 捕食者 │ 可捕食范围      │ 主要猎物                     │
+        ├────────┼─────────────────┼──────────────────────────────┤
+        │ T2     │ T1.0 - T1.5     │ 植物、藻类、分解者           │
+        │ T2.5   │ T1.0 - T2.0     │ 植物 + 小型草食动物（杂食）  │
+        │ T3     │ T1.5 - T2.5     │ 草食动物、杂食动物           │
+        │ T3.5   │ T2.0 - T3.0     │ 草食 + 小型捕食者            │
+        │ T4     │ T2.5 - T3.5     │ 次级消费者                   │
+        │ T4.5   │ T3.0 - T4.0     │ 次级 + 三级消费者            │
+        │ T5     │ T3.5 - T4.5     │ 各级捕食者                   │
+        │ T5.5   │ T4.0 - T5.0     │ 三级消费者 + 顶级捕食者      │
+        └────────┴─────────────────┴──────────────────────────────┘
         
         规则：营养级X可以捕食营养级 [X-1.5, X-0.5] 范围内的物种
         
@@ -741,16 +771,32 @@ class ReproductionService:
         min_prey_level = max(1.0, predator_trophic - 1.5)
         max_prey_level = predator_trophic - 0.5
         
+        # 记录捕食日志
+        logger.debug(
+            f"[捕食范围] T{predator_trophic:.1f} 可捕食 T{min_prey_level:.1f}-T{max_prey_level:.1f}"
+        )
+        
         # 汇总所有可捕食范围内的生物量
         for prey_level, prey_biomass in biomass_pools.items():
             if min_prey_level <= prey_level <= max_prey_level:
                 # 检查该营养级是否真的有物种
                 if prey_level in by_trophic_range and by_trophic_range[prey_level]:
                     available_biomass += prey_biomass
+                    logger.debug(
+                        f"[捕食] T{predator_trophic:.1f} 获取 T{prey_level:.1f} 生物量: {prey_biomass:.2f}kg"
+                    )
         
-        # 应用生态效率：15%可用率
-        # （可食用部分、捕获成功率、消化效率等综合因素）
-        return available_biomass * 0.15
+        # 生态效率（Lindeman效率）：约10-15%
+        # 这包括：可食用部分比例、捕获成功率、消化吸收效率
+        # 使用12%作为基础效率（保守估计）
+        ECOLOGICAL_EFFICIENCY = 0.12
+        
+        result = available_biomass * ECOLOGICAL_EFFICIENCY
+        logger.debug(
+            f"[生态效率] T{predator_trophic:.1f} 可用生物量: {available_biomass:.2f}kg × {ECOLOGICAL_EFFICIENCY:.0%} = {result:.2f}kg"
+        )
+        
+        return result
     
     def _get_body_size_modifier(self, species: Species, is_producer: bool) -> float:
         """根据体型调整承载力修正系数

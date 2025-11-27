@@ -1,13 +1,19 @@
-perf: 除回合报告外的LLM调用改为非流式，提高稳定性
+feat: 实现渐进式器官进化系统，防止跳跃式分化
 
-将以下LLM调用从流式改为非流式（ainvoke/acall_capability）：
-- speciation._call_batch_ai: 批量物种分化
-- speciation._call_ai_wrapper: 单个物种分化
-- adaptation._create_description_update_task: 描述更新
-- adaptation._create_llm_adaptation_task: LLM智能适应
+主要改进:
+- 新增器官进化阶段系统（0原基→1初级→2功能化→3完善→4完备）
+- 单次分化只能提升1-2个阶段，新器官必须从原基开始
+- 利用embedding服务智能推断物种复杂度等级
+- 添加器官进度累积机制，每回合逐步发育成熟
+- 区分同源/类比结构（如细菌鞭毛≠真核鞭毛）
 
-保留流式的：
-- report_builder: 回合报告叙事生成（需要实时展示）
+设计理念: 最小限制，最大自由
+- 允许自由演化各种奇特结构
+- 只阻止跳跃式发展和原核/真核分界违规
+- 让环境压力自然筛选不适应的变异
 
-非流式调用更稳定，不会因为网络问题或API响应慢而卡住
+涉及文件:
+- backend/app/ai/prompts/species.py: 更新分化prompt
+- backend/app/services/species/speciation.py: 渐进式器官创建逻辑
+- backend/app/services/species/adaptation.py: 器官进度累积机制
 

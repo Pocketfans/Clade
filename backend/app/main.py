@@ -1,8 +1,9 @@
 ﻿from __future__ import annotations
 
+import uuid
 from fastapi import FastAPI
 
-from .api.routes import router as api_router, initialize_environment
+from .api.routes import router as api_router, initialize_environment, set_backend_session_id
 from .api.admin_routes import router as admin_router
 from .core.config import get_settings, setup_logging
 from .core.database import init_db
@@ -18,6 +19,12 @@ app = FastAPI(title=settings.app_name)
 
 @app.on_event("startup")
 def on_startup() -> None:
+    # 生成后端会话ID（每次后端启动都会生成新的）
+    # 这用于让前端检测后端是否重启
+    backend_session_id = str(uuid.uuid4())
+    set_backend_session_id(backend_session_id)
+    print(f"[后端启动] 会话ID: {backend_session_id[:8]}...")
+    
     init_db()
     seed_defaults()
     initialize_environment()

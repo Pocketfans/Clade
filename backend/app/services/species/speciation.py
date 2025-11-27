@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Iterable, Sequence, Callable, Awaitable, Any
 
 from ...models.species import LineageEvent, Species
+from ...ai.model_router import staggered_gather
 
 logger = logging.getLogger(__name__)
 from ...repositories.genus_repository import genus_repository
@@ -42,11 +43,15 @@ class SpeciationService:
         map_changes: list = None,
         major_events: list = None,
         pressures: Sequence = None,  # 新增：ParsedPressure 列表
+        trophic_interactions: dict[str, float] = None,  # 新增：营养级互动信息
         stream_callback: Callable[[str], Awaitable[None] | None] | None = None,
     ) -> list[BranchingEvent]:
         """处理物种分化 (异步并发版)"""
         import random
         import math
+        
+        # 保存营养级互动信息，供后续使用
+        self._current_trophic_interactions = trophic_interactions or {}
         
         # 提取压力描述摘要
         pressure_summary = "无显著环境压力"
@@ -59,12 +64,15 @@ class SpeciationService:
         elif average_pressure > 5.0:
             pressure_summary = f"高环境压力 ({average_pressure:.1f}/10)"
         
+        # 生成食物链状态描述（用于AI）
+        self._food_chain_summary = self._summarize_food_chain_status(trophic_interactions)
+        
         # 动态分化限制 (Dynamic Speciation Limiting)
-        # 放宽限制以允许"尝试性分化"，让环境筛选（优胜劣汰）发挥作用
+        # 【优化】收紧限制，依赖淘汰机制来控制物种数量
         current_species_count = len(mortality_results)
-        # 软上限提高到 80，且衰减曲线更平缓（达到160时才减半）
-        # 这样前中期会有更丰富的物种池供筛选
-        density_damping = 1.0 / (1.0 + max(0, current_species_count - 80) / 80.0)
+        # 软上限从配置读取，默认40
+        soft_cap = _settings.species_soft_cap
+        density_damping = 1.0 / (1.0 + max(0, current_species_count - soft_cap) / float(soft_cap))
         
         # 1. 准备阶段：筛选候选并生成任务
         entries: list[dict[str, Any]] = []
@@ -90,6 +98,18 @@ class SpeciationService:
             # 【修复】默认值从0.0改为0.5，门槛从0.7降到0.5
             evo_potential = species.hidden_traits.get("evolution_potential", 0.5)
             speciation_pressure = species.morphology_stats.get("speciation_pressure", 0.0) or 0.0
+            
+            # 【新增】分化冷却期检查：刚分化出的物种需要"稳定期"才能继续分化
+            # 冷却期从配置读取，默认3回合（150万年）
+            cooldown = _settings.speciation_cooldown_turns
+            last_speciation_turn = species.morphology_stats.get("last_speciation_turn", -999)
+            turns_since_speciation = turn_index - last_speciation_turn
+            if turns_since_speciation < cooldown:
+                logger.debug(
+                    f"[分化冷却] {species.common_name} 仍在冷却期 "
+                    f"({turns_since_speciation}/3回合)"
+                )
+                continue
             
             # 放宽条件：演化潜力≥0.5，或者累积了足够的分化压力（连续多回合满足其他条件）
             if evo_potential < 0.5 and speciation_pressure < 0.3:
@@ -119,22 +139,23 @@ class SpeciationService:
                 continue
             
             # 条件5：随机性 (应用密度制约)
-            # 【修改】引入世代时间对演化速率的影响
-            # 代数越多（世代越短），突变/分化概率越高
+            # 【优化】世代时间影响分化概率，但采用更温和的曲线
             generation_time = species.morphology_stats.get("generation_time_days", 365)
             # 50万年 = 1.825亿天
             total_days = 500_000 * 365
             generations = total_days / max(1.0, generation_time)
             
-            # 基于对数的代数加成：每多一个数量级，概率增加 0.08（从0.05提升）
-            # 例如：
-            # 大型动物 (30年=1万代) -> log10(10000)=4 -> bonus=0.32
-            # 微生物 (1天=1.8亿代) -> log10(1.8e8)=8.2 -> bonus=0.66
-            generation_bonus = math.log10(max(10, generations)) * 0.08
+            # 【调整】世代加成大幅降低，每多一个数量级只增加0.02（原0.08）
+            # 这样微生物和大型动物的分化概率差距不会太大
+            # 大型动物 (30年=1万代) -> log10(10000)=4 -> bonus=0.08
+            # 微生物 (1天=1.8亿代) -> log10(1.8e8)=8.2 -> bonus=0.16
+            generation_bonus = math.log10(max(10, generations)) * 0.02
             
-            # 【修复】提高基础分化率：50万年足够发生多次分化尝试
-            # 基础概率从0.2提升到0.35，让更多物种有机会分化
-            base_chance = ((0.35 + (evo_potential * 0.4)) * 0.7 + generation_bonus) * density_damping
+            # 【调整】基础分化率从配置读取，默认0.15
+            # 50万年虽长，但分化需要严格的生态隔离条件
+            # 公式：(基础率 + 演化潜力加成) × 0.8 + 世代加成，再乘以密度阻尼
+            base_rate = _settings.base_speciation_rate
+            base_chance = ((base_rate + (evo_potential * 0.25)) * 0.8 + generation_bonus) * density_damping
             
             speciation_bonus = 0.0
             speciation_type = "生态隔离"
@@ -167,8 +188,9 @@ class SpeciationService:
             speciation_chance = base_chance + speciation_bonus + speciation_pressure
             
             if random.random() > speciation_chance:
-                # 【关键】分化失败时累积压力，最高0.5（确保5回合后必定分化）
-                new_pressure = min(0.5, speciation_pressure + 0.10)
+                # 【调整】分化失败时累积压力，增速降低（0.05），上限降低（0.3）
+                # 这样需要6回合才能达到上限，且上限较低不会强制分化
+                new_pressure = min(0.3, speciation_pressure + 0.05)
                 species.morphology_stats["speciation_pressure"] = new_pressure
                 species_repository.upsert(species)
                 logger.debug(
@@ -177,18 +199,28 @@ class SpeciationService:
                 )
                 continue
             
-            # 分化成功，重置累积压力
+            # 分化成功，重置累积压力，并记录分化时间（用于冷却期计算）
             species.morphology_stats["speciation_pressure"] = 0.0
+            species.morphology_stats["last_speciation_turn"] = turn_index
             
-            # ========== 【世代感知模型】动态子种数量 ==========
-            # 决定分化出几个子种（基于世代数和种群规模）
+            # ========== 【优化】动态子种数量（考虑物种密度） ==========
+            # 决定分化出几个子种（基于种群规模和物种密度，不再依赖世代数）
             if _settings.enable_dynamic_speciation:
+                # 计算同谱系物种数量（用于属内阻尼）
+                sibling_count = sum(
+                    1 for r in mortality_results 
+                    if r.species.lineage_code.startswith(species.lineage_code[:2])  # 共享前缀
+                    and r.species.lineage_code != species.lineage_code
+                )
+                
                 num_offspring = self._calculate_dynamic_offspring_count(
-                    generations, survivors, evo_potential
+                    generations, survivors, evo_potential,
+                    current_species_count=current_species_count,
+                    sibling_count=sibling_count
                 )
                 logger.info(
                     f"[分化] {species.common_name} 将分化出 {num_offspring} 个子种 "
-                    f"(世代数:{generations:.0f}, 种群:{survivors:,})"
+                    f"(物种总数:{current_species_count}, 同属:{sibling_count})"
                 )
             else:
                 # 传统模式：固定2-3个
@@ -252,16 +284,21 @@ class SpeciationService:
                     for event in species.history_highlights[-2:]:
                         safe_history.append(event[:80] + "..." if len(event) > 80 else event)
                 
+                # 推断生物类群
+                biological_domain = self._infer_biological_domain(species)
+                
                 ai_payload = {
                     "parent_lineage": species.lineage_code,
                     "latin_name": species.latin_name,
                     "common_name": species.common_name,
                     "habitat_type": species.habitat_type,
+                    "biological_domain": biological_domain,  # 新增：生物类群限制
+                    "current_organs_summary": self._summarize_organs(species),  # 新增：当前器官摘要
                     "environment_pressure": average_pressure,
-                    "pressure_summary": pressure_summary,  # 新增字段
-                    "evolutionary_generations": int(generations),  # 新增：经历了多少代
+                    "pressure_summary": pressure_summary,
+                    "evolutionary_generations": int(generations),
                     "traits": species.description,
-                    "history_highlights": "; ".join(safe_history) if safe_history else "无", # 使用安全截断的历史
+                    "history_highlights": "; ".join(safe_history) if safe_history else "无",
                     "survivors": population,
                     "speciation_type": speciation_type,
                     "map_changes_summary": self._summarize_map_changes(map_changes) if map_changes else "",
@@ -269,6 +306,8 @@ class SpeciationService:
                     "parent_trophic_level": species.trophic_level,
                     "offspring_index": idx + 1,
                     "total_offspring": num_offspring,
+                    # 食物链状态，帮助AI做出合理的演化决策
+                    "food_chain_status": self._food_chain_summary,
                 }
                 
                 entries.append({
@@ -298,38 +337,46 @@ class SpeciationService:
 
         logger.info(f"[分化] 开始批量处理 {len(active_batch)} 个分化任务 (剩余排队 {len(self._deferred_requests)})")
         
-        # 【优化】使用批量请求，一次性处理所有分化任务
-        # 每批最多处理 10 个物种，避免单次请求过大
+        # 【优化】使用批量请求 + 间隔并行，提高效率
+        # 每批最多处理 10 个物种
         batch_size = 10
-        results = []
         
+        # 分割成多个批次
+        batches = []
         for batch_start in range(0, len(active_batch), batch_size):
             batch_entries = active_batch[batch_start:batch_start + batch_size]
-            batch_num = batch_start // batch_size + 1
-            total_batches = (len(active_batch) + batch_size - 1) // batch_size
-            
-            logger.info(f"[分化] 批量请求 {batch_num}/{total_batches}：处理 {len(batch_entries)} 个物种")
-            
-            try:
-                # 构建批量请求 payload
-                batch_payload = self._build_batch_payload(
-                    batch_entries, average_pressure, pressure_summary, 
-                    map_changes, major_events
-                )
-                
-                # 调用批量 AI 接口
-                batch_results = await self._call_batch_ai(batch_payload, stream_callback)
-                
-                # 解析批量结果并匹配到对应的 entry
-                parsed_results = self._parse_batch_results(batch_results, batch_entries)
-                results.extend(parsed_results)
-                
-                logger.info(f"[分化] 批量请求 {batch_num} 完成，成功解析 {len([r for r in parsed_results if not isinstance(r, Exception)])} 个结果")
-                
-            except Exception as e:
-                logger.error(f"[分化] 批量请求 {batch_num} 失败: {e}")
-                # 批量失败时，为该批次所有 entry 添加异常
-                results.extend([e] * len(batch_entries))
+            batches.append(batch_entries)
+        
+        logger.info(f"[分化] 共 {len(batches)} 个批次，开始间隔并行执行")
+        
+        async def process_batch(batch_entries: list) -> list:
+            """处理单个批次"""
+            batch_payload = self._build_batch_payload(
+                batch_entries, average_pressure, pressure_summary, 
+                map_changes, major_events
+            )
+            batch_results = await self._call_batch_ai(batch_payload, stream_callback)
+            return self._parse_batch_results(batch_results, batch_entries)
+        
+        # 【优化】间隔并行执行批次，每3秒启动一个，最多同时2个
+        coroutines = [process_batch(batch) for batch in batches]
+        batch_results_list = await staggered_gather(
+            coroutines,
+            interval=3.0,  # 每3秒启动一个批次
+            max_concurrent=2,  # 最多同时2个批次（每批10个物种）
+            task_name="分化批次"
+        )
+        
+        # 合并所有批次的结果
+        results = []
+        for batch_idx, batch_result in enumerate(batch_results_list):
+            if isinstance(batch_result, Exception):
+                logger.error(f"[分化] 批次 {batch_idx + 1} 失败: {batch_result}")
+                results.extend([batch_result] * len(batches[batch_idx]))
+            else:
+                success_count = len([r for r in batch_result if not isinstance(r, Exception)])
+                logger.info(f"[分化] 批次 {batch_idx + 1} 完成，成功解析 {success_count} 个结果")
+                results.extend(batch_result)
 
         # 3. 结果处理与写入
         logger.info(f"[分化] 开始处理 {len(results)} 个AI结果")
@@ -446,6 +493,10 @@ class SpeciationService:
             payload = entry["payload"]
             ctx = entry["ctx"]
             
+            # 获取生物类群和器官摘要（可能在单独调用时已添加）
+            biological_domain = payload.get('biological_domain', 'protist')
+            organs_summary = payload.get('current_organs_summary', '无已记录的器官系统')
+            
             species_info = f"""
 【物种 {idx + 1}】
 - request_id: {idx}
@@ -454,8 +505,10 @@ class SpeciationService:
 - 俗名: {payload.get('common_name')}
 - 新编码: {ctx['new_code']}
 - 栖息地: {payload.get('habitat_type')}
+- 生物类群: {biological_domain}
 - 营养级: {payload.get('parent_trophic_level', 2.0):.2f}
 - 描述: {payload.get('traits', '')[:200]}
+- 现有器官: {organs_summary[:100]}
 - 幸存者: {payload.get('survivors', 0):,}
 - 分化类型: {payload.get('speciation_type')}
 - 子代编号: 第{payload.get('offspring_index', 1)}个（共{payload.get('total_offspring', 1)}个）"""
@@ -479,7 +532,19 @@ class SpeciationService:
     ) -> dict:
         """调用批量分化 AI 接口（非流式，更稳定）"""
         # 【优化】使用非流式调用，避免流式传输卡住
-        response = await self.router.ainvoke("speciation_batch", payload)
+        # 【修复】添加硬超时保护，防止无限等待
+        import asyncio
+        try:
+            response = await asyncio.wait_for(
+                self.router.ainvoke("speciation_batch", payload),
+                timeout=120  # 批量请求给更长的超时（120秒）
+            )
+        except asyncio.TimeoutError:
+            logger.error("[分化批量] 请求超时（120秒），跳过本批次")
+            return {}
+        except Exception as e:
+            logger.error(f"[分化批量] 请求异常: {e}")
+            return {}
         return response.get("content") if isinstance(response, dict) else {}
     
     def _parse_batch_results(
@@ -542,7 +607,19 @@ class SpeciationService:
     async def _call_ai_wrapper(self, payload: dict, stream_callback: Callable[[str], Awaitable[None] | None] | None) -> dict:
         """AI调用包装器（非流式，更稳定）"""
         # 【优化】使用非流式调用，避免流式传输卡住
-        response = await self.router.ainvoke("speciation", payload)
+        # 【修复】添加硬超时保护
+        import asyncio
+        try:
+            response = await asyncio.wait_for(
+                self.router.ainvoke("speciation", payload),
+                timeout=90  # 硬超时90秒
+            )
+        except asyncio.TimeoutError:
+            logger.error("[分化] 单个请求超时（90秒）")
+            return {}
+        except Exception as e:
+            logger.error(f"[分化] 请求异常: {e}")
+            return {}
         return response.get("content") if isinstance(response, dict) else {}
 
     # 保留 process 方法以兼容旧调用，直到全部迁移
@@ -724,35 +801,45 @@ class SpeciationService:
         common = self._ensure_unique_common_name(common, new_code)
         
         # 计算新物种的营养级
+        # 优先级：AI判定 > 继承父代 > 关键词估算
         ai_trophic = ai_payload.get("trophic_level")
         if ai_trophic is not None:
             try:
                 new_trophic = float(ai_trophic)
-                # 简单的范围钳制
+                # 范围钳制 (1.0-6.0)
                 new_trophic = max(1.0, min(6.0, new_trophic))
-                logger.info(f"[分化] 使用AI判定的营养级: {new_trophic}")
+                logger.info(f"[分化] 使用AI判定的营养级: T{new_trophic:.1f}")
             except (ValueError, TypeError):
-                logger.warning(f"[分化] AI返回的营养级格式错误: {ai_trophic}，转为自动计算")
+                logger.warning(f"[分化] AI返回的营养级格式错误: {ai_trophic}")
                 new_trophic = None
         else:
+            logger.warning(f"[分化] AI未返回营养级")
             new_trophic = None
 
         if new_trophic is None:
-            all_species = species_repository.list_species()
-            new_trophic = self.trophic_calculator.calculate_trophic_level(
-                Species(
-                    lineage_code=new_code,
-                    latin_name=latin,
-                    common_name=common,
-                    description=description,
-                    morphology_stats=morphology,
-                    abstract_traits=abstract,
-                    hidden_traits=hidden,
-                    ecological_vector=None,
-                    trophic_level=parent.trophic_level  # 临时值
-                ),
-                all_species
-            )
+            # 回退方案1：继承父代营养级（最合理的默认值）
+            # 大多数分化事件不会改变营养级（生态位保守性）
+            new_trophic = parent.trophic_level
+            logger.info(f"[分化] 继承父代营养级: T{new_trophic:.1f}")
+            
+            # 如果父代营养级也无效，才使用关键词估算（应急回退）
+            if new_trophic is None or new_trophic <= 0:
+                all_species = species_repository.list_species()
+                new_trophic = self.trophic_calculator.calculate_trophic_level(
+                    Species(
+                        lineage_code=new_code,
+                        latin_name=latin,
+                        common_name=common,
+                        description=description,
+                        morphology_stats=morphology,
+                        abstract_traits=abstract,
+                        hidden_traits=hidden,
+                        ecological_vector=None,
+                        trophic_level=2.0  # 默认为初级消费者
+                    ),
+                    all_species
+                )
+                logger.warning(f"[分化] 使用关键词估算营养级: T{new_trophic:.1f}")
         
         # 【克莱伯定律修正】基于体重和营养级重算代谢率
         # SMR ∝ Mass^-0.25
@@ -1072,6 +1159,67 @@ class SpeciationService:
         
         return threshold
     
+    def _summarize_food_chain_status(self, trophic_interactions: dict[str, float] | None) -> str:
+        """总结食物链状态，供AI做演化决策参考
+        
+        这是一个关键函数！它告诉AI当前生态系统的营养级状态：
+        - 哪些营养级的食物充足/稀缺
+        - 是否有级联崩溃的风险
+        
+        Args:
+            trophic_interactions: 营养级互动数据，包含 t2_scarcity, t3_scarcity 等
+            
+        Returns:
+            人类可读的食物链状态描述
+        """
+        if not trophic_interactions:
+            return "食物链状态未知"
+        
+        status_parts = []
+        
+        # 检查各级的食物稀缺度
+        # scarcity: 0 = 充足, 1 = 紧张, 2 = 严重短缺
+        t2_scarcity = trophic_interactions.get("t2_scarcity", 0.0)
+        t3_scarcity = trophic_interactions.get("t3_scarcity", 0.0)
+        t4_scarcity = trophic_interactions.get("t4_scarcity", 0.0)
+        t5_scarcity = trophic_interactions.get("t5_scarcity", 0.0)
+        
+        def scarcity_level(value: float) -> str:
+            if value < 0.3:
+                return "充足"
+            elif value < 1.0:
+                return "紧张"
+            elif value < 1.5:
+                return "短缺"
+            else:
+                return "严重短缺"
+        
+        # T1 是生产者，不依赖其他营养级
+        # T2 依赖 T1（生产者）
+        if t2_scarcity > 0.5:
+            status_parts.append(f"生产者(T1){'紧张' if t2_scarcity < 1.0 else '短缺'}，初级消费者(T2)面临食物压力")
+        
+        # T3 依赖 T2
+        if t3_scarcity > 0.5:
+            status_parts.append(f"初级消费者(T2){'紧张' if t3_scarcity < 1.0 else '短缺'}，次级消费者(T3)面临食物压力")
+        
+        # T4 依赖 T3
+        if t4_scarcity > 0.5:
+            status_parts.append(f"次级消费者(T3){'紧张' if t4_scarcity < 1.0 else '短缺'}，三级消费者(T4)面临食物压力")
+        
+        # T5 依赖 T4
+        if t5_scarcity > 0.5:
+            status_parts.append(f"三级消费者(T4){'紧张' if t5_scarcity < 1.0 else '短缺'}，顶级捕食者(T5)面临食物压力")
+        
+        # 检测级联崩溃风险
+        if t2_scarcity > 1.5 and t3_scarcity > 1.0:
+            status_parts.append("⚠️ 食物链底层崩溃，可能引发级联灭绝")
+        
+        if not status_parts:
+            return "食物链稳定，各营养级食物充足"
+        
+        return "；".join(status_parts)
+    
     def _summarize_map_changes(self, map_changes: list) -> str:
         """总结地图变化用于分化原因描述。"""
         if not map_changes:
@@ -1344,11 +1492,15 @@ class SpeciationService:
     def _inherit_and_update_organs(
         self, parent: Species, ai_payload: dict, turn_index: int
     ) -> dict:
-        """继承父代器官并应用AI返回的结构化创新
+        """继承父代器官并应用渐进式器官进化
+        
+        支持两种格式（优先使用新格式）：
+        - organ_evolution: 新的渐进式进化格式（推荐）
+        - structural_innovations: 旧格式（向后兼容）
         
         Args:
             parent: 父系物种
-            ai_payload: AI返回的数据（包含structural_innovations）
+            ai_payload: AI返回的数据
             turn_index: 当前回合
             
         Returns:
@@ -1358,8 +1510,80 @@ class SpeciationService:
         organs = {}
         for category, organ_data in parent.organs.items():
             organs[category] = dict(organ_data)
+            # 确保有进化阶段字段
+            if "evolution_stage" not in organs[category]:
+                organs[category]["evolution_stage"] = 4  # 旧数据默认完善
+            if "evolution_progress" not in organs[category]:
+                organs[category]["evolution_progress"] = 1.0
         
-        # 2. 解析AI返回的structural_innovations
+        # 2. 优先使用新的 organ_evolution 格式
+        organ_evolution = ai_payload.get("organ_evolution", [])
+        if organ_evolution and isinstance(organ_evolution, list):
+            # 推断生物类群进行验证
+            biological_domain = self._infer_biological_domain(parent)
+            
+            # 验证渐进式进化规则
+            _, valid_evolutions = self._validate_gradual_evolution(
+                organ_evolution, parent.organs, biological_domain
+            )
+            
+            for evo in valid_evolutions:
+                category = evo.get("category", "unknown")
+                action = evo.get("action", "enhance")
+                target_stage = evo.get("target_stage", 1)
+                structure_name = evo.get("structure_name", "未知结构")
+                description = evo.get("description", "")
+                
+                if action == "initiate":
+                    # 开始发展新器官（从原基开始）
+                    organs[category] = {
+                        "type": structure_name,
+                        "parameters": {},
+                        "evolution_stage": target_stage,
+                        "evolution_progress": target_stage / 4.0,  # 阶段对应进度
+                        "acquired_turn": turn_index,
+                        "is_active": target_stage >= 2,  # 阶段2+才有基础功能
+                        "evolution_history": [
+                            {
+                                "turn": turn_index,
+                                "from_stage": 0,
+                                "to_stage": target_stage,
+                                "description": description
+                            }
+                        ]
+                    }
+                    logger.info(
+                        f"[渐进式演化] 开始发展{category}: {structure_name} (阶段0→{target_stage})"
+                    )
+                
+                elif action == "enhance" and category in organs:
+                    # 增强现有器官
+                    current_stage = organs[category].get("evolution_stage", 4)
+                    
+                    organs[category]["type"] = structure_name
+                    organs[category]["evolution_stage"] = target_stage
+                    organs[category]["evolution_progress"] = target_stage / 4.0
+                    organs[category]["modified_turn"] = turn_index
+                    organs[category]["is_active"] = target_stage >= 2
+                    
+                    # 记录演化历史
+                    if "evolution_history" not in organs[category]:
+                        organs[category]["evolution_history"] = []
+                    organs[category]["evolution_history"].append({
+                        "turn": turn_index,
+                        "from_stage": current_stage,
+                        "to_stage": target_stage,
+                        "description": description
+                    })
+                    
+                    logger.info(
+                        f"[渐进式演化] 增强{category}: {structure_name} "
+                        f"(阶段{current_stage}→{target_stage})"
+                    )
+            
+            return organs
+        
+        # 3. 兼容旧的 structural_innovations 格式（转换为渐进式）
         innovations = ai_payload.get("structural_innovations", [])
         if not isinstance(innovations, list):
             return organs
@@ -1372,23 +1596,40 @@ class SpeciationService:
             organ_type = innovation.get("type", "unknown")
             parameters = innovation.get("parameters", {})
             
-            # 3. 判断是新器官还是器官改进
             if category in organs:
-                # 器官改进：更新参数
+                # 器官改进：最多提升1个阶段
+                current_stage = organs[category].get("evolution_stage", 4)
+                new_stage = min(current_stage + 1, 4)
+                
                 organs[category]["type"] = organ_type
                 organs[category]["parameters"] = parameters
+                organs[category]["evolution_stage"] = new_stage
+                organs[category]["evolution_progress"] = new_stage / 4.0
                 organs[category]["modified_turn"] = turn_index
                 organs[category]["is_active"] = True
-                logger.info(f"[器官演化] 改进器官: {category} → {organ_type}")
+                logger.info(
+                    f"[器官演化-兼容] 改进器官: {category} → {organ_type} "
+                    f"(阶段{current_stage}→{new_stage})"
+                )
             else:
-                # 新器官：创建记录
+                # 新器官：从阶段1（原基）开始，而不是直接完善
                 organs[category] = {
                     "type": organ_type,
                     "parameters": parameters,
+                    "evolution_stage": 1,  # 从原基开始
+                    "evolution_progress": 0.25,
                     "acquired_turn": turn_index,
-                    "is_active": True
+                    "is_active": False,  # 阶段1还没有功能
+                    "evolution_history": [{
+                        "turn": turn_index,
+                        "from_stage": 0,
+                        "to_stage": 1,
+                        "description": f"开始发展{organ_type}原基"
+                    }]
                 }
-                logger.info(f"[器官演化] 获得新器官: {category} → {organ_type}")
+                logger.info(
+                    f"[器官演化-兼容] 新器官原基: {category} → {organ_type} (阶段1)"
+                )
         
         return organs
     
@@ -1581,51 +1822,75 @@ class SpeciationService:
         self,
         num_generations: float,
         population: int,
-        evo_potential: float
+        evo_potential: float,
+        current_species_count: int = 0,
+        sibling_count: int = 0
     ) -> int:
-        """【新方法】根据世代数和种群规模动态计算分化子种数量
+        """【优化版】根据生态条件动态计算分化子种数量
         
-        原理：
-        - 世代越多：更多突变积累，更多分化机会
-        - 种群越大：更多亚群可以独立演化
-        - 演化潜力高：更容易形成多样化分支
+        核心改进：
+        - 世代多≠更多子种（世代只影响分化概率，不影响子种数量）
+        - 子种数量主要由「隔离机会」决定（种群规模、地理分布）
+        - 引入物种密度阻尼（防止爆炸性增长）
         
         参数说明：
-        - num_generations: 经历的世代数（50万年内）
+        - num_generations: 经历的世代数（仅用于日志，不影响计算）
         - population: 当前存活种群数
         - evo_potential: 演化潜力（0-1）
+        - current_species_count: 当前物种总数（用于密度阻尼）
+        - sibling_count: 同谱系物种数量（用于属内阻尼）
         
         返回值：
-        - 子种数量（2-5个）
+        - 子种数量（1-3个，极端情况最多4个）
         """
         import math
+        import random
         
-        # 基础分化数（至少2个）
+        # 基础分化数（固定2个，模拟典型的二歧分化）
         base_offspring = 2
         
-        # 1. 世代数加成（对数尺度）
-        # 1万代 → +0, 10万代 → +1, 100万代 → +2, 1亿代 → +3
-        if num_generations > 10000:
-            generation_bonus = int(math.log10(num_generations) - 4)
-            generation_bonus = max(0, min(3, generation_bonus))
-        else:
-            generation_bonus = 0
+        # 1. 【移除】世代数加成 - 世代多只意味着突变多，不意味着隔离多
+        # 现实中，细菌虽然繁殖快，但分化出的稳定物种数量并不比大型动物多
+        generation_bonus = 0
         
-        # 2. 种群规模加成（大种群更容易形成隔离亚群）
+        # 2. 种群规模加成（非常大的种群才可能形成3个隔离亚群）
+        # 提高门槛：需要10亿以上才考虑+1
         population_bonus = 0
-        if population > 100_000:
+        if population > 1_000_000_000:  # 10亿
             population_bonus = 1
-        if population > 10_000_000:
-            population_bonus = 2
         
-        # 3. 演化潜力加成
-        evo_bonus = 1 if evo_potential > 0.85 else 0
+        # 3. 演化潜力加成（只有极高潜力才+1）
+        evo_bonus = 1 if evo_potential > 0.90 else 0
         
-        # 4. 汇总
+        # 4. 【关键】物种密度阻尼
+        # 当物种数量过多时，强制降低子种数量
+        density_penalty = 0
+        if current_species_count > 50:
+            density_penalty = 1  # 超过50种：-1
+        if current_species_count > 100:
+            density_penalty = 2  # 超过100种：-2（基本只能分化1个）
+        
+        # 5. 【新增】同属饱和阻尼
+        # 当同一谱系下已有多个物种时，限制继续分化
+        sibling_penalty = 0
+        if sibling_count >= 3:
+            sibling_penalty = 1  # 同属已有3+物种：-1
+        if sibling_count >= 5:
+            sibling_penalty = 2  # 同属已有5+物种：几乎不能分化
+        
+        # 6. 汇总（最少1个，最多4个）
         total_offspring = base_offspring + generation_bonus + population_bonus + evo_bonus
+        total_offspring -= density_penalty + sibling_penalty
         
-        # 限制上限（避免辐射演化过度）
-        return min(5, total_offspring)
+        # 边界约束（上限从配置读取，默认4）
+        max_offspring = _settings.max_offspring_count
+        total_offspring = max(1, min(max_offspring, total_offspring))
+        
+        # 随机扰动（避免所有物种都分化相同数量）
+        if random.random() < 0.3 and total_offspring > 1:
+            total_offspring -= 1
+        
+        return total_offspring
     
     def _enforce_trait_tradeoffs(
         self, 
@@ -1782,4 +2047,297 @@ class SpeciationService:
         )
         
         return adjusted
+    
+    # ================ 渐进式器官进化相关方法 ================
+    
+    # 生物复杂度等级参考描述（用于embedding相似度比较）
+    _COMPLEXITY_REFERENCES = {
+        0: "原核生物，如细菌和古菌，没有细胞核，只有核糖体，通过二分裂繁殖，体型微小，单细胞",
+        1: "简单真核生物，如变形虫、鞭毛虫、纤毛虫，有细胞核和细胞器，单细胞真核生物",
+        2: "殖民型或简单多细胞生物，如团藻、海绵、水母，细胞开始分化但无真正组织",
+        3: "组织级生物，如扁形虫、环节动物，有真正的组织分化，简单器官系统",
+        4: "器官级生物，如软体动物、节肢动物、鱼类，有复杂器官系统，体节或体腔",
+        5: "高等器官系统级生物，如两栖类、爬行类、鸟类、哺乳类，高度分化的器官系统和神经系统",
+    }
+    
+    # 缓存embedding向量
+    _complexity_embeddings: dict[int, list[float]] | None = None
+    
+    def _infer_biological_domain(self, species: Species) -> str:
+        """根据物种特征推断其生物复杂度等级
+        
+        采用多层判断策略：
+        1. 优先使用embedding相似度（如果服务可用）
+        2. 结构化特征检测（器官数量、体型等）
+        3. 关键词匹配作为补充
+        
+        返回值：复杂度等级字符串，格式为 "complexity_N"
+        - complexity_0: 原核生物（细菌、古菌）
+        - complexity_1: 简单真核（单细胞真核生物）
+        - complexity_2: 殖民/简单多细胞（团藻、海绵等）
+        - complexity_3: 组织级（扁形虫、环节动物等）
+        - complexity_4: 器官级（节肢动物、鱼类等）
+        - complexity_5: 高等器官系统（脊椎动物高等类群）
+        """
+        # 尝试使用embedding进行智能分类
+        complexity_level = self._infer_complexity_by_embedding(species)
+        
+        if complexity_level is None:
+            # 降级到基于规则的推断
+            complexity_level = self._infer_complexity_by_rules(species)
+        
+        return f"complexity_{complexity_level}"
+    
+    def _infer_complexity_by_embedding(self, species: Species) -> int | None:
+        """使用embedding相似度推断复杂度等级"""
+        # 检查是否有可用的embedding服务
+        if not hasattr(self, '_embedding_service') or self._embedding_service is None:
+            # 尝试从router获取
+            if hasattr(self.router, 'embedding_service'):
+                self._embedding_service = self.router.embedding_service
+            else:
+                return None
+        
+        if self._embedding_service is None:
+            return None
+        
+        try:
+            # 懒加载参考描述的embedding
+            if SpeciationService._complexity_embeddings is None:
+                ref_descriptions = list(self._COMPLEXITY_REFERENCES.values())
+                ref_vectors = self._embedding_service.embed(ref_descriptions, require_real=False)
+                SpeciationService._complexity_embeddings = {
+                    level: vec for level, vec in enumerate(ref_vectors)
+                }
+            
+            # 获取物种描述的embedding
+            species_vec = self._embedding_service.embed([species.description], require_real=False)[0]
+            
+            # 计算与各等级参考的余弦相似度
+            import numpy as np
+            species_arr = np.array(species_vec)
+            species_norm = np.linalg.norm(species_arr)
+            if species_norm == 0:
+                return None
+            species_arr = species_arr / species_norm
+            
+            best_level = 1  # 默认简单真核
+            best_similarity = -1
+            
+            for level, ref_vec in self._complexity_embeddings.items():
+                ref_arr = np.array(ref_vec)
+                ref_norm = np.linalg.norm(ref_arr)
+                if ref_norm == 0:
+                    continue
+                ref_arr = ref_arr / ref_norm
+                
+                similarity = float(np.dot(species_arr, ref_arr))
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_level = level
+            
+            logger.debug(
+                f"[复杂度推断-embedding] {species.common_name}: "
+                f"等级{best_level} (相似度{best_similarity:.3f})"
+            )
+            return best_level
+            
+        except Exception as e:
+            logger.warning(f"[复杂度推断] Embedding推断失败: {e}")
+            return None
+    
+    def _infer_complexity_by_rules(self, species: Species) -> int:
+        """基于规则推断复杂度等级（降级方案）"""
+        description = (species.description or "").lower()
+        common_name = (species.common_name or "").lower()
+        organs = species.organs or {}
+        body_length = species.morphology_stats.get("body_length_cm", 0.01)
+        
+        # 关键词映射
+        level_keywords = {
+            0: ["细菌", "杆菌", "球菌", "古菌", "原核", "bacteria", "archaea", "芽孢"],
+            1: ["原生", "单细胞", "鞭毛虫", "纤毛虫", "变形虫", "眼虫", "草履虫", "protist", "amoeba"],
+            2: ["团藻", "海绵", "水母", "珊瑚", "群体", "殖民", "简单多细胞", "colony"],
+            3: ["扁形虫", "涡虫", "线虫", "环节", "蚯蚓", "水蛭", "组织分化"],
+            4: ["节肢", "软体", "昆虫", "甲壳", "蜘蛛", "鱼", "章鱼", "蜗牛", "器官系统"],
+            5: ["两栖", "爬行", "鸟", "哺乳", "脊椎", "蛙", "蜥蜴", "蛇", "恐龙", "鲸", "猫", "狗", "人"]
+        }
+        
+        # 关键词匹配
+        for level in range(5, -1, -1):  # 从高到低匹配
+            if any(kw in description or kw in common_name for kw in level_keywords[level]):
+                # 原核生物额外验证：不能有真核特征
+                if level == 0:
+                    eukaryote_features = ["叶绿体", "线粒体", "细胞核", "内质网", "高尔基体"]
+                    if any(kw in description for kw in eukaryote_features):
+                        continue
+                return level
+        
+        # 基于器官复杂度推断
+        organ_count = len([o for o in organs.values() if o.get("is_active", True)])
+        if organ_count >= 5:
+            return 4  # 器官级
+        elif organ_count >= 3:
+            return 3  # 组织级
+        elif organ_count >= 1:
+            return 2 if body_length > 0.1 else 1
+        
+        # 基于体型推断
+        if body_length < 0.001:  # < 10微米
+            return 0  # 原核生物
+        elif body_length < 0.1:  # < 1毫米
+            return 1  # 简单真核
+        elif body_length < 1.0:  # < 1厘米
+            return 2  # 简单多细胞
+        elif body_length < 10.0:  # < 10厘米
+            return 3  # 组织级
+        else:
+            return 4  # 器官级或更高
+    
+    def _get_complexity_constraints(self, complexity_level: str) -> dict:
+        """获取复杂度等级的基础约束
+        
+        设计理念：允许自由演化，只限制"跳跃式"发展
+        - 不限制能发展什么结构（让环境压力自然筛选）
+        - 只限制原核/真核的基本分界（这是生物学硬约束）
+        - 通过阶段系统保证渐进式发展
+        """
+        level = int(complexity_level.split("_")[1]) if "_" in complexity_level else 1
+        
+        # 极简约束：只区分原核/真核的根本差异
+        if level == 0:  # 原核生物
+            return {
+                # 原核生物的唯一硬约束：不能有真核细胞器
+                # （因为这需要内共生事件，不是渐进演化能达到的）
+                "origin_type": "prokaryote",
+                "hard_forbidden": ["真核鞭毛", "纤毛", "线粒体", "叶绿体", "细胞核", "内质网", "高尔基体"],
+                "max_organ_stage": 4,
+            }
+        else:  # 真核生物（等级1-5）
+            return {
+                "origin_type": "eukaryote", 
+                "hard_forbidden": [],  # 真核生物可以自由发展任何结构
+                "max_organ_stage": 4,
+            }
+    
+    def _summarize_organs(self, species: Species) -> str:
+        """生成器官系统的文本摘要，包含进化阶段信息"""
+        organs = species.organs or {}
+        
+        if not organs:
+            return "无已记录的器官系统"
+        
+        summaries = []
+        for category, organ_data in organs.items():
+            if not organ_data.get("is_active", True):
+                continue
+            
+            organ_type = organ_data.get("type", "未知")
+            stage = organ_data.get("evolution_stage", 4)  # 默认已完善
+            progress = organ_data.get("evolution_progress", 1.0)
+            
+            # 阶段描述
+            stage_names = {0: "无", 1: "原基", 2: "初级", 3: "功能化", 4: "完善"}
+            stage_name = stage_names.get(stage, "完善")
+            
+            # 构建摘要
+            category_names = {
+                "locomotion": "运动系统",
+                "sensory": "感觉系统", 
+                "metabolic": "代谢系统",
+                "digestive": "消化系统",
+                "defense": "防御系统",
+                "reproductive": "生殖系统"
+            }
+            cat_name = category_names.get(category, category)
+            
+            if stage < 4:
+                summaries.append(f"- {cat_name}: {organ_type}（阶段{stage}/{stage_name}，进度{progress*100:.0f}%）")
+            else:
+                summaries.append(f"- {cat_name}: {organ_type}（完善）")
+        
+        return "\n".join(summaries) if summaries else "无已记录的器官系统"
+    
+    def _validate_gradual_evolution(
+        self, 
+        organ_evolution: list, 
+        parent_organs: dict,
+        biological_domain: str
+    ) -> tuple[bool, list]:
+        """验证器官进化是否符合渐进式原则
+        
+        设计理念：最小限制，最大自由
+        - 只验证"渐进式"（不能跳跃）
+        - 只验证"原核/真核分界"（硬性生物学约束）
+        - 其他一切都允许，让环境压力自然筛选
+        
+        返回：(是否有效, 过滤后的有效进化列表)
+        """
+        if not organ_evolution:
+            return True, []
+        
+        valid_evolutions = []
+        
+        # 获取基础约束
+        constraints = self._get_complexity_constraints(biological_domain)
+        hard_forbidden = constraints.get("hard_forbidden", [])
+        max_stage = constraints.get("max_organ_stage", 4)
+        origin_type = constraints.get("origin_type", "eukaryote")
+        
+        for evo in organ_evolution:
+            if not isinstance(evo, dict):
+                continue
+            
+            category = evo.get("category", "")
+            action = evo.get("action", "")
+            current_stage = evo.get("current_stage", 0)
+            target_stage = evo.get("target_stage", 0)
+            structure_name = evo.get("structure_name", "")
+            
+            # === 核心验证1：阶段跳跃限制（渐进式核心） ===
+            stage_jump = target_stage - current_stage
+            if stage_jump > 2:
+                logger.info(f"[渐进式] 修正跳跃: {structure_name} {current_stage}→{target_stage} 改为 →{min(current_stage + 2, max_stage)}")
+                target_stage = min(current_stage + 2, max_stage)
+                evo["target_stage"] = target_stage
+            
+            # === 核心验证2：新器官从原基开始 ===
+            if action == "initiate" and target_stage > 1:
+                logger.info(f"[渐进式] 新器官从原基开始: {structure_name}")
+                evo["target_stage"] = 1
+            
+            # === 核心验证3：原核/真核硬性分界 ===
+            # 这是唯一的"禁止"规则，因为这需要内共生事件
+            if origin_type == "prokaryote" and hard_forbidden:
+                if any(f in structure_name for f in hard_forbidden):
+                    logger.warning(
+                        f"[生物学约束] 原核生物不能发展真核结构: {structure_name} "
+                        f"(需要内共生事件，非渐进演化)"
+                    )
+                    continue
+            
+            # === 验证4：enhance操作需要父代有该器官 ===
+            if action == "enhance":
+                if category not in parent_organs:
+                    # 自动转为initiate，允许发展新器官
+                    logger.debug(f"[器官] {category}不存在，转为新发展")
+                    evo["action"] = "initiate"
+                    evo["current_stage"] = 0
+                    evo["target_stage"] = 1
+                else:
+                    # 使用父代实际阶段
+                    actual_stage = parent_organs[category].get("evolution_stage", 4)
+                    if current_stage != actual_stage:
+                        evo["current_stage"] = actual_stage
+                        if target_stage - actual_stage > 2:
+                            evo["target_stage"] = min(actual_stage + 2, max_stage)
+            
+            valid_evolutions.append(evo)
+        
+        # 限制每次分化最多3个器官变化（放宽限制）
+        if len(valid_evolutions) > 3:
+            logger.info(f"[器官验证] 单次分化器官变化限制为3个")
+            valid_evolutions = valid_evolutions[:3]
+        
+        return True, valid_evolutions
 

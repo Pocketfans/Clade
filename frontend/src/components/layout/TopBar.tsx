@@ -10,7 +10,6 @@ interface Props {
   onOpenSettings: () => void;
   onSaveGame: () => void;
   onLoadGame: () => void;
-  onOpenTrends: () => void;
   onOpenLedger: () => void;
   onOpenPressure: () => void;
 }
@@ -24,7 +23,6 @@ export function TopBar({
   onOpenSettings,
   onSaveGame,
   onLoadGame,
-  onOpenTrends,
   onOpenLedger,
   onOpenPressure
 }: Props) {

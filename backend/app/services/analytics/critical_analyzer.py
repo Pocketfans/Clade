@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from ...ai.model_router import ModelRouter
+from ...ai.model_router import ModelRouter, staggered_gather
 from ...simulation.species import MortalityResult
 
 logger = logging.getLogger(__name__)
@@ -15,51 +15,60 @@ class CriticalAnalyzer:
     这是最高级别的 AI 处理，为每个 critical 物种提供详细的个性化分析。
     通常 critical 层最多包含3个玩家主动标记的物种。
     
-    【优化】使用顺序执行队列，避免并发请求过多导致API卡死。
+    【优化】使用间隔并行执行，兼顾效率和稳定性。
     """
 
     def __init__(self, router: ModelRouter) -> None:
         self.router = router
 
+    async def _process_item(self, item: MortalityResult) -> dict:
+        """处理单个物种"""
+        payload = {
+            "lineage_code": item.species.lineage_code,
+            "population": item.survivors,
+            "deaths": item.deaths,
+            "traits": item.species.description,
+            "niche": {
+                "overlap": item.niche_overlap,
+                "saturation": item.resource_pressure,
+            },
+        }
+        
+        response = await self.router.ainvoke("critical_detail", payload)
+        return response
+
     async def enhance_async(self, results: list[MortalityResult]) -> None:
-        """为 critical 层物种的死亡率结果添加 AI 生成的详细叙事（顺序执行队列）。"""
+        """为 critical 层物种的死亡率结果添加 AI 生成的详细叙事（间隔并行执行）。"""
         if not results:
             return
         
-        logger.info(f"[Critical增润] 开始处理 {len(results)} 个物种（顺序队列）")
+        logger.info(f"[Critical增润] 开始处理 {len(results)} 个物种（间隔并行）")
         
-        # 【修改】顺序执行，逐个处理，避免并发
-        for idx, item in enumerate(results):
-            logger.info(f"[Critical增润] 处理 {idx + 1}/{len(results)}: {item.species.common_name}")
-            
-            payload = {
-                "lineage_code": item.species.lineage_code,
-                "population": item.survivors,
-                "deaths": item.deaths,
-                "traits": item.species.description,
-                "niche": {
-                    "overlap": item.niche_overlap,
-                    "saturation": item.resource_pressure,
-                },
-            }
-            
-            try:
-                response = await self.router.ainvoke("critical_detail", payload)
-                
-                # 从响应中提取 content
-                content = response.get("content") if isinstance(response, dict) else None
-                if isinstance(content, dict):
-                    summary = content.get("summary") or content.get("text") or "重要物种细化完成"
-                elif isinstance(content, str):
-                    summary = content
-                else:
-                    summary = "重要物种细化完成"
-                item.notes.append(str(summary))
-                
-            except Exception as e:
-                logger.warning(f"[Critical增润] {item.species.common_name} 处理失败: {e}")
+        # 【优化】间隔并行执行，每1秒启动一个，最多同时2个
+        coroutines = [self._process_item(item) for item in results]
+        responses = await staggered_gather(
+            coroutines,
+            interval=1.0,  # Critical 物种较少，间隔1秒即可
+            max_concurrent=2,
+            task_name="Critical分析"
+        )
+        
+        # 处理结果
+        for idx, (item, response) in enumerate(zip(results, responses)):
+            if isinstance(response, Exception):
+                logger.warning(f"[Critical增润] {item.species.common_name} 处理失败: {response}")
                 item.notes.append("重要物种细化完成")
                 continue
+            
+            # 从响应中提取 content
+            content = response.get("content") if isinstance(response, dict) else None
+            if isinstance(content, dict):
+                summary = content.get("summary") or content.get("text") or "重要物种细化完成"
+            elif isinstance(content, str):
+                summary = content
+            else:
+                summary = "重要物种细化完成"
+            item.notes.append(str(summary))
             
             # 持久化高光时刻到物种历史
             if summary and len(str(summary)) > 10:
@@ -71,9 +80,6 @@ class CriticalAnalyzer:
                 # 保持历史记录不超过5条，避免Prompt过长
                 if len(item.species.history_highlights) > 5:
                     item.species.history_highlights = item.species.history_highlights[-5:]
-                
-                # 注意：这里不直接调用upsert，因为SimulationEngine后续会统一处理，或者依赖ORM对象的引用更新
-                # 但为了保险，SimulationEngine最好在CriticalAnalyzer之后有一次save操作
 
     
     def enhance(self, results: list[MortalityResult]) -> None:

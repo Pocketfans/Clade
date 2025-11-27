@@ -118,6 +118,11 @@ model_router = ModelRouter(
             model=settings.speciation_model,  # 使用与分化相同的模型
             extra_body={"response_format": {"type": "json_object"}}  # 强制JSON
         ),
+        "narrative": ModelConfig(
+            provider="openai", 
+            model=settings.speciation_model,
+            extra_body={"response_format": {"type": "json_object"}}  # 强制JSON
+        ),
     },
     base_url=settings.ai_base_url,
     api_key=settings.ai_api_key,
@@ -388,6 +393,21 @@ simulation_engine = SimulationEngine(
 )
 watchlist: set[str] = set()
 action_queue = {"queued_rounds": 0, "running": False}
+
+# 后端会话ID：每次后端启动时生成新的UUID
+# 用于让前端检测后端是否重启，实现"后端重启回主菜单"的逻辑
+_backend_session_id: str = ""
+
+
+def set_backend_session_id(session_id: str) -> None:
+    """设置后端会话ID（由 main.py 在启动时调用）"""
+    global _backend_session_id
+    _backend_session_id = session_id
+
+
+def get_backend_session_id() -> str:
+    """获取后端会话ID"""
+    return _backend_session_id
 
 
 def initialize_environment() -> None:
@@ -1218,8 +1238,15 @@ def test_api_connection(request: dict) -> dict:
 
 @router.post("/niche/compare", response_model=NicheCompareResult)
 def compare_niche(request: NicheCompareRequest) -> NicheCompareResult:
-    """对比两个物种的生态位"""
+    """对比两个物种的生态位（优化版）
+    
+    三个指标有明确不同的生态学含义：
+    - similarity: 特征描述的语义相似程度
+    - overlap: 资源利用、栖息地、生态功能的实际重叠
+    - competition_intensity: 考虑种群压力和资源稀缺的真实竞争
+    """
     import numpy as np
+    from ..services.species.niche_compare import compute_niche_metrics
     
     # 获取两个物种
     species_a = species_repository.get_by_lineage(request.species_a)
@@ -1232,7 +1259,8 @@ def compare_niche(request: NicheCompareRequest) -> NicheCompareResult:
     
     print(f"[生态位对比] 对比物种: {species_a.common_name} vs {species_b.common_name}")
     
-    # 获取embedding向量（如果embedding服务不可用，使用生态向量）
+    # 获取embedding相似度（用于相似度计算）
+    embedding_similarity = None
     try:
         vectors = embedding_service.embed(
             [species_a.description, species_b.description], 
@@ -1240,41 +1268,33 @@ def compare_niche(request: NicheCompareRequest) -> NicheCompareResult:
         )
         vec_a = np.array(vectors[0], dtype=float)
         vec_b = np.array(vectors[1], dtype=float)
-        print(f"[生态位对比] 使用embedding向量")
+        
+        norm_a = np.linalg.norm(vec_a)
+        norm_b = np.linalg.norm(vec_b)
+        
+        if norm_a > 0 and norm_b > 0:
+            embedding_similarity = float(np.dot(vec_a, vec_b) / (norm_a * norm_b))
+            embedding_similarity = max(0.0, min(1.0, embedding_similarity))
+            print(f"[生态位对比] 使用embedding向量, 相似度={embedding_similarity:.3f}")
     except (RuntimeError, Exception) as e:
-        # 降级到使用生态向量
-        print(f"[生态位对比] Embedding服务不可用，使用生态向量: {str(e)}")
-        vec_a = np.array(species_a.ecological_vector or [0.5] * 128, dtype=float)
-        vec_b = np.array(species_b.ecological_vector or [0.5] * 128, dtype=float)
+        print(f"[生态位对比] Embedding服务不可用，使用属性计算: {str(e)}")
     
-    if len(vec_a) == 0 or len(vec_b) == 0:
-        raise HTTPException(status_code=500, detail="无法计算生态位向量，物种数据不完整")
+    # 使用新的向量化生态位计算模块
+    niche_result = compute_niche_metrics(
+        species_a, species_b,
+        embedding_similarity=embedding_similarity
+    )
     
-    # 计算余弦相似度
-    norm_a = np.linalg.norm(vec_a)
-    norm_b = np.linalg.norm(vec_b)
+    similarity = niche_result.similarity
+    overlap = niche_result.overlap
+    competition_intensity = niche_result.competition
     
-    if norm_a == 0 or norm_b == 0:
-        similarity = 0.0
-    else:
-        similarity = float(np.dot(vec_a, vec_b) / (norm_a * norm_b))
-        similarity = max(0.0, min(1.0, similarity))  # 限制在0-1之间
+    print(f"[生态位对比] 结果: 相似度={similarity:.1%}, 重叠度={overlap:.1%}, 竞争强度={competition_intensity:.1%}")
+    print(f"[生态位对比] 重叠度分解: {niche_result.details.get('overlap_breakdown', {})}")
     
-    # 计算重叠度（基于相似度）
-    overlap = similarity
-    
-    # 计算竞争强度（考虑种群规模）
+    # 保留原有变量用于后续逻辑
     pop_a = float(species_a.morphology_stats.get("population", 0) or 0)
     pop_b = float(species_b.morphology_stats.get("population", 0) or 0)
-    
-    # 竞争强度 = 相似度 * (种群规模因子)
-    total_pop = pop_a + pop_b
-    if total_pop > 0:
-        pop_factor = min(1.0, (pop_a * pop_b) / (total_pop ** 2) * 4)  # 归一化
-    else:
-        pop_factor = 0.0
-    
-    competition_intensity = similarity * pop_factor
     
     # 提取关键维度对比
     niche_dimensions = {
@@ -1512,6 +1532,11 @@ def get_game_state() -> dict:
     返回的 turn_index 是 0-based 索引：
     - turn_index = 0 表示准备执行第 0 回合（前端显示"第 1 回合"）
     - turn_index = 1 表示第 0 回合已完成，准备执行第 1 回合（前端显示"第 2 回合"）
+    
+    返回的 backend_session_id 是后端本次启动的唯一ID：
+    - 每次后端重启都会生成新的 session_id
+    - 前端可以对比存储的 session_id 来检测后端是否重启
+    - 如果 session_id 不匹配，说明后端重启了，前端应回到主菜单
     """
     map_state = environment_repository.get_state()
     
@@ -1529,6 +1554,7 @@ def get_game_state() -> dict:
         "sea_level": map_state.sea_level if map_state else 0.0,
         "global_temperature": map_state.global_avg_temperature if map_state else 15.0,
         "tectonic_stage": map_state.stage_name if map_state else "稳定期",
+        "backend_session_id": get_backend_session_id(),  # 用于前端检测后端重启
     }
 
 

@@ -6,6 +6,7 @@ from typing import Sequence
 import numpy as np
 
 from ...models.species import Species
+from ...models.environment import HabitatPopulation
 from ..system.embedding import EmbeddingService
 
 
@@ -16,26 +17,48 @@ class NicheMetrics:
 
 
 class NicheAnalyzer:
-    """计算生态位重叠和资源饱和度，用于平衡大量物种。"""
+    """计算生态位重叠和资源饱和度，用于平衡大量物种。
+    
+    【重要改进】竞争计算现在考虑地块重叠：
+    - 只有在同一地块上的物种才会真正竞争
+    - 不同地块上的物种即使生态位相似也不竞争
+    """
 
     def __init__(self, embeddings: EmbeddingService, carrying_capacity: int) -> None:
         self.embeddings = embeddings
         self.carrying_capacity = max(carrying_capacity, 1)
+        self._habitat_cache: dict[int, set[int]] = {}  # {species_id: {tile_ids}}
 
-    def analyze(self, species_list: Sequence[Species]) -> dict[str, NicheMetrics]:
+    def analyze(
+        self, 
+        species_list: Sequence[Species],
+        habitat_data: list[HabitatPopulation] | None = None
+    ) -> dict[str, NicheMetrics]:
         """分析所有物种的生态位重叠和资源饱和度。
         
-        这个方法非常关键，任何错误都会中断模拟进程，因此需要完善的异常处理。
+        【关键改进】现在考虑地块重叠：
+        - 如果两个物种不在同一地块，它们的竞争强度会大幅降低
+        - 只有真正共享地块的物种才会产生完全的竞争
+        
+        Args:
+            species_list: 物种列表
+            habitat_data: 栖息地分布数据（可选，如果不提供会自动获取）
         """
         if not species_list:
             return {}
         
         try:
+            # 构建物种地块映射（用于计算地块重叠）
+            self._build_habitat_cache(species_list, habitat_data)
+            
             vectors = self._ensure_vectors(species_list)
             similarity = self._cosine_matrix(vectors)
             
             # 应用规则修正：基于功能群和栖息地的生态位重叠度补偿
             similarity = self._apply_ecological_rules(species_list, similarity)
+            
+            # 【新增】应用地块重叠因子
+            similarity = self._apply_tile_overlap_factor(species_list, similarity)
             
             niche_data: dict[str, NicheMetrics] = {}
             total_slots = self.carrying_capacity or 1
@@ -59,6 +82,84 @@ class NicheAnalyzer:
                 species.lineage_code: NicheMetrics(overlap=0.3, saturation=0.5)
                 for species in species_list
             }
+    
+    def _build_habitat_cache(
+        self, 
+        species_list: Sequence[Species],
+        habitat_data: list[HabitatPopulation] | None = None
+    ) -> None:
+        """构建物种→地块映射缓存"""
+        self._habitat_cache.clear()
+        
+        if habitat_data is None:
+            # 如果没有传入，从数据库获取
+            try:
+                from ...repositories.environment_repository import environment_repository
+                habitat_data = environment_repository.latest_habitats()
+            except Exception:
+                habitat_data = []
+        
+        # 构建映射
+        for habitat in habitat_data:
+            species_id = habitat.species_id
+            if species_id not in self._habitat_cache:
+                self._habitat_cache[species_id] = set()
+            self._habitat_cache[species_id].add(habitat.tile_id)
+    
+    def _apply_tile_overlap_factor(
+        self, 
+        species_list: Sequence[Species], 
+        similarity: np.ndarray
+    ) -> np.ndarray:
+        """【关键新增】应用地块重叠因子
+        
+        只有在同一地块上的物种才会真正竞争。
+        
+        地块重叠因子计算：
+        - overlap_factor = |共享地块数| / |两物种地块总数|
+        - 如果没有共享地块，factor = 0.1（保留少量潜在竞争）
+        - 如果完全重叠，factor = 1.0
+        
+        最终相似度 = 原始相似度 × 地块重叠因子
+        """
+        n = len(species_list)
+        if n <= 1:
+            return similarity.copy()
+        
+        species_list = list(species_list)
+        adjusted = similarity.copy()
+        
+        for i in range(n):
+            sp_i = species_list[i]
+            tiles_i = self._habitat_cache.get(sp_i.id, set()) if sp_i.id else set()
+            
+            for j in range(i + 1, n):
+                sp_j = species_list[j]
+                tiles_j = self._habitat_cache.get(sp_j.id, set()) if sp_j.id else set()
+                
+                # 计算地块重叠
+                if tiles_i and tiles_j:
+                    shared_tiles = tiles_i & tiles_j
+                    total_tiles = tiles_i | tiles_j
+                    
+                    if total_tiles:
+                        # Jaccard 系数：共享地块 / 总地块
+                        overlap_factor = len(shared_tiles) / len(total_tiles)
+                    else:
+                        overlap_factor = 0.1
+                    
+                    # 如果没有共享地块，保留少量"潜在竞争"（可能会迁徙到同一地块）
+                    if len(shared_tiles) == 0:
+                        overlap_factor = 0.1  # 10%的潜在竞争
+                else:
+                    # 没有栖息地数据，假设中等重叠
+                    overlap_factor = 0.5
+                
+                # 应用地块重叠因子
+                adjusted[i, j] *= overlap_factor
+                adjusted[j, i] *= overlap_factor
+        
+        return adjusted
 
     def _ensure_vectors(self, species_list: Sequence[Species]) -> np.ndarray:
         """使用 embedding 服务统一计算所有物种的生态位向量。
@@ -165,78 +266,128 @@ class NicheAnalyzer:
         return similarity
     
     def _apply_ecological_rules(self, species_list: Sequence[Species], similarity: np.ndarray) -> np.ndarray:
-        """基于生态学规则修正生态位重叠度。
+        """基于生态学规则修正生态位重叠度（向量化优化版）。
         
-        修正原因：
-        1. Embedding向量可能低估功能相似物种的重叠度
-        2. 同营养级、同栖息地的物种应有更高重叠
-        3. 体型相近的物种竞争更激烈
+        【设计原则】主要使用结构化数据，不依赖关键词：
+        - 营养级 (trophic_level) - 判断功能群
+        - 栖息地类型 (habitat_type) - 判断空间重叠
+        - 体型 (body_length_cm) - 判断资源分区
+        - 谱系代码 (lineage_code) - 判断亲缘关系
         
         规则：
-        - 同功能群（如都是光合作用生产者）：+0.12
-        - 同栖息地（如都在海洋）：+0.08
+        - 同营养级（差异<0.5）：+0.12
+        - 同栖息地类型：+0.10
         - 体型相近（5倍以内）：+0.06
         - 同属物种（lineage_code前缀相同）：+0.15
         - 最大累积bonus：+0.30
+        
+        【性能优化】使用NumPy向量化计算，避免嵌套循环。
         """
         n = len(species_list)
-        adjusted = similarity.copy()
+        if n <= 1:
+            return similarity.copy()
         
+        species_list = list(species_list)  # 确保可索引
+        
+        # ============ 阶段1: 预提取结构化特征（不依赖关键词）============
+        trophic_levels = np.array([sp.trophic_level for sp in species_list])
+        habitat_types = [getattr(sp, 'habitat_type', 'unknown') or 'unknown' for sp in species_list]
+        sizes = np.array([sp.morphology_stats.get("body_length_cm", 0.01) for sp in species_list])
+        lineage_codes = [sp.lineage_code for sp in species_list]
+        
+        # ============ 阶段2: 向量化计算各规则的bonus矩阵 ============
+        
+        # 规则1：同营养级（基于 trophic_level，不用关键词）
+        # 营养级差异 < 0.5 认为是同功能群
+        trophic_diff = np.abs(trophic_levels[:, np.newaxis] - trophic_levels[np.newaxis, :])
+        functional_bonus = np.where(trophic_diff < 0.5, 0.12, 0.0)
+        # 差异0.5-1.0给部分bonus
+        functional_bonus = np.where(
+            (trophic_diff >= 0.5) & (trophic_diff < 1.0), 
+            0.06, 
+            functional_bonus
+        )
+        
+        # 规则2：同栖息地类型（基于 habitat_type，不用关键词）
+        # 构建栖息地类型矩阵
+        habitat_bonus = np.zeros((n, n))
         for i in range(n):
-            desc_i = species_list[i].description.lower()
-            code_i = species_list[i].lineage_code
-            size_i = species_list[i].morphology_stats.get("body_length_cm", 0.01)
-            
             for j in range(i + 1, n):
-                desc_j = species_list[j].description.lower()
-                code_j = species_list[j].lineage_code
-                size_j = species_list[j].morphology_stats.get("body_length_cm", 0.01)
-                
-                bonus = 0.0
-                
-                # 规则1：同功能群检测
-                producers_i = any(kw in desc_i for kw in ["光合", "藻", "植物", "自养"])
-                producers_j = any(kw in desc_j for kw in ["光合", "藻", "植物", "自养"])
-                consumers_i = any(kw in desc_i for kw in ["捕食", "掠食", "异养", "滤食"])
-                consumers_j = any(kw in desc_j for kw in ["捕食", "掠食", "异养", "滤食"])
-                
-                if (producers_i and producers_j) or (consumers_i and consumers_j):
-                    bonus += 0.12
-                
-                # 规则2：同栖息地检测（降低bonus从0.15到0.08）
-                habitats_i = set()
-                habitats_j = set()
-                for habitat in ["海洋", "浅海", "深海", "淡水", "陆地", "森林", "草原", "沙漠"]:
-                    if habitat in desc_i:
-                        habitats_i.add(habitat)
-                    if habitat in desc_j:
-                        habitats_j.add(habitat)
-                
-                if habitats_i & habitats_j:  # 有交集
-                    bonus += 0.08
-                
-                # 规则3：体型相近检测
-                if size_i > 0 and size_j > 0:
-                    size_ratio = max(size_i, size_j) / min(size_i, size_j)
-                    if size_ratio <= 5.0:  # 5倍以内认为体型相近
-                        bonus += 0.06
-                
-                # 规则4：同属物种检测
-                # A1a1 和 A1a2 应该有高重叠
-                if len(code_i) >= 2 and len(code_j) >= 2:
-                    # 至少共享前2个字符
-                    common_prefix = 0
-                    for ci, cj in zip(code_i, code_j):
-                        if ci == cj:
-                            common_prefix += 1
-                        else:
-                            break
-                    if common_prefix >= 2:
-                        bonus += 0.15
-                
-                # 应用修正
-                bonus = min(bonus, 0.30)  # 限制总bonus上限
-                adjusted[i, j] = min(1.0, adjusted[i, j] + bonus)
-                adjusted[j, i] = adjusted[i, j]  # 对称矩阵
+                if habitat_types[i] == habitat_types[j]:
+                    habitat_bonus[i, j] = 0.10
+                elif self._habitats_compatible(habitat_types[i], habitat_types[j]):
+                    habitat_bonus[i, j] = 0.05  # 兼容栖息地给部分bonus
+                habitat_bonus[j, i] = habitat_bonus[i, j]
+        
+        # 规则3：体型相近（5倍以内）
+        sizes = np.maximum(sizes, 0.001)  # 防止除零
+        size_min = np.minimum.outer(sizes, sizes)
+        size_max = np.maximum.outer(sizes, sizes)
+        size_ratio = size_max / size_min
+        # 使用连续函数而非阶梯
+        size_bonus = np.where(size_ratio <= 2.0, 0.06, 0.0)
+        size_bonus = np.where((size_ratio > 2.0) & (size_ratio <= 5.0), 0.03, size_bonus)
+        
+        # 规则4：同属物种（前缀匹配>=2）
+        lineage_bonus = self._compute_lineage_bonus_matrix(lineage_codes)
+        
+        # ============ 阶段3: 组合并应用bonus ============
+        total_bonus = functional_bonus + habitat_bonus + size_bonus + lineage_bonus
+        total_bonus = np.minimum(total_bonus, 0.30)  # 限制上限
+        
+        # 只取上三角（避免重复计算）
+        adjusted = similarity.copy()
+        upper_mask = np.triu(np.ones((n, n), dtype=bool), k=1)
+        
+        adjusted = np.where(upper_mask, np.minimum(1.0, adjusted + total_bonus), adjusted)
+        # 对称化
+        adjusted = np.triu(adjusted, k=1) + np.triu(adjusted, k=1).T + np.diag(np.diag(adjusted))
         
         return adjusted
+    
+    def _habitats_compatible(self, h1: str, h2: str) -> bool:
+        """检查两个栖息地类型是否兼容"""
+        h1, h2 = h1.lower(), h2.lower()
+        
+        # 定义兼容组
+        compatible_groups = [
+            {"marine", "coastal", "deep_sea"},  # 海洋相关
+            {"freshwater", "terrestrial"},       # 淡水-陆地（两栖）
+            {"terrestrial", "aerial"},           # 陆地-空中
+        ]
+        
+        for group in compatible_groups:
+            if h1 in group and h2 in group:
+                return True
+        return False
+    
+    def _compute_lineage_bonus_matrix(self, lineage_codes: list[str]) -> np.ndarray:
+        """计算谱系前缀匹配的bonus矩阵
+        
+        如果两个物种共享>=2个前缀字符，bonus=0.15
+        """
+        n = len(lineage_codes)
+        bonus = np.zeros((n, n))
+        
+        for i in range(n):
+            code_i = lineage_codes[i]
+            if len(code_i) < 2:
+                continue
+            for j in range(i + 1, n):
+                code_j = lineage_codes[j]
+                if len(code_j) < 2:
+                    continue
+                
+                # 计算共同前缀长度
+                common_len = 0
+                for ci, cj in zip(code_i, code_j):
+                    if ci == cj:
+                        common_len += 1
+                    else:
+                        break
+                
+                if common_len >= 2:
+                    bonus[i, j] = 0.15
+                    bonus[j, i] = 0.15
+        
+        return bonus

@@ -30,6 +30,7 @@ class ModelRouter:
         timeout: int = 60,
         concurrency_limit: int = 50,
         max_retries: int = 2,
+        use_keepalive: bool = False,  # 是否启用连接复用（高效并发模式）
     ) -> None:
         self.routes = defaults or {}
         self.prompts: dict[str, str] = {}
@@ -38,6 +39,7 @@ class ModelRouter:
         self.timeout = timeout
         self.overrides: dict[str, dict[str, Any]] = {}
         self.max_retries = max(1, max_retries)
+        self.use_keepalive = use_keepalive  # 连接复用开关
         
         # 并发控制
         self.concurrency_limit = concurrency_limit
@@ -60,6 +62,18 @@ class ModelRouter:
         # Note: This is safe enough for this app's usage pattern.
         self._semaphore = asyncio.Semaphore(limit)
         logger.info(f"[ModelRouter] Concurrency limit set to {limit}")
+    
+    async def set_keepalive_mode(self, enabled: bool) -> None:
+        """切换连接复用模式（需要重置客户端）
+        
+        Args:
+            enabled: True=高效并发模式（keep-alive），False=安全模式（每次新连接）
+        """
+        if self.use_keepalive != enabled:
+            self.use_keepalive = enabled
+            await self.reset_client()  # 重置客户端以应用新设置
+            mode_name = "高效并发" if enabled else "安全"
+            logger.info(f"[ModelRouter] 已切换到{mode_name}模式")
     
     def get_diagnostics(self) -> dict[str, Any]:
         """获取诊断信息，用于调试并发和超时问题"""
@@ -156,22 +170,49 @@ class ModelRouter:
     async def _get_client(self) -> httpx.AsyncClient:
         """Lazy init async client"""
         if self._client_session is None or self._client_session.is_closed:
-            # 【修复】增加连接池大小以匹配并发限制，避免连接耗尽导致的死锁
-            limits = httpx.Limits(max_keepalive_connections=self.concurrency_limit, max_connections=self.concurrency_limit + 10)
-            self._client_session = httpx.AsyncClient(timeout=self.timeout, limits=limits)
+            if self.use_keepalive:
+                # 高效并发模式：启用连接复用
+                # 适用于稳定的 API 服务（如 OpenAI 官方）
+                limits = httpx.Limits(
+                    max_keepalive_connections=self.concurrency_limit,
+                    max_connections=self.concurrency_limit + 10
+                )
+                self._client_session = httpx.AsyncClient(
+                    timeout=self.timeout, 
+                    limits=limits,
+                )
+                logger.info("[ModelRouter] 客户端使用高效并发模式（keep-alive 启用）")
+            else:
+                # 安全模式：禁用连接复用，避免某些 API 服务的连接卡住问题
+                # 适用于硅基流动等第三方 API
+                limits = httpx.Limits(
+                    max_keepalive_connections=0,  # 禁用 keep-alive
+                    max_connections=self.concurrency_limit + 10
+                )
+                self._client_session = httpx.AsyncClient(
+                    timeout=self.timeout, 
+                    limits=limits,
+                    http2=False,  # 禁用 HTTP/2
+                )
+                logger.debug("[ModelRouter] 客户端使用安全模式（keep-alive 禁用）")
         return self._client_session
 
     async def reset_client(self):
         """强制重置客户端会话"""
-        if self._client_session and not self._client_session.is_closed:
+        old_client = self._client_session
+        self._client_session = None  # 先置空，防止其他协程使用
+        
+        if old_client and not old_client.is_closed:
             try:
-                await self._client_session.aclose()
-            except Exception:
-                pass
-        self._client_session = None
-        logger.info("[ModelRouter] Client session reset")
-        if self._client_session and not self._client_session.is_closed:
-            await self._client_session.aclose()
+                await old_client.aclose()
+                logger.info("[ModelRouter] Client session closed successfully")
+            except Exception as e:
+                logger.warning(f"[ModelRouter] Error closing client: {e}")
+        
+        # 重置计数器，防止卡住
+        self._active_requests = 0
+        self._queued_requests = 0
+        logger.info("[ModelRouter] Client session reset, counters cleared")
 
     def _prepare_request(
         self, capability: str, payload: dict[str, Any], use_format_placeholder: bool = True
@@ -216,7 +257,14 @@ class ModelRouter:
             }
         
         endpoint = config.endpoint or "/chat/completions"
-        url = f"{base_url.rstrip('/')}{endpoint}"
+        # 【修复】智能处理 endpoint 路径
+        # 大多数本地 LLM 服务（LMStudio、Ollama 等）需要 /v1/chat/completions
+        # 而云端服务的 base_url 通常已经包含 /v1（如 https://api.deepseek.com/v1）
+        base_url_stripped = base_url.rstrip('/')
+        if not base_url_stripped.endswith('/v1') and endpoint == "/chat/completions":
+            # base_url 不以 /v1 结尾，自动添加 /v1 前缀
+            endpoint = "/v1/chat/completions"
+        url = f"{base_url_stripped}{endpoint}"
         
         user_content = json.dumps(payload, ensure_ascii=False, indent=2)
         body = {
@@ -310,22 +358,20 @@ class ModelRouter:
                 self._log_diagnostics("开始处理", capability, f"请求#{request_id} 排队耗时:{queue_time:.2f}s 尝试:{attempt + 1}/{self.max_retries}")
                 
                 try:
-                    client = await self._get_client()
                     timeout = req.get("timeout") or self.timeout
+                    headers = {**req["headers"], "Connection": "close"}
                     
-                    # 使用更长的 httpx 超时，让 asyncio.wait_for 来控制整体超时
-                    response = await asyncio.wait_for(
-                        client.post(
+                    # 【核心修复】每次请求使用独立的临时客户端
+                    # 避免共享连接池导致的各种卡住问题
+                    async with httpx.AsyncClient(timeout=timeout, http2=False) as client:
+                        response = await client.post(
                             req["url"],
                             json=req["body"],
-                            headers=req["headers"],
-                            timeout=timeout + 5,  # httpx 超时比 asyncio 长一点
-                        ),
-                        timeout=timeout
-                    )
+                            headers=headers,
+                        )
+                        response.raise_for_status()
+                        data = response.json()
                     
-                    response.raise_for_status()
-                    data = response.json()
                     content = (
                         data.get("choices", [{}])[0]
                         .get("message", {})
@@ -348,8 +394,8 @@ class ModelRouter:
                         "content": parsed_content,
                         "raw": data,
                     }
-                except asyncio.TimeoutError:
-                    # 超时处理 - 只在这里减少计数器一次
+                except httpx.TimeoutException as te:
+                    # 超时处理 - httpx原生超时会正确释放连接
                     last_error = f"timeout after {timeout}s"
                     self._total_timeouts += 1
                     self._request_stats[capability]["timeout"] += 1
@@ -361,6 +407,7 @@ class ModelRouter:
                     logger.error(f"⏱️  请求超时详情 - {capability}")
                     logger.error(f"   请求ID: #{request_id} | 尝试: {attempt + 1}/{self.max_retries}")
                     logger.error(f"   超时设置: {timeout}s | 实际等待: {process_time:.1f}s | 总耗时: {total_wait:.1f}s")
+                    logger.error(f"   超时类型: {type(te).__name__}")
                     logger.error(f"   当前状态: 活跃={self._active_requests} 排队={self._queued_requests} 超时率={self._total_timeouts}/{self._total_requests}")
                     if self._active_requests >= self.concurrency_limit:
                         logger.error(f"   ⚠️ 并发已满！可能是请求太多或API响应太慢")
@@ -369,10 +416,9 @@ class ModelRouter:
                     self._active_requests -= 1
                     self._log_diagnostics("⏱️ 超时", capability, f"请求#{request_id}")
                     
-                    # 【修复】超时后重置客户端，防止连接卡死
-                    if attempt == self.max_retries - 1:
-                        logger.warning(f"[ModelRouter] 请求连续超时，尝试重置客户端连接")
-                        # 不等待重置，避免阻塞
+                    # 【修复】连续多次超时后重置客户端，清理可能的问题连接
+                    if attempt == self.max_retries - 1 and self._total_timeouts > 3:
+                        logger.warning(f"[ModelRouter] 连续超时次数过多({self._total_timeouts})，重置客户端连接")
                         asyncio.create_task(self.reset_client())
                         
                 except httpx.HTTPError as exc:
@@ -430,52 +476,51 @@ class ModelRouter:
         yield self._stream_status_event(capability, "connecting")
 
         async with self._semaphore:
-            client = await self._get_client()
             logger.info(f"[ModelRouter] Async stream {capability} start")
             timeout = req.get("timeout") or self.timeout
+            headers = {**req["headers"], "Connection": "close"}
             
             try:
-                # 【修复】流式请求整体超时保护
-                async with client.stream(
-                    "POST",
-                    req["url"],
-                    json=req["body"],
-                    headers=req["headers"],
-                    timeout=timeout + 10, # 给予连接建立一点额外缓冲
-                ) as response:
-                    response.raise_for_status()
-                    yield self._stream_status_event(capability, "connected")
-                    first_chunk = True
-                    
-                    # 【修复】逐行读取增加超时保护，防止连接僵死
-                    iterator = response.aiter_lines()
-                    while True:
-                        try:
-                            # 每行读取最多等待 30 秒（足以应对大部分思考时间）
-                            line = await asyncio.wait_for(iterator.__anext__(), timeout=30.0)
-                        except StopAsyncIteration:
-                            break
-                        except asyncio.TimeoutError:
-                            logger.error(f"[ModelRouter] Stream read timeout for {capability}")
-                            yield self._stream_error_event(capability, "Read timeout")
-                            break
-                            
-                        if line.startswith("data: "):
-                            data = line[6:]
-                            if data.strip() == "[DONE]":
-                                break
+                # 【核心修复】使用临时客户端，避免共享连接池卡住
+                async with httpx.AsyncClient(timeout=timeout + 30, http2=False) as client:
+                    async with client.stream(
+                        "POST",
+                        req["url"],
+                        json=req["body"],
+                        headers=headers,
+                    ) as response:
+                        response.raise_for_status()
+                        yield self._stream_status_event(capability, "connected")
+                        first_chunk = True
+                        
+                        # 逐行读取，带超时保护
+                        iterator = response.aiter_lines()
+                        while True:
                             try:
-                                chunk = json.loads(data)
-                                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                                content = delta.get("content", "")
-                                if content:
-                                    if first_chunk:
-                                        yield self._stream_status_event(capability, "receiving")
-                                        first_chunk = False
-                                    yield content
-                            except json.JSONDecodeError:
-                                continue
-                    yield self._stream_status_event(capability, "completed")
+                                line = await asyncio.wait_for(iterator.__anext__(), timeout=60.0)
+                            except StopAsyncIteration:
+                                break
+                            except asyncio.TimeoutError:
+                                logger.error(f"[ModelRouter] Stream read timeout for {capability}")
+                                yield self._stream_error_event(capability, "Read timeout")
+                                break
+                                
+                            if line.startswith("data: "):
+                                data = line[6:]
+                                if data.strip() == "[DONE]":
+                                    break
+                                try:
+                                    chunk = json.loads(data)
+                                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    if content:
+                                        if first_chunk:
+                                            yield self._stream_status_event(capability, "receiving")
+                                            first_chunk = False
+                                        yield content
+                                except json.JSONDecodeError:
+                                    continue
+                        yield self._stream_status_event(capability, "completed")
             except Exception as e:
                 logger.error(f"[ModelRouter] Async stream error {capability}: {e}")
                 yield self._stream_error_event(capability, str(e))
@@ -501,7 +546,11 @@ class ModelRouter:
             raise RuntimeError(f"Cannot call AI for capability {capability}: missing configuration")
         
         endpoint = config.endpoint or "/chat/completions"
-        url = f"{base_url.rstrip('/')}{endpoint}"
+        # 【修复】智能处理 endpoint 路径
+        base_url_stripped = base_url.rstrip('/')
+        if not base_url_stripped.endswith('/v1') and endpoint == "/chat/completions":
+            endpoint = "/v1/chat/completions"
+        url = f"{base_url_stripped}{endpoint}"
         body: dict[str, Any] = {
             "model": model_name,
             "messages": messages,
@@ -511,7 +560,8 @@ class ModelRouter:
         if extra_body:
             body.update(extra_body)
         
-        headers = {"Authorization": f"Bearer {api_key}"}
+        # 【修复】添加 Connection: close 头
+        headers = {"Authorization": f"Bearer {api_key}", "Connection": "close"}
         
         response = httpx.post(url, json=body, headers=headers, timeout=timeout)
         response.raise_for_status()
@@ -529,7 +579,7 @@ class ModelRouter:
         override = self.overrides.get(capability, {})
         base_url = override.get("base_url") or self.api_base_url
         api_key = override.get("api_key") or self.api_key
-        timeout = override.get("timeout") or self.timeout
+        timeout_value = override.get("timeout") or self.timeout or 60  # 确保有默认值
         model_name = override.get("model") or config.model
         extra_body = override.get("extra_body") or config.extra_body
         
@@ -537,7 +587,11 @@ class ModelRouter:
             raise RuntimeError(f"Cannot call AI for capability {capability}: missing configuration")
         
         endpoint = config.endpoint or "/chat/completions"
-        url = f"{base_url.rstrip('/')}{endpoint}"
+        # 【修复】智能处理 endpoint 路径
+        base_url_stripped = base_url.rstrip('/')
+        if not base_url_stripped.endswith('/v1') and endpoint == "/chat/completions":
+            endpoint = "/v1/chat/completions"
+        url = f"{base_url_stripped}{endpoint}"
         body: dict[str, Any] = {
             "model": model_name,
             "messages": messages,
@@ -547,19 +601,27 @@ class ModelRouter:
         if extra_body:
             body.update(extra_body)
             
+        # 安全模式下添加 Connection: close 头
         headers = {"Authorization": f"Bearer {api_key}"}
+        if not self.use_keepalive:
+            headers["Connection"] = "close"
+        
+        logger.debug(f"[acall_capability] {capability} -> {url} (timeout={timeout_value}s)")
         
         async with self._semaphore:
-            client = await self._get_client()
-            post_coro = client.post(url, json=body, headers=headers, timeout=timeout)
+            # 【核心修复】每次请求使用独立的临时客户端
+            headers["Connection"] = "close"
             try:
-                response = await asyncio.wait_for(post_coro, timeout=timeout)
-            except asyncio.TimeoutError:
+                async with httpx.AsyncClient(timeout=timeout_value, http2=False) as client:
+                    response = await client.post(url, json=body, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
+            except httpx.TimeoutException:
+                logger.error(f"[acall_capability] {capability} timeout after {timeout_value}s")
                 raise RuntimeError(
-                    f"Async capability {capability} timed out after {timeout}s"
+                    f"Async capability {capability} timed out after {timeout_value}s"
                 ) from None
-            response.raise_for_status()
-            data = response.json()
+            
             return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
     async def astream_capability(
@@ -582,7 +644,11 @@ class ModelRouter:
             return
         
         endpoint = config.endpoint or "/chat/completions"
-        url = f"{base_url.rstrip('/')}{endpoint}"
+        # 【修复】智能处理 endpoint 路径
+        base_url_stripped = base_url.rstrip('/')
+        if not base_url_stripped.endswith('/v1') and endpoint == "/chat/completions":
+            endpoint = "/v1/chat/completions"
+        url = f"{base_url_stripped}{endpoint}"
         body: dict[str, Any] = {
             "model": model_name,
             "messages": messages,
@@ -593,50 +659,49 @@ class ModelRouter:
         if extra_body:
             body.update(extra_body)
             
-        headers = {"Authorization": f"Bearer {api_key}"}
+        headers = {"Authorization": f"Bearer {api_key}", "Connection": "close"}
         
         async with self._semaphore:
-            client = await self._get_client()
             try:
-                async with client.stream(
-                    "POST", 
-                    url, 
-                    json=body, 
-                    headers=headers, 
-                    timeout=timeout + 10  # 给予连接建立额外缓冲
-                ) as response:
-                    response.raise_for_status()
-                    yield self._stream_status_event(capability, "connected")
-                    first_chunk = True
-                    
-                    # 【修复】添加逐行读取超时保护，防止无限等待
-                    iterator = response.aiter_lines()
-                    while True:
-                        try:
-                            line = await asyncio.wait_for(iterator.__anext__(), timeout=60.0)
-                        except StopAsyncIteration:
-                            break
-                        except asyncio.TimeoutError:
-                            logger.error(f"[ModelRouter] Stream capability read timeout for {capability}")
-                            yield self._stream_error_event(capability, "Read timeout")
-                            break
+                # 【核心修复】使用临时客户端，避免共享连接池卡住
+                async with httpx.AsyncClient(timeout=timeout + 30, http2=False) as client:
+                    async with client.stream(
+                        "POST", 
+                        url, 
+                        json=body, 
+                        headers=headers, 
+                    ) as response:
+                        response.raise_for_status()
+                        yield self._stream_status_event(capability, "connected")
+                        first_chunk = True
                         
-                        if line.startswith("data: "):
-                            data = line[6:]
-                            if data.strip() == "[DONE]":
-                                break
+                        iterator = response.aiter_lines()
+                        while True:
                             try:
-                                chunk = json.loads(data)
-                                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                                content = delta.get("content", "")
-                                if content:
-                                    if first_chunk:
-                                        yield self._stream_status_event(capability, "receiving")
-                                        first_chunk = False
-                                    yield content
-                            except json.JSONDecodeError:
-                                continue
-                    yield self._stream_status_event(capability, "completed")
+                                line = await asyncio.wait_for(iterator.__anext__(), timeout=60.0)
+                            except StopAsyncIteration:
+                                break
+                            except asyncio.TimeoutError:
+                                logger.error(f"[ModelRouter] Stream capability read timeout for {capability}")
+                                yield self._stream_error_event(capability, "Read timeout")
+                                break
+                            
+                            if line.startswith("data: "):
+                                data = line[6:]
+                                if data.strip() == "[DONE]":
+                                    break
+                                try:
+                                    chunk = json.loads(data)
+                                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    if content:
+                                        if first_chunk:
+                                            yield self._stream_status_event(capability, "receiving")
+                                            first_chunk = False
+                                        yield content
+                                except json.JSONDecodeError:
+                                    continue
+                        yield self._stream_status_event(capability, "completed")
             except Exception as e:
                 logger.error(f"[ModelRouter] Async capability stream error {capability}: {e}")
                 yield self._stream_error_event(capability, str(e))
@@ -693,3 +758,57 @@ class ModelRouter:
             # 完全失败，返回原始文本（用于非JSON响应的情况）
             logger.info(f"[ModelRouter] 无法解析为JSON，返回原始文本内容")
             return content
+
+
+async def staggered_gather(
+    coroutines: list,
+    interval: float = 2.0,
+    max_concurrent: int = 3,
+    task_name: str = "任务"
+) -> list:
+    """
+    间隔并行执行协程，避免同时发送过多请求。
+    
+    Args:
+        coroutines: 协程列表
+        interval: 每个任务启动的间隔秒数
+        max_concurrent: 最大同时执行的任务数
+        task_name: 任务名称（用于日志）
+    
+    Returns:
+        所有任务的结果列表（保持原始顺序）
+    """
+    if not coroutines:
+        return []
+    
+    results = [None] * len(coroutines)
+    semaphore = asyncio.Semaphore(max_concurrent)
+    
+    async def run_with_delay(idx: int, coro):
+        # 间隔延迟：每个任务按索引递增延迟
+        delay = idx * interval
+        if delay > 0:
+            await asyncio.sleep(delay)
+        
+        async with semaphore:
+            logger.debug(f"[间隔并行] {task_name} {idx + 1}/{len(coroutines)} 开始执行")
+            try:
+                result = await coro
+                results[idx] = result
+                logger.debug(f"[间隔并行] {task_name} {idx + 1}/{len(coroutines)} 完成")
+            except Exception as e:
+                logger.warning(f"[间隔并行] {task_name} {idx + 1}/{len(coroutines)} 失败: {e}")
+                results[idx] = e
+    
+    # 创建所有任务
+    tasks = [
+        asyncio.create_task(run_with_delay(idx, coro))
+        for idx, coro in enumerate(coroutines)
+    ]
+    
+    # 等待所有任务完成
+    logger.info(f"[间隔并行] 开始执行 {len(coroutines)} 个{task_name}（间隔{interval}s，最大并发{max_concurrent}）")
+    await asyncio.gather(*tasks)
+    logger.info(f"[间隔并行] 全部 {len(coroutines)} 个{task_name}执行完成")
+    
+    return results

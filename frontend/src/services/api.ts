@@ -174,6 +174,7 @@ export interface GameState {
   sea_level: number;
   global_temperature: number;
   tectonic_stage: string;
+  backend_session_id?: string;  // 后端会话ID，用于检测后端重启
 }
 
 export async function fetchGameState(): Promise<GameState> {

@@ -62,11 +62,12 @@ import {
 
 type Scene = "menu" | "game" | "loading";
 type OverlayView = "none" | "genealogy" | "chronicle" | "niche" | "foodweb";
-type DrawerMode = "none" | "tile" | "species";
+type DrawerMode = "none" | "tile";  // 物种详情已整合到 SpeciesPanel
 type StoredSession = {
   scene: Scene;
   sessionInfo: StartPayload | null;
   currentSaveName: string;
+  backendSessionId?: string;  // 后端会话ID，用于检测后端重启
 };
 
 const SESSION_STORAGE_KEY = "evosandbox:session";
@@ -108,17 +109,47 @@ export default function App() {
   const [currentSaveName, setCurrentSaveName] = useState<string>(
     storedSession?.currentSaveName ?? storedSession?.sessionInfo?.save_name ?? ""
   );
+  const [backendSessionId, setBackendSessionId] = useState<string>(
+    storedSession?.backendSessionId ?? ""
+  );
   
   // 验证后端状态，决定是恢复会话还是回到主菜单
+  // 关键逻辑：通过比对后端会话ID来检测后端是否重启
+  // - 后端重启：会话ID不匹配 → 回到主菜单
+  // - 页面刷新：会话ID匹配 → 保持当前状态
   useEffect(() => {
     if (scene !== "loading") return;
     
     // 验证后端是否有有效的游戏状态
     fetchGameState()
       .then((state) => {
-        // 后端有有效状态，恢复到游戏界面
+        // 检查后端会话ID是否匹配（关键！）
+        const storedBackendSessionId = storedSession?.backendSessionId;
+        const currentBackendSessionId = state?.backend_session_id;
+        
+        if (!currentBackendSessionId) {
+          // 后端没有返回会话ID（可能是旧版本后端），回到主菜单
+          console.log("[会话恢复] 后端未返回会话ID，回到主菜单");
+          clearStoredSession();
+          setScene("menu");
+          return;
+        }
+        
+        if (storedBackendSessionId && storedBackendSessionId !== currentBackendSessionId) {
+          // 后端会话ID不匹配，说明后端重启了，回到主菜单
+          console.log("[会话恢复] 后端已重启（会话ID不匹配），回到主菜单");
+          console.log(`  - 存储的会话ID: ${storedBackendSessionId?.slice(0, 8)}...`);
+          console.log(`  - 当前的会话ID: ${currentBackendSessionId?.slice(0, 8)}...`);
+          clearStoredSession();
+          setScene("menu");
+          return;
+        }
+        
+        // 后端会话ID匹配（或首次进入游戏），且有有效状态，恢复到游戏界面
         if (state && state.turn_index >= 0) {
           console.log("[会话恢复] 后端状态有效，恢复游戏");
+          // 更新后端会话ID状态
+          setBackendSessionId(currentBackendSessionId);
           setScene("game");
         } else {
           // 后端状态无效，回到主菜单
@@ -128,7 +159,7 @@ export default function App() {
         }
       })
       .catch((err) => {
-        // 后端连接失败或重启，回到主菜单
+        // 后端连接失败，回到主菜单
         console.log("[会话恢复] 后端连接失败，回到主菜单:", err);
         clearStoredSession();
         setScene("menu");
@@ -198,24 +229,28 @@ export default function App() {
   // Session Persistence
   useEffect(() => {
     if (scene === "game") {
-      // 游戏中时保存会话
-      persistSession({ scene, sessionInfo, currentSaveName });
+      // 游戏中时保存会话（包含后端会话ID，用于检测后端重启）
+      persistSession({ scene, sessionInfo, currentSaveName, backendSessionId });
     } else if (scene === "menu") {
       // 回到主菜单时清除会话
       clearStoredSession();
     }
     // loading 状态不做任何操作
-  }, [scene, sessionInfo, currentSaveName]);
+  }, [scene, sessionInfo, currentSaveName, backendSessionId]);
 
   // Game Start Logic
   useEffect(() => {
     if (scene !== "game") return;
     refreshMap();
     
-    // 获取游戏状态（包含正确的回合数）
+    // 获取游戏状态（包含正确的回合数和后端会话ID）
     fetchGameState()
       .then((state) => {
         setCurrentTurnIndex(state.turn_index);
+        // 更新后端会话ID（用于检测后端重启）
+        if (state.backend_session_id) {
+          setBackendSessionId(state.backend_session_id);
+        }
         console.log(`[前端] 游戏状态已同步: 回合=${state.turn_index}, 物种=${state.species_count}`);
       })
       .catch(console.error);
@@ -402,7 +437,7 @@ export default function App() {
 
   const handleSpeciesSelect = (id: string) => {
     setSelectedSpeciesId(id);
-    setDrawerMode("species");
+    // 物种详情现已集成到左侧 SpeciesPanel，不再使用右侧抽屉
     if (viewMode !== "suitability") {
       changeViewMode("suitability", { preserveCamera: true });
     }
@@ -780,7 +815,6 @@ export default function App() {
              catch (e: any) { setError(`保存失败: ${e.message}`); }
           }}
           onLoadGame={handleLoadGame}
-          onOpenTrends={() => setShowTrends(true)}
           onOpenLedger={() => setShowLedger(true)}
           onOpenPressure={() => setShowPressureModal(true)}
         />
@@ -822,6 +856,7 @@ export default function App() {
           onOpenTrends={() => setShowTrends(true)}
           onOpenMapHistory={() => setShowMapHistory(true)}
           onOpenLogs={() => setShowLogPanel(true)}
+          onCreateSpecies={() => setShowCreateSpecies(true)}
           is3D={renderMode === "3d"}
           onToggle3D={() => setRenderMode(m => m === "3d" ? "2d" : "3d")}
         />
@@ -851,6 +886,7 @@ function readStoredSession(): StoredSession | null {
       scene: "game",
       sessionInfo: parsed.sessionInfo ?? null,
       currentSaveName: parsed.currentSaveName || parsed.sessionInfo?.save_name || "",
+      backendSessionId: parsed.backendSessionId,  // 保留后端会话ID
     };
   } catch { return null; }
 }

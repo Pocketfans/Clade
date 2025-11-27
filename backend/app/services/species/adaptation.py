@@ -17,7 +17,7 @@ from typing import Sequence, Callable, Awaitable
 
 from ...models.species import Species
 from .trait_config import TraitConfig
-from ...ai.model_router import ModelRouter
+from ...ai.model_router import ModelRouter, staggered_gather
 from ...ai.prompts.species import SPECIES_PROMPTS
 from ...core.config import get_settings
 
@@ -120,6 +120,21 @@ class AdaptationService:
                     "type": "organ_drift"
                 })
             
+            # 2.5 器官进度累积 (Organ Progress Accumulation)
+            # 让发展中的器官逐渐成熟
+            organ_progress_changes, organ_progress_score = self._apply_organ_progress_accumulation(
+                species, environment_pressure, turn_index
+            )
+            species.accumulated_adaptation_score += organ_progress_score
+            
+            if organ_progress_changes:
+                adaptation_events.append({
+                    "lineage_code": species.lineage_code,
+                    "common_name": species.common_name,
+                    "changes": organ_progress_changes,
+                    "type": "organ_development"
+                })
+            
             # 3. 熵增与退化检查 (Enhanced Regression)
             # 基础退化概率每5回合一次
             is_regression_turn = (turn_index % self.regression_check_turns == 0)
@@ -177,7 +192,7 @@ class AdaptationService:
                 species.accumulated_adaptation_score = 0.0
                 species.last_description_update_turn = turn_index
 
-        # 【修改】顺序执行描述更新（避免并发请求过多）
+        # 【优化】间隔并行执行描述更新
         if description_update_tasks:
             # 【限制】如果任务过多，进行截断
             if len(description_update_tasks) > self.max_description_updates_per_turn:
@@ -185,32 +200,37 @@ class AdaptationService:
                 description_update_tasks = description_update_tasks[:self.max_description_updates_per_turn]
                 species_to_update = species_to_update[:self.max_description_updates_per_turn]
 
-            logger.info(f"[适应性] 开始顺序执行 {len(description_update_tasks)} 个物种的描述更新...")
+            logger.info(f"[适应性] 开始间隔并行执行 {len(description_update_tasks)} 个物种的描述更新...")
             
-            # 【修改】顺序执行，逐个处理，避免并发
-            for idx, (species, task) in enumerate(zip(species_to_update, description_update_tasks)):
-                logger.info(f"[描述更新] 处理 {idx + 1}/{len(description_update_tasks)}: {species.common_name}")
-                try:
-                    res = await task
+            # 【优化】间隔并行执行，每2秒启动一个，最多同时3个
+            results = await staggered_gather(
+                description_update_tasks,
+                interval=2.0,
+                max_concurrent=3,
+                task_name="描述更新"
+            )
+            
+            for idx, (species, res) in enumerate(zip(species_to_update, results)):
+                if isinstance(res, Exception):
+                    logger.error(f"[描述更新失败] {species.common_name}: {res}")
+                    continue
                     
-                    new_desc = res.get("new_description") if isinstance(res, dict) else None
-                    if new_desc and len(new_desc) > 50:
-                        old_desc_preview = species.description[:20]
-                        species.description = new_desc
-                        logger.info(f"[描述更新] {species.common_name}: {old_desc_preview}... -> {new_desc[:20]}...")
-                        
-                        adaptation_events.append({
-                            "lineage_code": species.lineage_code,
-                            "common_name": species.common_name,
-                            "changes": {"description": "re-written based on traits"},
-                            "type": "description_update"
-                        })
-                except Exception as e:
-                    logger.error(f"[描述更新失败] {species.common_name}: {e}")
+                new_desc = res.get("new_description") if isinstance(res, dict) else None
+                if new_desc and len(new_desc) > 50:
+                    old_desc_preview = species.description[:20]
+                    species.description = new_desc
+                    logger.info(f"[描述更新] {species.common_name}: {old_desc_preview}... -> {new_desc[:20]}...")
+                    
+                    adaptation_events.append({
+                        "lineage_code": species.lineage_code,
+                        "common_name": species.common_name,
+                        "changes": {"description": "re-written based on traits"},
+                        "type": "description_update"
+                    })
             
             logger.info(f"[适应性] 描述更新完成")
         
-        # 【修改】顺序执行LLM智能适应（避免并发请求过多）
+        # 【优化】间隔并行执行LLM智能适应
         if llm_adaptation_tasks:
             # 【限制】限制最大适应数
             if len(llm_adaptation_tasks) > self.max_llm_adaptations_per_turn:
@@ -218,31 +238,36 @@ class AdaptationService:
                 llm_adaptation_tasks = llm_adaptation_tasks[:self.max_llm_adaptations_per_turn]
                 llm_species_list = llm_species_list[:self.max_llm_adaptations_per_turn]
 
-            logger.info(f"[适应性] 开始顺序执行 {len(llm_adaptation_tasks)} 个LLM智能适应任务...")
+            logger.info(f"[适应性] 开始间隔并行执行 {len(llm_adaptation_tasks)} 个LLM智能适应任务...")
             
-            # 【修改】顺序执行，逐个处理，避免并发
-            for idx, (species, task) in enumerate(zip(llm_species_list, llm_adaptation_tasks)):
-                logger.info(f"[LLM适应] 处理 {idx + 1}/{len(llm_adaptation_tasks)}: {species.common_name}")
-                try:
-                    res = await task
+            # 【优化】间隔并行执行，每2秒启动一个，最多同时3个
+            results = await staggered_gather(
+                llm_adaptation_tasks,
+                interval=2.0,
+                max_concurrent=3,
+                task_name="LLM适应"
+            )
+            
+            for idx, (species, res) in enumerate(zip(llm_species_list, results)):
+                if isinstance(res, Exception):
+                    logger.warning(f"[LLM适应失败] {species.common_name}: {res}")
+                    continue
                     
-                    if not isinstance(res, dict):
-                        continue
-                    
-                    # 应用LLM建议的特质变化
-                    llm_changes = self._apply_llm_recommendations(species, res)
-                    if llm_changes:
-                        adaptation_events.append({
-                            "lineage_code": species.lineage_code,
-                            "common_name": species.common_name,
-                            "changes": llm_changes,
-                            "type": "llm_adaptation",
-                            "analysis": res.get("analysis", ""),
-                            "rationale": res.get("rationale", ""),
-                        })
-                        logger.info(f"[LLM适应] {species.common_name}: {llm_changes}")
-                except Exception as e:
-                    logger.warning(f"[LLM适应失败] {species.common_name}: {e}")
+                if not isinstance(res, dict):
+                    continue
+                
+                # 应用LLM建议的特质变化
+                llm_changes = self._apply_llm_recommendations(species, res)
+                if llm_changes:
+                    adaptation_events.append({
+                        "lineage_code": species.lineage_code,
+                        "common_name": species.common_name,
+                        "changes": llm_changes,
+                        "type": "llm_adaptation",
+                        "analysis": res.get("analysis", ""),
+                        "rationale": res.get("rationale", ""),
+                    })
+                    logger.info(f"[LLM适应] {species.common_name}: {llm_changes}")
             
             logger.info(f"[适应性] LLM智能适应完成")
 
@@ -278,12 +303,19 @@ class AdaptationService:
         )
 
         # 【优化】使用非流式调用，避免流式传输卡住
+        # 【修复】添加硬超时保护，防止无限等待
         try:
-            full_content = await self.router.acall_capability(
-                capability="narrative",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"}
+            full_content = await asyncio.wait_for(
+                self.router.acall_capability(
+                    capability="narrative",
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"}
+                ),
+                timeout=60  # 硬超时60秒
             )
+        except asyncio.TimeoutError:
+            logger.error(f"[描述更新] {species.common_name} 超时（60秒）")
+            return {}
         except Exception as e:
             logger.error(f"[描述更新] AI调用失败: {e}")
             return {}
@@ -438,6 +470,106 @@ class AdaptationService:
             
             if drifted:
                 organ_data["parameters"] = params # 更新回对象
+        
+        return changes, drift_score
+    
+    def _apply_organ_progress_accumulation(
+        self,
+        species: Species,
+        environment_pressure: dict[str, float],
+        turn_index: int,
+    ) -> tuple[dict, float]:
+        """器官进度累积：让发展中的器官逐渐成熟
+        
+        这是渐进式器官进化的核心机制：
+        - 每回合，处于中间阶段（1-3）的器官有机会累积进度
+        - 当进度达到下一阶段阈值时，器官升级
+        - 进度累积受环境压力影响：高压力环境下演化更快
+        
+        Returns: (changes_dict, drift_score)
+        """
+        changes = {}
+        drift_score = 0.0
+        
+        # 计算环境压力强度（用于调整进度增益）
+        pressure_intensity = sum(abs(p) for p in environment_pressure.values()) / max(1, len(environment_pressure))
+        pressure_multiplier = 1.0 + min(pressure_intensity / 10.0, 0.5)  # 最多1.5倍速
+        
+        # 世代时间影响：繁殖快的物种进化快
+        generation_time = species.morphology_stats.get("generation_time_days", 365)
+        # 50万年 = 1.825亿天
+        total_days = 500_000 * 365
+        generations = total_days / max(1.0, generation_time)
+        # 世代加成：log10(代数) * 0.01
+        generation_multiplier = 1.0 + math.log10(max(10, generations)) * 0.01
+        
+        for category, organ_data in species.organs.items():
+            current_stage = organ_data.get("evolution_stage", 4)
+            current_progress = organ_data.get("evolution_progress", 1.0)
+            
+            # 只处理未完善的器官（阶段1-3）
+            if current_stage >= 4:
+                continue
+            
+            # 基础进度增益（每回合=50万年）
+            # 从原基到完善需要大约8-15回合（400-750万年）
+            base_progress_gain = random.uniform(0.02, 0.06)
+            
+            # 应用倍率
+            actual_gain = base_progress_gain * pressure_multiplier * generation_multiplier
+            
+            # 添加随机性：有时进度停滞，有时快速突破
+            if random.random() < 0.1:  # 10% 概率停滞
+                actual_gain = 0
+            elif random.random() < 0.05:  # 5% 概率快速突破
+                actual_gain *= 2.0
+            
+            # 更新进度
+            new_progress = current_progress + actual_gain
+            
+            # 检查是否达到下一阶段
+            stage_thresholds = {1: 0.25, 2: 0.50, 3: 0.75, 4: 1.0}
+            next_stage = current_stage + 1
+            threshold = stage_thresholds.get(next_stage, 1.0)
+            
+            if new_progress >= threshold and next_stage <= 4:
+                # 升级到下一阶段
+                organ_data["evolution_stage"] = next_stage
+                organ_data["evolution_progress"] = new_progress
+                organ_data["modified_turn"] = turn_index
+                
+                # 阶段2+开始具有功能
+                if next_stage >= 2:
+                    organ_data["is_active"] = True
+                
+                # 记录演化历史
+                if "evolution_history" not in organ_data:
+                    organ_data["evolution_history"] = []
+                organ_data["evolution_history"].append({
+                    "turn": turn_index,
+                    "from_stage": current_stage,
+                    "to_stage": next_stage,
+                    "description": f"器官发育成熟度提升"
+                })
+                
+                stage_names = {1: "原基", 2: "初级", 3: "功能化", 4: "完善"}
+                organ_type = organ_data.get("type", category)
+                changes[f"{organ_type}"] = f"阶段{current_stage}({stage_names.get(current_stage, '未知')})→{next_stage}({stage_names.get(next_stage, '完善')})"
+                drift_score += 2.0  # 阶段升级是重大变化
+                
+                logger.info(
+                    f"[器官发育] {species.common_name} {organ_type}: "
+                    f"阶段{current_stage}→{next_stage} (进度{new_progress:.0%})"
+                )
+            else:
+                # 只更新进度，未达到升级阈值
+                organ_data["evolution_progress"] = new_progress
+                if actual_gain > 0:
+                    organ_type = organ_data.get("type", category)
+                    logger.debug(
+                        f"[器官发育] {species.common_name} {organ_type}: "
+                        f"进度 {current_progress:.0%}→{new_progress:.0%}"
+                    )
         
         return changes, drift_score
 
@@ -652,12 +784,19 @@ class AdaptationService:
         )
         
         # 【优化】使用非流式调用，避免流式传输卡住
+        # 【修复】添加硬超时保护，防止无限等待
         try:
-            full_content = await self.router.acall_capability(
-                capability="pressure_adaptation",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"}
+            full_content = await asyncio.wait_for(
+                self.router.acall_capability(
+                    capability="pressure_adaptation",
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"}
+                ),
+                timeout=90  # 硬超时90秒
             )
+        except asyncio.TimeoutError:
+            logger.error(f"[LLM适应] {species.common_name} 超时（90秒）")
+            return {}
         except Exception as e:
             logger.error(f"[LLM适应] 调用失败: {e}")
             return {}

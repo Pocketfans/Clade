@@ -57,6 +57,16 @@ class Settings(BaseSettings):
     # 世代数缩放参数（用于调节快速繁殖生物的演化速率）
     generation_scale_factor: float = Field(default=8.0, alias="GENERATION_SCALE_FACTOR")
     
+    # ========== 物种分化平衡参数 ==========
+    # 分化冷却期（回合数）：分化后多少回合内不能再次分化
+    speciation_cooldown_turns: int = Field(default=3, alias="SPECIATION_COOLDOWN_TURNS")
+    # 物种密度软上限：超过此数量后分化概率开始衰减
+    species_soft_cap: int = Field(default=40, alias="SPECIES_SOFT_CAP")
+    # 基础分化概率（0-1）
+    base_speciation_rate: float = Field(default=0.15, alias="BASE_SPECIATION_RATE")
+    # 最大子种数量
+    max_offspring_count: int = Field(default=4, alias="MAX_OFFSPRING_COUNT")
+    
     # 日志配置
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_dir: str = Field(default=str(PROJECT_ROOT / "data/logs"))

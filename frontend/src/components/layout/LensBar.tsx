@@ -11,6 +11,7 @@ interface Props {
   onOpenTrends: () => void;
   onOpenMapHistory?: () => void;
   onOpenLogs?: () => void;
+  onCreateSpecies?: () => void;  // 新增：创建物种入口
   is3D?: boolean;
   onToggle3D?: () => void;
 }
@@ -25,6 +26,7 @@ export function LensBar({
   onOpenTrends,
   onOpenMapHistory,
   onOpenLogs,
+  onCreateSpecies,
   is3D = false,
   onToggle3D
 }: Props) {
@@ -40,6 +42,7 @@ export function LensBar({
   ];
 
   const tools = [
+    { id: "create", label: "创建物种", icon: "✨", action: onCreateSpecies, color: "#f59e0b" },
     { id: "genealogy", label: "族谱", icon: "🧬", action: onToggleGenealogy, color: "#c084fc" },
     { id: "trends", label: "全球趋势", icon: "📈", action: onOpenTrends, color: "#4ade80" },
     { id: "niche", label: "生态位", icon: "📊", action: onToggleNiche, color: "#38bdf8" },
