@@ -111,6 +111,32 @@ const EMBEDDING_PRESETS = [
   { id: "text-embedding-3-small", name: "text-embedding-3-small", dimensions: 1536 },
 ];
 
+// 服务商模型预设（用于功能路由）
+const PROVIDER_MODEL_PRESETS: Record<string, Array<{ model: string; label: string; hint?: string }>> = {
+  deepseek_official: [
+    { model: "deepseek-chat", label: "deepseek-chat", hint: "通用对话模型" },
+    { model: "deepseek-reasoner", label: "deepseek-reasoner 🧠", hint: "带思考功能，更强推理能力" },
+  ],
+  siliconflow: [
+    { model: "deepseek-ai/DeepSeek-V3", label: "DeepSeek-V3 (免费)", hint: "可使用免费额度" },
+    { model: "Pro/deepseek-ai/DeepSeek-V3", label: "DeepSeek-V3 Pro (付费)", hint: "付费，并行量更大" },
+  ],
+};
+
+// 根据服务商 URL 获取模型预设
+function getModelPresetsForProvider(provider: ProviderConfig | null): Array<{ model: string; label: string; hint?: string }> {
+  if (!provider?.base_url) return [];
+  
+  if (provider.base_url.includes("deepseek.com")) {
+    return PROVIDER_MODEL_PRESETS.deepseek_official || [];
+  }
+  if (provider.base_url.includes("siliconflow")) {
+    return PROVIDER_MODEL_PRESETS.siliconflow || [];
+  }
+  
+  return [];
+}
+
 // ========== 状态管理 ==========
 
 type ConfirmState = {
@@ -1132,6 +1158,7 @@ function CapabilityCard({
     : (defaultProviderId ? providers[defaultProviderId] : null);
   
   const hasThinking = supportsThinking(routeProvider);
+  const modelPresets = getModelPresetsForProvider(routeProvider);
 
   return (
     <div className={`capability-card ${priority}`}>
@@ -1155,6 +1182,9 @@ function CapabilityCard({
             if (!supportsThinking(newProvider) && route.enable_thinking) {
               onUpdate("enable_thinking", false);
             }
+            
+            // 切换服务商时清空模型选择
+            onUpdate("model", "");
           }}
           aria-label={`${cap.label} 服务商`}
         >
@@ -1166,14 +1196,49 @@ function CapabilityCard({
           ))}
         </select>
 
-        <input
-          className="field-input"
-          type="text"
-          placeholder={`模型 (默认: ${defaultModel || "未设置"})`}
-          value={route.model || ""}
-          onChange={(e) => onUpdate("model", e.target.value)}
-          aria-label={`${cap.label} 模型`}
-        />
+        {/* 模型选择：有预设时显示下拉+输入，否则只显示输入 */}
+        {modelPresets.length > 0 ? (
+          <div className="model-select-group">
+            <select
+              className="field-input model-select"
+              value={modelPresets.some(p => p.model === route.model) ? (route.model || "") : ""}
+              onChange={(e) => onUpdate("model", e.target.value)}
+              aria-label={`${cap.label} 模型预设`}
+            >
+              <option value="">选择模型...</option>
+              {modelPresets.map(preset => (
+                <option key={preset.model} value={preset.model} title={preset.hint}>
+                  {preset.label}
+                </option>
+              ))}
+              <option value="__custom__">自定义...</option>
+            </select>
+            {(!modelPresets.some(p => p.model === route.model) && route.model) && (
+              <input
+                className="field-input model-custom-input"
+                type="text"
+                placeholder="输入模型名称"
+                value={route.model || ""}
+                onChange={(e) => onUpdate("model", e.target.value)}
+              />
+            )}
+            {/* 显示当前模型的提示 */}
+            {route.model && modelPresets.find(p => p.model === route.model)?.hint && (
+              <span className="model-hint">
+                💡 {modelPresets.find(p => p.model === route.model)?.hint}
+              </span>
+            )}
+          </div>
+        ) : (
+          <input
+            className="field-input"
+            type="text"
+            placeholder={`模型 (默认: ${defaultModel || "未设置"})`}
+            value={route.model || ""}
+            onChange={(e) => onUpdate("model", e.target.value)}
+            aria-label={`${cap.label} 模型`}
+          />
+        )}
 
         <div className="timeout-row">
           <label className="timeout-label">超时</label>

@@ -628,6 +628,27 @@
   font-size: 0.8rem;
 }
 
+/* Model Select Group */
+.model-select-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.model-select {
+  flex: 1;
+}
+
+.model-custom-input {
+  font-size: 0.75rem !important;
+}
+
+.model-hint {
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.5);
+  padding: 0.25rem 0;
+}
+
 /* Timeout Row */
 .timeout-row {
   display: flex;
