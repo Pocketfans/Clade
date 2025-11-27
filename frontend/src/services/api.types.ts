@@ -202,6 +202,7 @@ export interface UIConfig {
   // 4. Embedding 配置
   embedding_provider_id?: string | null;
   embedding_model?: string | null;
+  embedding_dimensions?: number | null;
 
   // --- Legacy Fields (For backward compatibility types) ---
   ai_provider?: string | null;
