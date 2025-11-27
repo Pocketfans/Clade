@@ -20,9 +20,17 @@ const EVOLUTION_STAGES = [
   { id: "report", icon: "📝", label: "生成报告", color: "#2dd4bf" },
 ];
 
+// AI并发处理进度状态
+interface AIProgress {
+  total: number;
+  completed: number;
+  current_task: string;
+  last_activity: number;
+}
+
 export function TurnProgressOverlay({ message = "推演进行中...", showDetails = true }: Props) {
   // 状态管理
-  const [logs, setLogs] = useState<Array<{ icon: string; text: string; category: string; timestamp: number }>>([]);
+  const [displayedLogs, setDisplayedLogs] = useState<Array<{ icon: string; text: string; category: string; timestamp: number }>>([]);
   const [currentStage, setCurrentStage] = useState<string>("等待推演开始...");
   const [currentStageIndex, setCurrentStageIndex] = useState<number>(-1);
   const [streamingText, setStreamingText] = useState<string>("");
@@ -30,6 +38,15 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
   const [tokenCount, setTokenCount] = useState<number>(0);
   const [startTime, setStartTime] = useState<number | null>(null);
   const [isStreamingActive, setIsStreamingActive] = useState<boolean>(false);
+  
+  // AI并发处理进度
+  const [aiProgress, setAIProgress] = useState<AIProgress | null>(null);
+  const [lastAIActivity, setLastAIActivity] = useState<number>(0);
+  const [aiElapsedSeconds, setAIElapsedSeconds] = useState<number>(0);
+  
+  // 日志队列管理（逐条动画显示）
+  const logQueueRef = useRef<Array<{ icon: string; text: string; category: string; timestamp: number }>>([]);
+  const isProcessingRef = useRef<boolean>(false);
   
   // Refs
   const logContainerRef = useRef<HTMLDivElement>(null);
@@ -42,6 +59,77 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
       streamingContainerRef.current.scrollTop = streamingContainerRef.current.scrollHeight;
     }
   }, []);
+  
+  // 自动滚动日志到底部
+  const scrollLogsToBottom = useCallback(() => {
+    if (logContainerRef.current) {
+      const logList = logContainerRef.current.querySelector('.log-list');
+      if (logList) {
+        logList.scrollTop = logList.scrollHeight;
+      }
+    }
+  }, []);
+
+  // 逐条处理日志队列的函数
+  const processLogQueue = useCallback(() => {
+    if (isProcessingRef.current || logQueueRef.current.length === 0) return;
+    
+    isProcessingRef.current = true;
+    
+    const processNext = () => {
+      if (logQueueRef.current.length === 0) {
+        isProcessingRef.current = false;
+        return;
+      }
+      
+      const nextLog = logQueueRef.current.shift()!;
+      setDisplayedLogs(prev => [...prev, nextLog].slice(-50));
+      
+      // 滚动到底部
+      requestAnimationFrame(scrollLogsToBottom);
+      
+      // 根据消息类型决定延迟时间
+      // 阶段切换消息显示稍长一些，普通消息较快
+      const delay = nextLog.category === "系统" || nextLog.text.includes("阶段") ? 200 : 80;
+      
+      if (logQueueRef.current.length > 0) {
+        setTimeout(processNext, delay);
+      } else {
+        isProcessingRef.current = false;
+      }
+    };
+    
+    processNext();
+  }, [scrollLogsToBottom]);
+
+  // 添加日志到队列
+  const addLogToQueue = useCallback((log: { icon: string; text: string; category: string; timestamp: number }) => {
+    logQueueRef.current.push(log);
+    processLogQueue();
+  }, [processLogQueue]);
+  
+  // AI活动计时器
+  useEffect(() => {
+    if (!aiProgress || aiProgress.completed >= aiProgress.total) {
+      setAIElapsedSeconds(0);
+      return;
+    }
+    
+    // 如果 lastAIActivity 为 0 或无效，不计算
+    if (!lastAIActivity || lastAIActivity <= 0) {
+      setAIElapsedSeconds(0);
+      return;
+    }
+    
+    const timer = setInterval(() => {
+      const now = Date.now();
+      const elapsed = Math.floor((now - lastAIActivity) / 1000);
+      // 只显示合理的时间（最多显示300秒）
+      setAIElapsedSeconds(Math.min(elapsed, 300));
+    }, 1000);
+    
+    return () => clearInterval(timer);
+  }, [aiProgress, lastAIActivity]);
 
   // 根据阶段文本判断当前阶段索引
   const detectStageIndex = useCallback((stageText: string): number => {
@@ -84,6 +172,26 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         return;
       }
       
+      // 处理AI并发进度事件
+      if (event.type === 'ai_progress') {
+        setAIProgress({
+          total: event.total || 0,
+          completed: event.completed || 0,
+          current_task: event.current_task || "",
+          last_activity: Date.now()
+        });
+        setLastAIActivity(Date.now());
+        setConnectionStatus("receiving");
+        return;
+      }
+      
+      // 处理AI心跳事件
+      if (event.type === 'ai_heartbeat') {
+        setLastAIActivity(Date.now());
+        setConnectionStatus("receiving");
+        return;
+      }
+      
       // 处理普通事件
       const eventMessage = event.message || "";
       const category = event.category || "其他";
@@ -103,12 +211,13 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
       
       const cleanMessage = eventMessage.replace(/[\u{1F300}-\u{1F9FF}]/gu, "").trim();
       
-      setLogs(prev => [...prev, { 
+      // 使用队列方式添加日志，实现逐条动画
+      addLogToQueue({ 
         icon, 
         text: cleanMessage, 
         category, 
         timestamp: Date.now() 
-      }].slice(-50));
+      });
       
       // 更新当前阶段
       if (event.type === 'stage') {
@@ -116,17 +225,29 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         setCurrentStage(stageText);
         setCurrentStageIndex(detectStageIndex(cleanMessage));
         
-        // 如果进入报告阶段，清空之前的流式文本
+        // 如果进入AI并发处理阶段，初始化AI进度
+        if (cleanMessage.includes("AI并发")) {
+          setAIProgress({ total: 4, completed: 0, current_task: "初始化...", last_activity: Date.now() });
+          setLastAIActivity(Date.now());
+        }
+        
+        // 如果进入报告阶段，清空之前的流式文本和AI进度
         if (cleanMessage.includes("报告") || cleanMessage.includes("叙事")) {
           setStreamingText("");
           setTokenCount(0);
           setIsStreamingActive(false);
+          setAIProgress(null);
         }
       }
 
-      if (event.type === 'turn_complete') {
+      // 支持两种完成事件类型：turn_complete 和 complete
+      if (event.type === 'turn_complete' || event.type === 'complete') {
+        console.log("[事件流] 推演完成");
         setIsStreamingActive(false);
         setConnectionStatus("connected");
+        setAIProgress(null);
+        setCurrentStage("推演完成！");
+        setCurrentStageIndex(EVOLUTION_STAGES.length - 1);
       }
 
       if (event.type === 'error') {
@@ -136,32 +257,29 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
     
     eventSourceRef.current = eventSource;
 
-    // 自动滚动日志
-    const scrollInterval = setInterval(() => {
-      if (logContainerRef.current) {
-        logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
-      }
-    }, 500);
-
     return () => {
       console.log("[事件流] 断开连接");
       setConnectionStatus("disconnected");
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }
-      clearInterval(scrollInterval);
     };
-  }, [showDetails, detectStageIndex, scrollStreamingToBottom]);
+  }, [showDetails, detectStageIndex, scrollStreamingToBottom, addLogToQueue]);
 
   // 重置状态
   useEffect(() => {
     if (message.includes("开始")) {
-      setLogs([]);
+      setDisplayedLogs([]);
+      logQueueRef.current = [];
+      isProcessingRef.current = false;
       setStreamingText("");
       setTokenCount(0);
       setCurrentStageIndex(-1);
       setIsStreamingActive(false);
       setStartTime(Date.now());
+      setAIProgress(null);
+      setLastAIActivity(0);
+      setAIElapsedSeconds(0);
     }
   }, [message]);
 
@@ -269,6 +387,46 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
               {isStreamingActive && <div className="stage-pulse-indicator" />}
             </div>
 
+            {/* AI并发处理进度指示器 */}
+            {aiProgress && aiProgress.total > 0 && (
+              <div className="ai-progress-container">
+                <div className="ai-progress-header">
+                  <div className="ai-progress-title">
+                    <span className={`ai-activity-indicator ${aiElapsedSeconds < 5 ? 'active' : 'stale'}`} />
+                    <span>🤖 AI 并发处理中</span>
+                  </div>
+                  <div className="ai-progress-stats">
+                    <span className="ai-progress-count">
+                      {aiProgress.completed}/{aiProgress.total} 任务
+                    </span>
+                    <span className="ai-elapsed-time">
+                      {aiElapsedSeconds > 0 && (
+                        aiElapsedSeconds >= 30 
+                          ? `⚠️ ${aiElapsedSeconds}秒未响应` 
+                          : `${aiElapsedSeconds}秒`
+                      )}
+                    </span>
+                  </div>
+                </div>
+                <div className="ai-progress-bar-container">
+                  <div 
+                    className="ai-progress-bar" 
+                    style={{ width: `${(aiProgress.completed / aiProgress.total) * 100}%` }}
+                  />
+                </div>
+                {aiProgress.current_task && (
+                  <div className="ai-current-task">
+                    正在处理: {aiProgress.current_task}
+                  </div>
+                )}
+                {aiElapsedSeconds >= 15 && (
+                  <div className="ai-waiting-hint">
+                    ⏳ AI正在处理复杂任务，请耐心等待...
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* 流式文本显示区域 - 改进版 */}
             {(streamingText || isStreamingActive) && (
               <div className="streaming-container">
@@ -294,24 +452,26 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
             <div className="evolution-log-container" ref={logContainerRef}>
               <div className="log-header">
                 <span>📋 推演日志</span>
-                {logs.length > 0 && (
-                  <span className="log-count">{logs.length} 条</span>
+                {displayedLogs.length > 0 && (
+                  <span className="log-count">{displayedLogs.length} 条</span>
+                )}
+                {logQueueRef.current.length > 0 && (
+                  <span className="log-pending">+{logQueueRef.current.length}</span>
                 )}
               </div>
-              {logs.length === 0 ? (
+              {displayedLogs.length === 0 ? (
                 <div className="log-empty">
                   <span className="empty-icon">🌱</span>
                   <span>等待演化数据...</span>
                 </div>
               ) : (
                 <div className="log-list">
-                  {logs.map((log, idx) => (
+                  {displayedLogs.map((log, idx) => (
                     <div
-                      key={idx}
-                      className="log-item"
+                      key={`${log.timestamp}-${idx}`}
+                      className="log-item log-item-animated"
                       style={{ 
                         '--log-color': getCategoryColor(log.category),
-                        animationDelay: `${idx * 0.02}s`
                       } as React.CSSProperties}
                     >
                       <span className="log-icon">{log.icon}</span>
@@ -745,6 +905,21 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
           opacity: 0.5;
         }
 
+        .log-pending {
+          font-size: 0.65rem;
+          color: #fbbf24;
+          background: rgba(251, 191, 36, 0.15);
+          padding: 2px 6px;
+          border-radius: 8px;
+          margin-left: 4px;
+          animation: pending-pulse 1s ease-in-out infinite;
+        }
+
+        @keyframes pending-pulse {
+          0%, 100% { opacity: 0.7; }
+          50% { opacity: 1; }
+        }
+
         .log-item {
           display: flex;
           align-items: center;
@@ -754,18 +929,136 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
           background: rgba(45, 212, 191, 0.02);
           border-left: 3px solid var(--log-color);
           border-radius: 6px;
-          animation: log-slide-in 0.3s ease-out both;
+        }
+
+        .log-item-animated {
+          animation: log-slide-in 0.25s ease-out both;
         }
 
         @keyframes log-slide-in {
           from { 
             opacity: 0; 
-            transform: translateX(-15px); 
+            transform: translateX(-20px) scale(0.95);
+            background: rgba(45, 212, 191, 0.1);
           }
           to { 
             opacity: 1; 
-            transform: translateX(0); 
+            transform: translateX(0) scale(1);
+            background: rgba(45, 212, 191, 0.02);
           }
+        }
+
+        /* AI并发处理进度样式 */
+        .ai-progress-container {
+          background: linear-gradient(135deg, rgba(139, 92, 246, 0.08), rgba(168, 85, 247, 0.04));
+          border: 1px solid rgba(139, 92, 246, 0.25);
+          border-radius: 14px;
+          margin-bottom: 20px;
+          padding: 16px;
+          overflow: hidden;
+        }
+
+        .ai-progress-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 12px;
+        }
+
+        .ai-progress-title {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          font-size: 0.9rem;
+          color: #c084fc;
+          font-weight: 600;
+        }
+
+        .ai-activity-indicator {
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          background: #a855f7;
+        }
+
+        .ai-activity-indicator.active {
+          animation: ai-pulse 0.8s ease-in-out infinite;
+          box-shadow: 0 0 12px rgba(168, 85, 247, 0.6);
+        }
+
+        .ai-activity-indicator.stale {
+          background: #fbbf24;
+          animation: ai-stale-blink 1.5s ease-in-out infinite;
+        }
+
+        @keyframes ai-pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.5; transform: scale(0.85); }
+        }
+
+        @keyframes ai-stale-blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
+        }
+
+        .ai-progress-stats {
+          display: flex;
+          gap: 12px;
+          align-items: center;
+        }
+
+        .ai-progress-count {
+          font-size: 0.8rem;
+          color: rgba(255, 255, 255, 0.7);
+          font-family: var(--font-mono, monospace);
+          background: rgba(139, 92, 246, 0.2);
+          padding: 3px 10px;
+          border-radius: 6px;
+        }
+
+        .ai-elapsed-time {
+          font-size: 0.75rem;
+          color: rgba(255, 255, 255, 0.5);
+          font-family: var(--font-mono, monospace);
+        }
+
+        .ai-progress-bar-container {
+          height: 6px;
+          background: rgba(0, 0, 0, 0.3);
+          border-radius: 3px;
+          overflow: hidden;
+          margin-bottom: 10px;
+        }
+
+        .ai-progress-bar {
+          height: 100%;
+          background: linear-gradient(90deg, #8b5cf6, #a855f7, #c084fc);
+          border-radius: 3px;
+          transition: width 0.5s ease-out;
+          box-shadow: 0 0 10px rgba(139, 92, 246, 0.4);
+        }
+
+        .ai-current-task {
+          font-size: 0.8rem;
+          color: rgba(255, 255, 255, 0.6);
+          text-align: left;
+          padding-left: 4px;
+        }
+
+        .ai-waiting-hint {
+          font-size: 0.75rem;
+          color: #fbbf24;
+          text-align: center;
+          margin-top: 8px;
+          padding: 6px 10px;
+          background: rgba(251, 191, 36, 0.1);
+          border-radius: 6px;
+          animation: hint-fade 2s ease-in-out infinite;
+        }
+
+        @keyframes hint-fade {
+          0%, 100% { opacity: 0.7; }
+          50% { opacity: 1; }
         }
 
         .log-icon {

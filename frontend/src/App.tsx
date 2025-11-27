@@ -60,7 +60,7 @@ import {
   fetchGameState,
 } from "./services/api";
 
-type Scene = "menu" | "game";
+type Scene = "menu" | "game" | "loading";
 type OverlayView = "none" | "genealogy" | "chronicle" | "niche" | "foodweb";
 type DrawerMode = "none" | "tile" | "species";
 type StoredSession = {
@@ -79,8 +79,13 @@ function useQueue() {
     const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   }, []);
-  function refresh() {
-    fetchQueueStatus().then(setStatus).catch(console.error);
+  async function refresh() {
+    try {
+      const data = await fetchQueueStatus();
+      setStatus(data);
+    } catch (error) {
+      console.error("刷新队列状态失败:", error);
+    }
   }
   return { status, refresh };
 }
@@ -96,12 +101,39 @@ const defaultConfig: UIConfig = {
 
 export default function App() {
   // --- Session State ---
-  const restoredSession = typeof window !== "undefined" ? readStoredSession() : null;
-  const [scene, setScene] = useState<Scene>(restoredSession?.scene ?? "menu");
-  const [sessionInfo, setSessionInfo] = useState<StartPayload | null>(restoredSession?.sessionInfo ?? null);
+  // 尝试恢复会话，但需要验证后端状态
+  const storedSession = typeof window !== "undefined" ? readStoredSession() : null;
+  const [scene, setScene] = useState<Scene>(storedSession ? "loading" : "menu");
+  const [sessionInfo, setSessionInfo] = useState<StartPayload | null>(storedSession?.sessionInfo ?? null);
   const [currentSaveName, setCurrentSaveName] = useState<string>(
-    restoredSession?.currentSaveName ?? restoredSession?.sessionInfo?.save_name ?? ""
+    storedSession?.currentSaveName ?? storedSession?.sessionInfo?.save_name ?? ""
   );
+  
+  // 验证后端状态，决定是恢复会话还是回到主菜单
+  useEffect(() => {
+    if (scene !== "loading") return;
+    
+    // 验证后端是否有有效的游戏状态
+    fetchGameState()
+      .then((state) => {
+        // 后端有有效状态，恢复到游戏界面
+        if (state && state.turn_index >= 0) {
+          console.log("[会话恢复] 后端状态有效，恢复游戏");
+          setScene("game");
+        } else {
+          // 后端状态无效，回到主菜单
+          console.log("[会话恢复] 后端状态无效，回到主菜单");
+          clearStoredSession();
+          setScene("menu");
+        }
+      })
+      .catch((err) => {
+        // 后端连接失败或重启，回到主菜单
+        console.log("[会话恢复] 后端连接失败，回到主菜单:", err);
+        clearStoredSession();
+        setScene("menu");
+      });
+  }, [scene]);
 
   // --- Game Data State ---
   const { status, refresh: refreshQueue } = useQueue();
@@ -151,17 +183,28 @@ export default function App() {
 
   // Initial Config Load
   useEffect(() => {
-    fetchUIConfig().then(setUIConfig).catch(() => setUIConfig(defaultConfig));
+    fetchUIConfig()
+      .then((config) => {
+        console.log("[App] 配置加载成功，providers 数量:", Object.keys(config.providers || {}).length);
+        setUIConfig(config);
+      })
+      .catch((err) => {
+        console.error("[App] 配置加载失败，使用默认配置:", err);
+        setUIConfig(defaultConfig);
+      });
     fetchPressureTemplates().then(setPressureTemplates).catch(console.error);
   }, []);
 
   // Session Persistence
   useEffect(() => {
-    if (scene !== "game") {
+    if (scene === "game") {
+      // 游戏中时保存会话
+      persistSession({ scene, sessionInfo, currentSaveName });
+    } else if (scene === "menu") {
+      // 回到主菜单时清除会话
       clearStoredSession();
-      return;
     }
-    persistSession({ scene, sessionInfo, currentSaveName });
+    // loading 状态不做任何操作
   }, [scene, sessionInfo, currentSaveName]);
 
   // Game Start Logic
@@ -380,12 +423,22 @@ export default function App() {
       console.log("📈 [演化] 更新物种数据和地图状态...");
       
       setReports((prev) => normalizeReports([...prev, ...next]));
-      refreshQueue();
-      await refreshMap();
-      await refreshSpeciesList(); // 刷新物种列表（包含新分化物种）
+      
+      // 并行刷新，加快速度，并捕获错误避免阻塞
+      console.log("🔄 [演化] 刷新地图和物种列表...");
+      await Promise.all([
+        refreshMap().catch(e => console.error("刷新地图失败:", e)),
+        refreshSpeciesList().catch(e => console.error("刷新物种列表失败:", e)),
+        refreshQueue().catch(e => console.error("刷新队列失败:", e)),
+      ]);
+      console.log("✅ [演化] 刷新完成");
+      
       setSpeciesRefreshTrigger(prev => prev + 1); // 触发物种详情刷新
       setPendingPressures([]);
       setShowPressureModal(false);
+      
+      // 清除族谱缓存，下次打开时会重新获取最新数据
+      setLineageTree(null);
       
       // 显示回合总结
       if (next.length > 0) {
@@ -398,6 +451,7 @@ export default function App() {
       console.error("❌ [演化] 推演失败:", error);
       setError(`推演失败: ${error.message || "未知错误"}`);
     } finally {
+      console.log("🏁 [演化] 关闭加载状态");
       setLoading(false);
     }
   }
@@ -428,6 +482,26 @@ export default function App() {
   }
 
   // --- Render: Scene Switching ---
+
+  // 加载中界面（验证后端状态）
+  if (scene === "loading") {
+    return (
+      <div style={{
+        position: 'fixed',
+        inset: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'radial-gradient(ellipse at center, rgba(8, 15, 12, 0.97), rgba(3, 7, 5, 0.99))',
+        color: '#f0f4e8',
+        gap: '1rem'
+      }}>
+        <div className="spinner" style={{ width: 40, height: 40 }}></div>
+        <p style={{ fontSize: '1.1rem', opacity: 0.8 }}>正在验证游戏状态...</p>
+      </div>
+    );
+  }
 
   if (scene === "menu") {
     return (
@@ -776,7 +850,7 @@ function readStoredSession(): StoredSession | null {
     return {
       scene: "game",
       sessionInfo: parsed.sessionInfo ?? null,
-      currentSaveName: parsed.currentSaveName || parsed.sessionInfo?.save_name || `存档_${Date.now()}`,
+      currentSaveName: parsed.currentSaveName || parsed.sessionInfo?.save_name || "",
     };
   } catch { return null; }
 }

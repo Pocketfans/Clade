@@ -39,6 +39,9 @@ class AdaptationService:
         self.regression_check_turns = 5
         self.drift_threshold = 3.0  # 累积漂移超过此值触发描述更新
         self.enable_llm_adaptation = True  # 是否启用LLM驱动的适应
+        # 【修复】添加并发限制，防止一次性生成过多AI任务
+        self.max_llm_adaptations_per_turn = 15
+        self.max_description_updates_per_turn = 10
         
     async def apply_adaptations_async(
         self,
@@ -174,54 +177,74 @@ class AdaptationService:
                 species.accumulated_adaptation_score = 0.0
                 species.last_description_update_turn = turn_index
 
-        # 并发执行描述更新
+        # 【修改】顺序执行描述更新（避免并发请求过多）
         if description_update_tasks:
-            logger.info(f"[适应性] 触发 {len(description_update_tasks)} 个物种的描述更新...")
-            results = await asyncio.gather(*description_update_tasks, return_exceptions=True)
+            # 【限制】如果任务过多，进行截断
+            if len(description_update_tasks) > self.max_description_updates_per_turn:
+                logger.info(f"[适应性] 描述更新任务过多 ({len(description_update_tasks)}), 限制为 {self.max_description_updates_per_turn}")
+                description_update_tasks = description_update_tasks[:self.max_description_updates_per_turn]
+                species_to_update = species_to_update[:self.max_description_updates_per_turn]
+
+            logger.info(f"[适应性] 开始顺序执行 {len(description_update_tasks)} 个物种的描述更新...")
             
-            for species, res in zip(species_to_update, results):
-                if isinstance(res, Exception):
-                    logger.error(f"[描述更新失败] {species.common_name}: {res}")
-                    continue
-                
-                new_desc = res.get("new_description")
-                if new_desc and len(new_desc) > 50:
-                    old_desc_preview = species.description[:20]
-                    species.description = new_desc
-                    logger.info(f"[描述更新] {species.common_name}: {old_desc_preview}... -> {new_desc[:20]}...")
+            # 【修改】顺序执行，逐个处理，避免并发
+            for idx, (species, task) in enumerate(zip(species_to_update, description_update_tasks)):
+                logger.info(f"[描述更新] 处理 {idx + 1}/{len(description_update_tasks)}: {species.common_name}")
+                try:
+                    res = await task
                     
-                    adaptation_events.append({
-                        "lineage_code": species.lineage_code,
-                        "common_name": species.common_name,
-                        "changes": {"description": "re-written based on traits"},
-                        "type": "description_update"
-                    })
-        
-        # 并发执行LLM智能适应
-        if llm_adaptation_tasks:
-            logger.info(f"[适应性] 执行 {len(llm_adaptation_tasks)} 个LLM智能适应任务...")
-            llm_results = await asyncio.gather(*llm_adaptation_tasks, return_exceptions=True)
+                    new_desc = res.get("new_description") if isinstance(res, dict) else None
+                    if new_desc and len(new_desc) > 50:
+                        old_desc_preview = species.description[:20]
+                        species.description = new_desc
+                        logger.info(f"[描述更新] {species.common_name}: {old_desc_preview}... -> {new_desc[:20]}...")
+                        
+                        adaptation_events.append({
+                            "lineage_code": species.lineage_code,
+                            "common_name": species.common_name,
+                            "changes": {"description": "re-written based on traits"},
+                            "type": "description_update"
+                        })
+                except Exception as e:
+                    logger.error(f"[描述更新失败] {species.common_name}: {e}")
             
-            for species, res in zip(llm_species_list, llm_results):
-                if isinstance(res, Exception):
-                    logger.warning(f"[LLM适应失败] {species.common_name}: {res}")
-                    continue
-                
-                if not isinstance(res, dict):
-                    continue
-                
-                # 应用LLM建议的特质变化
-                llm_changes = self._apply_llm_recommendations(species, res)
-                if llm_changes:
-                    adaptation_events.append({
-                        "lineage_code": species.lineage_code,
-                        "common_name": species.common_name,
-                        "changes": llm_changes,
-                        "type": "llm_adaptation",
-                        "analysis": res.get("analysis", ""),
-                        "rationale": res.get("rationale", ""),
-                    })
-                    logger.info(f"[LLM适应] {species.common_name}: {llm_changes}")
+            logger.info(f"[适应性] 描述更新完成")
+        
+        # 【修改】顺序执行LLM智能适应（避免并发请求过多）
+        if llm_adaptation_tasks:
+            # 【限制】限制最大适应数
+            if len(llm_adaptation_tasks) > self.max_llm_adaptations_per_turn:
+                logger.info(f"[适应性] LLM适应任务过多 ({len(llm_adaptation_tasks)}), 限制为 {self.max_llm_adaptations_per_turn}")
+                llm_adaptation_tasks = llm_adaptation_tasks[:self.max_llm_adaptations_per_turn]
+                llm_species_list = llm_species_list[:self.max_llm_adaptations_per_turn]
+
+            logger.info(f"[适应性] 开始顺序执行 {len(llm_adaptation_tasks)} 个LLM智能适应任务...")
+            
+            # 【修改】顺序执行，逐个处理，避免并发
+            for idx, (species, task) in enumerate(zip(llm_species_list, llm_adaptation_tasks)):
+                logger.info(f"[LLM适应] 处理 {idx + 1}/{len(llm_adaptation_tasks)}: {species.common_name}")
+                try:
+                    res = await task
+                    
+                    if not isinstance(res, dict):
+                        continue
+                    
+                    # 应用LLM建议的特质变化
+                    llm_changes = self._apply_llm_recommendations(species, res)
+                    if llm_changes:
+                        adaptation_events.append({
+                            "lineage_code": species.lineage_code,
+                            "common_name": species.common_name,
+                            "changes": llm_changes,
+                            "type": "llm_adaptation",
+                            "analysis": res.get("analysis", ""),
+                            "rationale": res.get("rationale", ""),
+                        })
+                        logger.info(f"[LLM适应] {species.common_name}: {llm_changes}")
+                except Exception as e:
+                    logger.warning(f"[LLM适应失败] {species.common_name}: {e}")
+            
+            logger.info(f"[适应性] LLM智能适应完成")
 
         return adaptation_events
     

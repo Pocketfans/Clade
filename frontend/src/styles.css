@@ -2415,6 +2415,26 @@ h1, h2, h3 {
   gap: 0.5rem;
   flex: 1;
   min-height: 0; /* 确保在 flex 容器中可以正确滚动 */
+  max-height: 300px; /* 限制最大高度，确保可以滚动 */
+}
+
+/* 美化滚动条 */
+.habitat-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.habitat-list::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.habitat-list::-webkit-scrollbar-thumb {
+  background: rgba(147, 197, 253, 0.3);
+  border-radius: 3px;
+}
+
+.habitat-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(147, 197, 253, 0.5);
 }
 
 .species-row {

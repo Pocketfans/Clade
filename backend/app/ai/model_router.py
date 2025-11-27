@@ -156,10 +156,20 @@ class ModelRouter:
     async def _get_client(self) -> httpx.AsyncClient:
         """Lazy init async client"""
         if self._client_session is None or self._client_session.is_closed:
-            self._client_session = httpx.AsyncClient(timeout=self.timeout)
+            # 【修复】增加连接池大小以匹配并发限制，避免连接耗尽导致的死锁
+            limits = httpx.Limits(max_keepalive_connections=self.concurrency_limit, max_connections=self.concurrency_limit + 10)
+            self._client_session = httpx.AsyncClient(timeout=self.timeout, limits=limits)
         return self._client_session
 
-    async def close(self):
+    async def reset_client(self):
+        """强制重置客户端会话"""
+        if self._client_session and not self._client_session.is_closed:
+            try:
+                await self._client_session.aclose()
+            except Exception:
+                pass
+        self._client_session = None
+        logger.info("[ModelRouter] Client session reset")
         if self._client_session and not self._client_session.is_closed:
             await self._client_session.aclose()
 
@@ -302,37 +312,17 @@ class ModelRouter:
                 try:
                     client = await self._get_client()
                     timeout = req.get("timeout") or self.timeout
-                    post_coro = client.post(
-                        req["url"],
-                        json=req["body"],
-                        headers=req["headers"],
-                        timeout=timeout,
-                    )
-                    try:
-                        response = await asyncio.wait_for(post_coro, timeout=timeout)
-                    except asyncio.TimeoutError:
-                        last_error = f"timeout after {timeout}s"
-                        self._total_timeouts += 1
-                        self._request_stats[capability]["timeout"] += 1
-                        process_time = time.time() - process_start
-                        total_wait = time.time() - queue_start
-                        
-                        # 详细的超时日志
-                        logger.error("=" * 60)
-                        logger.error(f"⏱️  请求超时详情 - {capability}")
-                        logger.error(f"   请求ID: #{request_id} | 尝试: {attempt + 1}/{self.max_retries}")
-                        logger.error(f"   超时设置: {timeout}s | 实际等待: {process_time:.1f}s | 总耗时: {total_wait:.1f}s")
-                        logger.error(f"   当前状态: 活跃={self._active_requests} 排队={self._queued_requests} 超时率={self._total_timeouts}/{self._total_requests}")
-                        if self._active_requests >= self.concurrency_limit:
-                            logger.error(f"   ⚠️ 并发已满！可能是请求太多或API响应太慢")
-                        logger.error("=" * 60)
-                        
-                        self._log_diagnostics("⏱️ 超时", capability, f"请求#{request_id}")
-                        response = None
                     
-                    if response is None:
-                        self._active_requests -= 1
-                        raise asyncio.TimeoutError(last_error)
+                    # 使用更长的 httpx 超时，让 asyncio.wait_for 来控制整体超时
+                    response = await asyncio.wait_for(
+                        client.post(
+                            req["url"],
+                            json=req["body"],
+                            headers=req["headers"],
+                            timeout=timeout + 5,  # httpx 超时比 asyncio 长一点
+                        ),
+                        timeout=timeout
+                    )
                     
                     response.raise_for_status()
                     data = response.json()
@@ -358,11 +348,38 @@ class ModelRouter:
                         "content": parsed_content,
                         "raw": data,
                     }
-                except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+                except asyncio.TimeoutError:
+                    # 超时处理 - 只在这里减少计数器一次
+                    last_error = f"timeout after {timeout}s"
+                    self._total_timeouts += 1
+                    self._request_stats[capability]["timeout"] += 1
+                    process_time = time.time() - process_start
+                    total_wait = time.time() - queue_start
+                    
+                    # 详细的超时日志
+                    logger.error("=" * 60)
+                    logger.error(f"⏱️  请求超时详情 - {capability}")
+                    logger.error(f"   请求ID: #{request_id} | 尝试: {attempt + 1}/{self.max_retries}")
+                    logger.error(f"   超时设置: {timeout}s | 实际等待: {process_time:.1f}s | 总耗时: {total_wait:.1f}s")
+                    logger.error(f"   当前状态: 活跃={self._active_requests} 排队={self._queued_requests} 超时率={self._total_timeouts}/{self._total_requests}")
+                    if self._active_requests >= self.concurrency_limit:
+                        logger.error(f"   ⚠️ 并发已满！可能是请求太多或API响应太慢")
+                    logger.error("=" * 60)
+                    
+                    self._active_requests -= 1
+                    self._log_diagnostics("⏱️ 超时", capability, f"请求#{request_id}")
+                    
+                    # 【修复】超时后重置客户端，防止连接卡死
+                    if attempt == self.max_retries - 1:
+                        logger.warning(f"[ModelRouter] 请求连续超时，尝试重置客户端连接")
+                        # 不等待重置，避免阻塞
+                        asyncio.create_task(self.reset_client())
+                        
+                except httpx.HTTPError as exc:
                     last_error = str(exc)
                     self._active_requests -= 1
                     self._request_stats[capability]["error"] += 1
-                    self._log_diagnostics("❌ 错误", capability, f"请求#{request_id} {exc}")
+                    self._log_diagnostics("❌ HTTP错误", capability, f"请求#{request_id} {exc}")
                 except Exception as e:
                     last_error = str(e)
                     self._active_requests -= 1
@@ -371,7 +388,13 @@ class ModelRouter:
                     
             if attempt < self.max_retries - 1:
                 self._queued_requests += 1  # 重试时重新排队
-                await asyncio.sleep(min(1.0, 0.3 * (attempt + 1)))
+                # 【优化】429 Rate Limit 需要更长的退避时间
+                sleep_time = min(2.0, 0.5 * (attempt + 1))
+                if "429" in last_error:
+                    sleep_time = 2.0 * (attempt + 1) # 2s, 4s, 6s...
+                    logger.warning(f"[ModelRouter] 触发429限流，等待 {sleep_time}s 后重试...")
+                
+                await asyncio.sleep(sleep_time)
         
         return {
             **req["meta"],
@@ -412,17 +435,31 @@ class ModelRouter:
             timeout = req.get("timeout") or self.timeout
             
             try:
+                # 【修复】流式请求整体超时保护
                 async with client.stream(
                     "POST",
                     req["url"],
                     json=req["body"],
                     headers=req["headers"],
-                    timeout=timeout,
+                    timeout=timeout + 10, # 给予连接建立一点额外缓冲
                 ) as response:
                     response.raise_for_status()
                     yield self._stream_status_event(capability, "connected")
                     first_chunk = True
-                    async for line in response.aiter_lines():
+                    
+                    # 【修复】逐行读取增加超时保护，防止连接僵死
+                    iterator = response.aiter_lines()
+                    while True:
+                        try:
+                            # 每行读取最多等待 30 秒（足以应对大部分思考时间）
+                            line = await asyncio.wait_for(iterator.__anext__(), timeout=30.0)
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError:
+                            logger.error(f"[ModelRouter] Stream read timeout for {capability}")
+                            yield self._stream_error_event(capability, "Read timeout")
+                            break
+                            
                         if line.startswith("data: "):
                             data = line[6:]
                             if data.strip() == "[DONE]":

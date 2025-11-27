@@ -89,7 +89,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  padding-bottom: 1rem;
 }
 
 /* ========== Providers Tab ========== */
@@ -736,6 +737,7 @@
 
 .memory-main .test-section {
   margin-top: 1.5rem;
+  padding-bottom: 1rem;
 }
 
 .memory-stats {

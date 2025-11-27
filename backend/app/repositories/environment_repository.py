@@ -3,8 +3,6 @@
 from collections.abc import Iterable
 
 from pathlib import Path
-import os
-import re
 
 from sqlalchemy import text
 from sqlalchemy.sql import func
@@ -95,153 +93,21 @@ class EnvironmentRepository:
                 print("[环境仓储] 添加 map_seed 列...")
                 session.exec(text("ALTER TABLE map_state ADD COLUMN map_seed INTEGER DEFAULT NULL"))
 
-    def _get_env_path(self) -> Path:
-        """获取 .env 文件路径（项目根目录）"""
-        # 从 config.py 同目录往上3层到项目根目录
-        return Path(__file__).resolve().parents[3] / ".env"
-    
-    def _load_env_config(self) -> dict:
-        """从 .env 文件加载 AI 配置"""
-        env_path = self._get_env_path()
-        if not env_path.exists():
-            return {}
-        
-        env_vars = {}
-        try:
-            with open(env_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    # 跳过注释和空行
-                    if not line or line.startswith("#"):
-                        continue
-                    # 解析 KEY=VALUE
-                    match = re.match(r'^([A-Z_]+)=(.*)$', line)
-                    if match:
-                        key, value = match.groups()
-                        # 移除引号
-                        value = value.strip().strip('"').strip("'")
-                        env_vars[key] = value
-        except Exception as e:
-            print(f"[配置] 读取 .env 文件失败: {e}")
-        
-        return env_vars
-    
-    def _save_env_config(self, config: UIConfig) -> None:
-        """将主要 AI 配置保存到 .env 文件（项目根目录）"""
-        env_path = self._get_env_path()
-        
-        # 读取现有配置
-        existing_lines = []
-        if env_path.exists():
-            try:
-                with open(env_path, "r", encoding="utf-8") as f:
-                    existing_lines = f.readlines()
-            except Exception as e:
-                print(f"[配置] 读取现有 .env 文件失败: {e}")
-        
-        # 构建需要更新的键值对
-        updates = {}
-        
-        # 如果有默认服务商，更新 AI 配置
-        if config.default_provider_id and config.default_provider_id in config.providers:
-            provider = config.providers[config.default_provider_id]
-            updates["AI_PROVIDER"] = provider.type or "openai"
-            if provider.base_url:
-                updates["AI_BASE_URL"] = provider.base_url
-            if provider.api_key:
-                updates["AI_API_KEY"] = provider.api_key
-            if config.default_model:
-                updates["AI_MODEL"] = config.default_model
-        
-        # 更新 Embedding 配置
-        if config.embedding_provider_id and config.embedding_provider_id in config.providers:
-            emb_provider = config.providers[config.embedding_provider_id]
-            updates["EMBEDDING_PROVIDER"] = emb_provider.type or "openai"
-            if emb_provider.base_url:
-                updates["EMBEDDING_BASE_URL"] = emb_provider.base_url
-            if emb_provider.api_key:
-                updates["EMBEDDING_API_KEY"] = emb_provider.api_key
-            if config.embedding_model:
-                updates["EMBEDDING_MODEL"] = config.embedding_model
-        
-        # 更新现有行或添加新行
-        updated_keys = set()
-        new_lines = []
-        
-        for line in existing_lines:
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                new_lines.append(line)
-                continue
-            
-            match = re.match(r'^([A-Z_]+)=', stripped)
-            if match:
-                key = match.group(1)
-                if key in updates:
-                    # 更新此行
-                    new_lines.append(f"{key}={updates[key]}\n")
-                    updated_keys.add(key)
-                else:
-                    new_lines.append(line)
-            else:
-                new_lines.append(line)
-        
-        # 添加新的键（如果还没有）
-        for key, value in updates.items():
-            if key not in updated_keys:
-                new_lines.append(f"{key}={value}\n")
-        
-        # 写回文件
-        try:
-            with open(env_path, "w", encoding="utf-8") as f:
-                f.writelines(new_lines)
-            print(f"[配置] 已更新 .env 文件")
-        except Exception as e:
-            print(f"[配置] 写入 .env 文件失败: {e}")
-
     def load_ui_config(self, path: Path) -> UIConfig:
-        """加载 UI 配置，优先从 .env 读取主要 AI 配置"""
+        """仅从 JSON 文件加载 UI 配置"""
         # 1. 从 JSON 文件加载
         if path.exists():
             config = UIConfig.model_validate_json(path.read_text(encoding="utf-8"))
         else:
             config = UIConfig()
-        
-        # 2. 从 .env 文件读取并补充/覆盖配置
-        env_vars = self._load_env_config()
-        
-        # 如果 .env 有配置且 JSON 中没有服务商，则从 .env 创建默认服务商
-        if env_vars and not config.providers:
-            ai_provider_id = "env_default"
-            ai_provider = ProviderConfig(
-                id=ai_provider_id,
-                name="环境变量配置",
-                type=env_vars.get("AI_PROVIDER", "openai"),
-                base_url=env_vars.get("AI_BASE_URL"),
-                api_key=env_vars.get("AI_API_KEY"),
-                models=[]
-            )
-            config.providers = {ai_provider_id: ai_provider}
-            config.default_provider_id = ai_provider_id
-            config.default_model = env_vars.get("AI_MODEL")
-            
-            # Embedding 配置
-            if env_vars.get("EMBEDDING_API_KEY") or env_vars.get("EMBEDDING_BASE_URL"):
-                config.embedding_provider_id = ai_provider_id
-                config.embedding_model = env_vars.get("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-4B")
-        
         return config
 
     def save_ui_config(self, path: Path, config: UIConfig) -> UIConfig:
-        """保存 UI 配置，同时将主要配置写入 .env 文件"""
+        """保存 UI 配置到 JSON 文件"""
         # 1. 保存到 JSON 文件
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(config.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8")
-        
-        # 2. 将主要 AI 配置同步到 .env 文件
-        self._save_env_config(config)
-        
-        print(f"[配置] 已保存配置到 {path} 和 .env")
+        print(f"[配置] 已保存配置到 {path}")
         return config
 
     def list_habitats(self) -> list[HabitatPopulation]:

@@ -86,24 +86,36 @@ class SpeciationService:
             if current_population < min_population:
                 continue
             
-            # 条件2：演化潜力
-            evo_potential = species.hidden_traits.get("evolution_potential", 0.0)
-            if evo_potential < 0.7:
+            # 条件2：演化潜力（放宽门槛 + 累积压力补偿）
+            # 【修复】默认值从0.0改为0.5，门槛从0.7降到0.5
+            evo_potential = species.hidden_traits.get("evolution_potential", 0.5)
+            speciation_pressure = species.morphology_stats.get("speciation_pressure", 0.0) or 0.0
+            
+            # 放宽条件：演化潜力≥0.5，或者累积了足够的分化压力（连续多回合满足其他条件）
+            if evo_potential < 0.5 and speciation_pressure < 0.3:
                 continue
             
             # 条件3：压力或资源饱和
             has_pressure = (1.5 <= average_pressure <= 15.0) or (resource_pressure > 0.8)
             
-            # 自然辐射演化
+            # 自然辐射演化（繁荣物种分化）
+            # 【修复】提高辐射演化概率，让繁荣物种更容易分化
             if not has_pressure:
-                if survivors > min_population * 2 and random.random() < 0.01:
+                # 种群规模加成：种群越大，辐射演化概率越高
+                pop_factor = min(1.0, survivors / (min_population * 3))
+                # 累积压力加成：连续满足条件但未分化的物种更容易辐射演化
+                radiation_chance = 0.03 + (pop_factor * 0.05) + (speciation_pressure * 0.2)
+                
+                if survivors > min_population * 1.5 and random.random() < radiation_chance:
                     has_pressure = True
                     speciation_type = "辐射演化"
+                    logger.info(f"[辐射演化] {species.common_name} 触发辐射演化 (种群:{survivors:,}, 概率:{radiation_chance:.1%})")
                 else:
                     continue
             
-            # 条件4：适应压力
-            if death_rate < 0.05 or death_rate > 0.60:
+            # 条件4：适应压力（扩大死亡率窗口）
+            # 【修复】从5%-60%扩大到3%-70%，给繁荣物种和濒危物种更多机会
+            if death_rate < 0.03 or death_rate > 0.70:
                 continue
             
             # 条件5：随机性 (应用密度制约)
@@ -114,13 +126,15 @@ class SpeciationService:
             total_days = 500_000 * 365
             generations = total_days / max(1.0, generation_time)
             
-            # 基于对数的代数加成：每多一个数量级，概率增加 0.05
+            # 基于对数的代数加成：每多一个数量级，概率增加 0.08（从0.05提升）
             # 例如：
-            # 大型动物 (30年=1万代) -> log10(10000)=4 -> bonus=0.20
-            # 微生物 (1天=1.8亿代) -> log10(1.8e8)=8.2 -> bonus=0.41
-            generation_bonus = math.log10(max(10, generations)) * 0.05
+            # 大型动物 (30年=1万代) -> log10(10000)=4 -> bonus=0.32
+            # 微生物 (1天=1.8亿代) -> log10(1.8e8)=8.2 -> bonus=0.66
+            generation_bonus = math.log10(max(10, generations)) * 0.08
             
-            base_chance = ((0.2 + (evo_potential * 0.5)) * 0.55 + generation_bonus) * density_damping
+            # 【修复】提高基础分化率：50万年足够发生多次分化尝试
+            # 基础概率从0.2提升到0.35，让更多物种有机会分化
+            base_chance = ((0.35 + (evo_potential * 0.4)) * 0.7 + generation_bonus) * density_damping
             
             speciation_bonus = 0.0
             speciation_type = "生态隔离"
@@ -148,9 +162,23 @@ class SpeciationService:
                 speciation_bonus += 0.08
                 speciation_type = "协同演化"
             
-            speciation_chance = base_chance + speciation_bonus
+            # 【修复】将累积分化压力加入概率计算
+            # 每回合满足条件但未分化的物种，下回合分化概率+10%
+            speciation_chance = base_chance + speciation_bonus + speciation_pressure
+            
             if random.random() > speciation_chance:
+                # 【关键】分化失败时累积压力，最高0.5（确保5回合后必定分化）
+                new_pressure = min(0.5, speciation_pressure + 0.10)
+                species.morphology_stats["speciation_pressure"] = new_pressure
+                species_repository.upsert(species)
+                logger.debug(
+                    f"[分化累积] {species.common_name} 分化失败, "
+                    f"累积压力: {speciation_pressure:.1%} → {new_pressure:.1%}"
+                )
                 continue
+            
+            # 分化成功，重置累积压力
+            species.morphology_stats["speciation_pressure"] = 0.0
             
             # ========== 【世代感知模型】动态子种数量 ==========
             # 决定分化出几个子种（基于世代数和种群规模）
@@ -268,18 +296,27 @@ class SpeciationService:
             logger.info("[分化] 没有可执行的AI任务，本回合跳过")
             return []
 
-        logger.info(f"[分化] 并发执行 {len(active_batch)} 个分化任务 (剩余排队 {len(self._deferred_requests)})")
-        tasks = [
-            self._call_ai_wrapper(entry["payload"], stream_callback)
-            for entry in active_batch
-        ]
-        task_contexts = [entry["ctx"] for entry in active_batch]
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        logger.info(f"[分化] 开始顺序执行 {len(active_batch)} 个分化任务 (剩余排队 {len(self._deferred_requests)})")
         
+        # 【修改】完全顺序执行，避免并发请求过多导致API卡死
+        results = []
+        
+        for idx, entry in enumerate(active_batch):
+            logger.info(f"[分化] 执行任务 {idx + 1}/{len(active_batch)}: {entry['ctx']['parent'].common_name} -> {entry['ctx']['new_code']}")
+            
+            try:
+                result = await self._call_ai_wrapper(entry["payload"], stream_callback)
+                results.append(result)
+            except Exception as e:
+                logger.error(f"[分化] 任务 {idx + 1} 失败: {e}")
+                results.append(e)
+
         # 3. 结果处理与写入
+        logger.info(f"[分化] 开始处理 {len(results)} 个AI结果")
         new_species_events: list[BranchingEvent] = []
-        for res, entry, ctx in zip(results, active_batch, task_contexts):
+        for res, entry in zip(results, active_batch):
+            ctx = entry["ctx"]  # 从entry中提取ctx
+            
             if isinstance(res, Exception):
                 logger.error(f"[分化AI异常] {res}")
                 self._queue_deferred_request(entry)
@@ -315,7 +352,9 @@ class SpeciationService:
                 ai_payload=ai_content,
                 average_pressure=average_pressure,
             )
+            logger.info(f"[分化] 新物种 {new_species.common_name} created_turn={new_species.created_turn} (传入的turn_index={turn_index})")
             new_species = species_repository.upsert(new_species)
+            logger.info(f"[分化] upsert后 {new_species.common_name} created_turn={new_species.created_turn}")
             
             # ⚠️ 关键修复：子代继承父代的栖息地分布
             # 而不是重新计算分布（因为分化通常发生在同一地点）
@@ -516,6 +555,10 @@ class SpeciationService:
         # 继承父代的 abstract_traits，并应用 AI 建议的变化
         abstract = TraitConfig.merge_traits(parent.abstract_traits, {})
         trait_changes = ai_payload.get("trait_changes") or {}
+        
+        # 【关键修复】强制差异化和权衡机制
+        # 1. 先应用AI建议的变化
+        applied_changes = {}
         if isinstance(trait_changes, dict):
             for trait_name, change in trait_changes.items():
                 try:
@@ -523,12 +566,21 @@ class SpeciationService:
                         change_value = float(change.replace("+", ""))
                     else:
                         change_value = float(change)
-                    
-                    current_value = abstract.get(trait_name, 5.0)
-                    new_val = current_value + change_value
-                    abstract[trait_name] = TraitConfig.clamp_trait(round(new_val, 2))
+                    applied_changes[trait_name] = change_value
                 except (ValueError, TypeError):
                     pass
+        
+        # 2. 强制权衡：如果只增不减，必须添加减少项
+        applied_changes = self._enforce_trait_tradeoffs(abstract, applied_changes, new_code)
+        
+        # 3. 强制差异化：基于谱系编码添加随机偏移
+        applied_changes = self._add_differentiation_noise(applied_changes, new_code)
+        
+        # 4. 应用最终变化
+        for trait_name, change_value in applied_changes.items():
+            current_value = abstract.get(trait_name, 5.0)
+            new_val = current_value + change_value
+            abstract[trait_name] = TraitConfig.clamp_trait(round(new_val, 2))
         
         # 应用形态学变化
         morphology_changes = ai_payload.get("morphology_changes") or {}
@@ -1469,4 +1521,160 @@ class SpeciationService:
         
         # 限制上限（避免辐射演化过度）
         return min(5, total_offspring)
+    
+    def _enforce_trait_tradeoffs(
+        self, 
+        current_traits: dict[str, float], 
+        proposed_changes: dict[str, float],
+        lineage_code: str
+    ) -> dict[str, float]:
+        """【强制权衡机制】确保属性变化有增必有减
+        
+        原理：50万年的演化不应该是纯粹的"升级"，而是适应性权衡
+        - 如果提议的变化只增不减，自动添加减少项
+        - 确保属性总和不会无限增长
+        
+        Args:
+            current_traits: 当前属性字典
+            proposed_changes: AI提议的变化 {"耐寒性": 2.0, "运动能力": 1.0}
+            lineage_code: 谱系编码（用于确定哪些属性减少）
+            
+        Returns:
+            调整后的变化字典
+        """
+        import random
+        import hashlib
+        
+        if not proposed_changes:
+            return proposed_changes
+        
+        # 计算总变化
+        increases = {k: v for k, v in proposed_changes.items() if v > 0}
+        decreases = {k: v for k, v in proposed_changes.items() if v < 0}
+        
+        total_increase = sum(increases.values())
+        total_decrease = abs(sum(decreases.values()))
+        
+        # 如果已经有足够的减少，直接返回
+        if total_decrease >= total_increase * 0.3:
+            return proposed_changes
+        
+        # 需要添加的减少量（至少抵消30%的增加）
+        needed_decrease = total_increase * 0.4 - total_decrease
+        if needed_decrease <= 0:
+            return proposed_changes
+        
+        # 基于谱系编码生成确定性随机种子（确保同一物种每次结果一致）
+        seed = int(hashlib.md5(lineage_code.encode()).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+        
+        # 选择要减少的属性（优先选择当前值较高且未被增加的）
+        adjusted = dict(proposed_changes)
+        candidate_traits = [
+            (name, value) 
+            for name, value in current_traits.items() 
+            if name not in increases and value > 3.0  # 只减少中高值属性
+        ]
+        
+        if not candidate_traits:
+            # 如果没有合适的候选，从增加项中随机选一个减少幅度
+            for trait_name in list(increases.keys()):
+                if needed_decrease <= 0:
+                    break
+                reduction = min(needed_decrease, increases[trait_name] * 0.5)
+                adjusted[trait_name] = increases[trait_name] - reduction
+                needed_decrease -= reduction
+            return adjusted
+        
+        # 随机选择1-3个属性进行减少
+        rng.shuffle(candidate_traits)
+        num_to_reduce = min(len(candidate_traits), rng.randint(1, 3))
+        
+        for trait_name, current_value in candidate_traits[:num_to_reduce]:
+            if needed_decrease <= 0:
+                break
+            # 减少幅度与当前值成比例（高值属性减更多）
+            max_reduction = min(needed_decrease, current_value * 0.2, 3.0)
+            reduction = rng.uniform(max_reduction * 0.5, max_reduction)
+            adjusted[trait_name] = -round(reduction, 2)
+            needed_decrease -= reduction
+            logger.debug(f"[权衡] {lineage_code}: {trait_name} -{reduction:.2f} (权衡代价)")
+        
+        return adjusted
+    
+    def _add_differentiation_noise(
+        self, 
+        trait_changes: dict[str, float],
+        lineage_code: str
+    ) -> dict[str, float]:
+        """【差异化机制】为不同子代添加随机偏移
+        
+        原理：同一次分化的多个子代应该有不同的演化方向
+        - 基于谱系编码的最后字符（a, b, c...）确定偏移模式
+        - 确保兄弟物种之间有明显差异
+        
+        Args:
+            trait_changes: 当前变化字典
+            lineage_code: 谱系编码（如 "A1a", "A1b", "A1c"）
+            
+        Returns:
+            添加差异化后的变化字典
+        """
+        import random
+        import hashlib
+        
+        if not trait_changes:
+            return trait_changes
+        
+        # 基于完整谱系编码生成唯一随机种子
+        seed = int(hashlib.md5(lineage_code.encode()).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+        
+        # 提取最后一个字符来确定子代编号
+        last_char = lineage_code[-1] if lineage_code else 'a'
+        offspring_index = ord(last_char.lower()) - ord('a')  # a=0, b=1, c=2...
+        
+        # 定义演化方向偏好（不同子代偏向不同方向）
+        # 偏好模式：每个子代有2-3个属性获得额外加成，另外2-3个属性减少
+        direction_patterns = [
+            {"favor": ["耐寒性", "耐热性"], "disfavor": ["运动能力", "繁殖速度"]},  # 温度适应型
+            {"favor": ["运动能力", "攻击性"], "disfavor": ["耐寒性", "社会性"]},     # 活动型
+            {"favor": ["繁殖速度", "社会性"], "disfavor": ["攻击性", "运动能力"]},   # 繁殖型
+            {"favor": ["防御性", "耐旱性"], "disfavor": ["繁殖速度", "攻击性"]},      # 防御型
+            {"favor": ["耐盐性", "耐旱性"], "disfavor": ["社会性", "防御性"]},        # 环境适应型
+        ]
+        
+        pattern = direction_patterns[offspring_index % len(direction_patterns)]
+        
+        adjusted = dict(trait_changes)
+        
+        # 对偏好属性添加额外加成（±0.3到±1.0）
+        for trait in pattern["favor"]:
+            if trait in adjusted:
+                bonus = rng.uniform(0.2, 0.8)
+                adjusted[trait] = round(adjusted[trait] + bonus, 2)
+            else:
+                # 即使AI没提议，也添加小幅增加
+                adjusted[trait] = round(rng.uniform(0.3, 0.8), 2)
+        
+        # 对不偏好属性添加额外减少
+        for trait in pattern["disfavor"]:
+            if trait in adjusted:
+                penalty = rng.uniform(0.2, 0.6)
+                adjusted[trait] = round(adjusted[trait] - penalty, 2)
+            else:
+                # 添加小幅减少
+                adjusted[trait] = round(-rng.uniform(0.2, 0.5), 2)
+        
+        # 添加额外的随机噪声（确保即使相同模式也有差异）
+        for trait_name in list(adjusted.keys()):
+            noise = rng.uniform(-0.3, 0.3)
+            adjusted[trait_name] = round(adjusted[trait_name] + noise, 2)
+        
+        logger.debug(
+            f"[差异化] {lineage_code}: 偏好{pattern['favor']}, "
+            f"变化总和={sum(adjusted.values()):.2f}"
+        )
+        
+        return adjusted
 

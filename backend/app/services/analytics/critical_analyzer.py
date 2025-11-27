@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from ...ai.model_router import ModelRouter
 from ...simulation.species import MortalityResult
+
+logger = logging.getLogger(__name__)
 
 
 class CriticalAnalyzer:
@@ -11,15 +14,24 @@ class CriticalAnalyzer:
     
     这是最高级别的 AI 处理，为每个 critical 物种提供详细的个性化分析。
     通常 critical 层最多包含3个玩家主动标记的物种。
+    
+    【优化】使用顺序执行队列，避免并发请求过多导致API卡死。
     """
 
     def __init__(self, router: ModelRouter) -> None:
         self.router = router
 
     async def enhance_async(self, results: list[MortalityResult]) -> None:
-        """为 critical 层物种的死亡率结果添加 AI 生成的详细叙事（异步版）。"""
-        tasks = []
-        for item in results:
+        """为 critical 层物种的死亡率结果添加 AI 生成的详细叙事（顺序执行队列）。"""
+        if not results:
+            return
+        
+        logger.info(f"[Critical增润] 开始处理 {len(results)} 个物种（顺序队列）")
+        
+        # 【修改】顺序执行，逐个处理，避免并发
+        for idx, item in enumerate(results):
+            logger.info(f"[Critical增润] 处理 {idx + 1}/{len(results)}: {item.species.common_name}")
+            
             payload = {
                 "lineage_code": item.species.lineage_code,
                 "population": item.survivors,
@@ -30,28 +42,25 @@ class CriticalAnalyzer:
                     "saturation": item.resource_pressure,
                 },
             }
-            tasks.append(self.router.ainvoke("critical_detail", payload))
-        
-        if not tasks:
-            return
-        
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        for item, response in zip(results, responses):
-            if isinstance(response, Exception):
+            
+            try:
+                response = await self.router.ainvoke("critical_detail", payload)
+                
+                # 从响应中提取 content
+                content = response.get("content") if isinstance(response, dict) else None
+                if isinstance(content, dict):
+                    summary = content.get("summary") or content.get("text") or "重要物种细化完成"
+                elif isinstance(content, str):
+                    summary = content
+                else:
+                    summary = "重要物种细化完成"
+                item.notes.append(str(summary))
+                
+            except Exception as e:
+                logger.warning(f"[Critical增润] {item.species.common_name} 处理失败: {e}")
                 item.notes.append("重要物种细化完成")
                 continue
             
-            # 从响应中提取 content
-            content = response.get("content") if isinstance(response, dict) else None
-            if isinstance(content, dict):
-                summary = content.get("summary") or content.get("text") or "重要物种细化完成"
-            elif isinstance(content, str):
-                summary = content
-            else:
-                summary = "重要物种细化完成"
-            item.notes.append(str(summary))
-
             # 持久化高光时刻到物种历史
             if summary and len(str(summary)) > 10:
                 timestamp = f"Turn {item.species.morphology_stats.get('extinction_turn', 'Current')}"

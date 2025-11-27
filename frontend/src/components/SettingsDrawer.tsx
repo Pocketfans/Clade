@@ -9,7 +9,7 @@ import "./SettingsDrawer.css";
 interface Props {
   config: UIConfig;
   onClose: () => void;
-  onSave: (config: UIConfig) => void;
+  onSave: (config: UIConfig) => Promise<void>;
 }
 
 type Tab = "connection" | "models" | "memory";
@@ -24,7 +24,7 @@ const PROVIDER_PRESETS = [
     id: "deepseek_official",
     name: "DeepSeek 官方",
     type: "openai",
-    base_url: "https://api.deepseek.com",
+    base_url: "https://api.deepseek.com/v1",
     description: "DeepSeek 官方 API（支持 deepseek-chat, deepseek-reasoner 等模型）",
     models: ["deepseek-chat", "deepseek-reasoner"],
     logo: "🔮",
@@ -324,25 +324,9 @@ function supportsThinking(provider: ProviderConfig | null): boolean {
   return provider.base_url.includes("siliconflow") || provider.base_url.includes("volces.com");
 }
 
-function validateConfig(form: UIConfig): Record<string, string> {
-  const errors: Record<string, string> = {};
-  
-  // 检查是否有默认服务商
-  if (!form.default_provider_id) {
-    errors.default_provider = "请选择默认服务商";
-  } else {
-    const defaultProvider = form.providers[form.default_provider_id];
-    if (!defaultProvider?.api_key) {
-      errors.default_provider = "默认服务商缺少 API Key";
-    }
-  }
-  
-  // 检查默认模型
-  if (!form.default_model) {
-    errors.default_model = "请设置默认模型";
-  }
-  
-  return errors;
+function validateConfig(_form: UIConfig): Record<string, string> {
+  // 不再强制要求默认服务商和默认模型，只保存服务商列表信息即可
+  return {};
 }
 
 // ========== 主组件 ==========
@@ -525,22 +509,22 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
   }, [form]);
 
   const handleSave = useCallback(async () => {
-    // 验证配置
+    console.log("[设置] 开始保存配置...");
+    
+    // 验证配置（已移除强制验证）
     const errors = validateConfig(form);
     dispatch({ type: 'SET_VALIDATION_ERRORS', errors });
-    
-    if (Object.keys(errors).length > 0) {
-      // 有验证错误，但仍允许保存（只是警告）
-    }
 
     dispatch({ type: 'SET_SAVING', saving: true });
     dispatch({ type: 'SET_SAVE_SUCCESS', success: false });
     
     try {
+      console.log("[设置] 调用 onSave...");
       await onSave(form);
+      console.log("[设置] 保存成功！");
       dispatch({ type: 'SET_SAVE_SUCCESS', success: true });
     } catch (error) {
-      console.error("保存配置失败:", error);
+      console.error("[设置] 保存配置失败:", error);
       showConfirm("保存失败", String(error), () => dispatch({ type: 'CLOSE_CONFIRM' }), 'danger');
     } finally {
       dispatch({ type: 'SET_SAVING', saving: false });

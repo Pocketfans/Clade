@@ -57,10 +57,18 @@ export async function runTurn(pressures: PressureDraft[] = []): Promise<TurnRepo
   }
   
   console.log("📦 [演化] 收到后端响应，正在解析数据...");
-  const data = await res.json();
+  
+  let data: TurnReport[];
+  try {
+    data = await res.json();
+    console.log("✅ [演化] JSON解析成功，报告数量:", data?.length || 0);
+  } catch (parseError) {
+    console.error("❌ [演化] JSON解析失败:", parseError);
+    throw new Error("解析推演结果失败");
+  }
   
   if (data && data.length > 0) {
-    const report = data[data.length - 1];
+    const report = data[data.length - 1] as any;
     console.log("📊 [演化] 回合", report.turn_index, "数据:");
     console.log("  - 物种总数:", report.species_summary?.total_species || 0);
     console.log("  - 总人口:", report.species_summary?.total_population?.toLocaleString() || 0);
@@ -68,7 +76,7 @@ export async function runTurn(pressures: PressureDraft[] = []): Promise<TurnRepo
     console.log("  - 灭绝事件:", report.extinctions?.length || 0);
   }
   
-  return data;
+  return data || [];
 }
 
 export async function fetchMapOverview(viewMode: string = "terrain", speciesCode?: string): Promise<MapOverview> {
@@ -86,19 +94,37 @@ export async function fetchMapOverview(viewMode: string = "terrain", speciesCode
 }
 
 export async function fetchUIConfig(): Promise<UIConfig> {
+  console.log("[API] 正在加载配置...");
   const res = await fetch("/api/config/ui");
-  if (!res.ok) throw new Error("config fetch failed");
-  return res.json();
+  if (!res.ok) {
+    console.error("[API] 加载配置失败:", res.status);
+    throw new Error("config fetch failed");
+  }
+  const config = await res.json();
+  console.log("[API] 配置加载成功:", config);
+  return config;
 }
 
 export async function updateUIConfig(config: UIConfig): Promise<UIConfig> {
+  console.log("[API] 正在保存配置...", config);
+  
   const res = await fetch("/api/config/ui", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
   });
-  if (!res.ok) throw new Error("config save failed");
-  return res.json();
+  
+  console.log("[API] 保存配置响应状态:", res.status);
+  
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    console.error("[API] 保存配置失败:", errorData);
+    throw new Error(errorData.detail || `保存配置失败 (HTTP ${res.status})`);
+  }
+  
+  const result = await res.json();
+  console.log("[API] 配置保存成功:", result);
+  return result;
 }
 
 export async function fetchPressureTemplates(): Promise<PressureTemplate[]> {

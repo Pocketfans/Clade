@@ -345,7 +345,7 @@ def apply_ui_config(config: UIConfig) -> UIConfig:
         embedding_service.enabled = True
     elif config.embedding_api_key and config.embedding_base_url:
         # 旧配置回退
-        embedding_service.provider = config.embedding_provider or settings.embedding_provider
+        embedding_service.provider = settings.embedding_provider
         embedding_service.api_base_url = config.embedding_base_url
         embedding_service.api_key = config.embedding_api_key
         embedding_service.model = config.embedding_model
@@ -423,17 +423,20 @@ def initialize_environment() -> None:
         print(traceback.format_exc())
 
 
-def push_simulation_event(event_type: str, message: str, category: str = "其他"):
+def push_simulation_event(event_type: str, message: str, category: str = "其他", **extra):
     """推送演化事件到前端"""
     global simulation_events, simulation_running
     if simulation_running:
         try:
-            simulation_events.put({
+            event = {
                 "type": event_type,
                 "message": message,
                 "category": category,
                 "timestamp": __import__("time").time()
-            })
+            }
+            # 添加额外参数（如AI进度信息）
+            event.update(extra)
+            simulation_events.put(event)
         except Exception as e:
             print(f"[事件推送错误] {str(e)}")
 
@@ -447,15 +450,23 @@ async def stream_simulation_events():
         # 发送连接确认
         yield f"data: {json.dumps({'type': 'connected', 'message': '已连接到事件流'})}\n\n"
         
+        idle_count = 0
         while True:
             try:
-                # 检查是否有新事件（非阻塞）
-                if not simulation_events.empty():
+                # 批量获取所有待发送事件（提高吞吐量）
+                events_sent = 0
+                while not simulation_events.empty() and events_sent < 20:
                     event = simulation_events.get_nowait()
                     yield f"data: {json.dumps(event)}\n\n"
-                else:
-                    # 发送心跳保持连接
-                    yield f": heartbeat\n\n"
+                    events_sent += 1
+                    idle_count = 0
+                
+                if events_sent == 0:
+                    idle_count += 1
+                    # 空闲时发送 SSE 心跳保持连接
+                    if idle_count >= 50:  # 每5秒发一次心跳
+                        yield f": keepalive\n\n"
+                        idle_count = 0
                     await asyncio.sleep(0.1)
             except Exception as e:
                 print(f"[SSE错误] {str(e)}")
@@ -1122,21 +1133,24 @@ def test_api_connection(request: dict) -> dict:
             # 测试 chat API
             # URL 构建优化：自动适配不同的 API Base 风格
             if base_url.endswith("/v1"):
+                # 标准 OpenAI 兼容格式，直接加 /chat/completions
                 url = f"{base_url}/chat/completions"
-            elif "openai.azure.com" in base_url:
-                 # Azure 特殊处理 (示例)
-                 # .../openai/deployments/{model}/chat/completions?api-version=...
-                 # 这里暂不处理复杂情况，假设用户填写的 Base URL 能适配
-                 url = f"{base_url}/chat/completions"
-            else:
-                # 默认行为，尝试追加 /chat/completions
-                # 如果用户填写的是 host (e.g., https://api.deepseek.com)，则追加 /chat/completions
-                # 如果用户漏了 /v1，通常 API 文档会要求带上。
-                # 这里我们做一个简单的检查，如果 base_url 不含 chat/completions，就加上
+            elif "/v1" in base_url:
+                # URL 中已包含 /v1/，直接加 chat/completions
                 if "chat/completions" not in base_url:
-                     url = f"{base_url}/chat/completions"
+                    url = f"{base_url}/chat/completions" if base_url.endswith("/") else f"{base_url}/chat/completions"
                 else:
-                     url = base_url
+                    url = base_url
+            elif "openai.azure.com" in base_url:
+                 # Azure 特殊处理
+                 url = f"{base_url}/chat/completions"
+            elif "chat/completions" in base_url:
+                # URL 已包含完整路径
+                url = base_url
+            else:
+                # 用户可能漏掉了 /v1，自动补全
+                # 例如：https://api.deepseek.com -> https://api.deepseek.com/v1/chat/completions
+                url = f"{base_url}/v1/chat/completions"
 
             print(f"[测试 Chat] URL: {url} | Model: {model}")
 
