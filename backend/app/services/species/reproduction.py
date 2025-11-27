@@ -583,63 +583,59 @@ class ReproductionService:
                     
                     tile_capacities[(tile_id, species.id)] = max(1000, species_capacity)
             
-            # 5. 计算各营养级的生物量池（用于上层承载力计算）
-            # 建立连续的营养级生物量分布
-            trophic_biomass_pools = self._calculate_trophic_biomass_pools(
-                by_trophic_range, species_habitats, tile_id
-            )
+            # 5. 【简化】基于生态金字塔计算各营养级承载力
+            # 每上升一个营养级，承载力下降到上一级的 15%
+            # 这避免了"先有鸡还是先有蛋"的循环依赖问题
+            PYRAMID_DECAY = 0.15  # 生态金字塔系数（能量传递效率）
             
-            # 6. 计算T1.5-T5.5的承载力（基于下层生物量）
+            # 计算各营养级的理论承载力
+            # T1.0 = 100%, T1.5 = 40%, T2.0 = 15%, T2.5 = 10%, T3.0 = 2.25%, ...
+            trophic_capacities = {1.0: t1_base_capacity}
+            for t in [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5]:
+                if t == 1.5:
+                    # T1.5 (分解者) 承载力较高，约为 T1 的 40%
+                    trophic_capacities[t] = t1_base_capacity * 0.4
+                else:
+                    # 其他消费者按照金字塔递减
+                    prev_level = t - 0.5
+                    prev_cap = trophic_capacities.get(prev_level, t1_base_capacity * 0.01)
+                    trophic_capacities[t] = prev_cap * PYRAMID_DECAY
+            
+            # 6. 检查猎物是否存在（用于食物链断裂检测）
+            # 获取当前地块存在的营养级
+            existing_trophic_levels = set(by_trophic_range.keys())
+            
+            # 7. 计算T1.5-T5.5的承载力
             for t_range in sorted([t for t in by_trophic_range.keys() if t >= 1.5]):
                 tx_species = by_trophic_range[t_range]
                 
-                # 计算该营养级可以从哪些下层获取能量
-                available_biomass = self._calculate_available_prey_biomass(
-                    t_range, trophic_biomass_pools, by_trophic_range
+                # 检查是否有可捕食的猎物
+                min_prey_level = max(1.0, t_range - 1.5)
+                max_prey_level = t_range - 0.5
+                has_prey = any(
+                    min_prey_level <= prey_level <= max_prey_level
+                    for prey_level in existing_trophic_levels
                 )
                 
-                if available_biomass <= 0:
-                    # 没有猎物 → 捕食者面临饥荒
-                    # 只提供最小承载力，模拟饥饿状态下的种群崩溃
-                    # 这样当食物链断裂时，会发生真实的级联崩溃
-                    
-                    # 检查是否有任何潜在猎物（可能是迁移或杂食）
-                    has_any_prey = any(
-                        prey_level < t_range 
-                        for prey_level in biomass_pools.keys() 
-                        if biomass_pools[prey_level] > 0
-                    )
-                    
-                    if has_any_prey:
-                        # 有其他食物来源（杂食/机会主义），给予极小的保底
-                        fallback_capacity = t1_base_capacity * 0.01  # 只有1%
-                        logger.debug(
-                            f"[饥荒-杂食] {tx_species[0][0].common_name if tx_species else 'unknown'} "
-                            f"T{t_range} 主食缺乏，杂食模式维持"
-                        )
-                    else:
-                        # 完全没有食物 → 严重饥荒，承载力几乎为0
-                        fallback_capacity = 100  # 绝对最小值，仅防止数值错误
-                        logger.warning(
-                            f"[饥荒-崩溃] T{t_range} 无任何猎物，食物链断裂，即将崩溃"
-                        )
-                    
-                    for species, suitability in tx_species:
-                        tx_total_suitability = sum(s for _, s in tx_species) or 1.0
-                        species_capacity = fallback_capacity * (suitability / tx_total_suitability)
-                        species_capacity *= self._get_species_suitability_for_tile(species, tile)
-                        species_capacity *= self._get_body_size_modifier(species, is_producer=False)
-                        tile_capacities[(tile_id, species.id)] = max(100, species_capacity)
-                    continue
+                # 基础承载力
+                base_capacity = trophic_capacities.get(t_range, t1_base_capacity * 0.001)
                 
-                # Tx物种之间共享可用生物量
+                if not has_prey and t_range >= 2.0:
+                    # 没有猎物 → 严重饥荒，承载力大幅下降
+                    # 但不是完全为0，允许杂食/机会主义生存
+                    base_capacity *= 0.05  # 降至5%
+                    logger.debug(
+                        f"[食物链断裂] T{t_range} 无猎物，承载力降至5%"
+                    )
+                
+                # Tx物种之间共享承载力
                 tx_total_suitability = sum(suitability for _, suitability in tx_species)
                 for species, suitability in tx_species:
                     if tx_total_suitability > 0:
                         species_share = suitability / tx_total_suitability
-                        species_capacity = available_biomass * species_share
+                        species_capacity = base_capacity * species_share
                     else:
-                        species_capacity = 0
+                        species_capacity = base_capacity / len(tx_species) if tx_species else 0
                     
                     # 应用物种特定修正
                     species_capacity *= self._get_species_suitability_for_tile(species, tile)
@@ -707,13 +703,17 @@ class ReproductionService:
     ) -> dict[float, float]:
         """计算各营养级范围的总生物量
         
+        【重要】使用相对生物量指数，而不是绝对克数
+        因为微生物的绝对生物量很小（纳克级），但种群数量巨大
+        我们用 "种群 × 体重^0.75" 作为相对指数（类似 Kleiber 定律）
+        
         Args:
             by_trophic_range: 按营养级分组的物种
             species_habitats: 物种栖息地映射
             tile_id: 当前地块ID
             
         Returns:
-            {trophic_range: total_biomass_kg}
+            {trophic_range: relative_biomass_index}
         """
         biomass_pools: dict[float, float] = {}
         
@@ -722,11 +722,15 @@ class ReproductionService:
             
             for species, suitability in species_list:
                 # 获取物种的总种群
-                pop = species.morphology_stats.get("population", 0)
-                weight = species.morphology_stats.get("body_weight_g", 1.0)
+                pop = species.morphology_stats.get("population", 0) or 0
+                weight = species.morphology_stats.get("body_weight_g", 1.0) or 1.0
                 
-                # 按该地块的适宜度分配生物量
-                tile_biomass = pop * weight * suitability
+                # 【修复】使用相对生物量指数
+                # 对于微生物：1亿个体 × (1e-9)^0.75 ≈ 1亿 × 5.6e-7 ≈ 56
+                # 这给出了一个合理的相对数值，避免绝对值太小
+                # 同时保持体重的生态学意义（更重的生物代谢需求更高）
+                weight_factor = max(weight, 1e-12) ** 0.75  # Kleiber 指数
+                tile_biomass = pop * weight_factor * suitability
                 total_biomass += tile_biomass
             
             biomass_pools[t_range] = total_biomass
@@ -776,24 +780,24 @@ class ReproductionService:
             f"[捕食范围] T{predator_trophic:.1f} 可捕食 T{min_prey_level:.1f}-T{max_prey_level:.1f}"
         )
         
-        # 汇总所有可捕食范围内的生物量
+        # 汇总所有可捕食范围内的相对生物量指数
         for prey_level, prey_biomass in biomass_pools.items():
             if min_prey_level <= prey_level <= max_prey_level:
                 # 检查该营养级是否真的有物种
                 if prey_level in by_trophic_range and by_trophic_range[prey_level]:
                     available_biomass += prey_biomass
                     logger.debug(
-                        f"[捕食] T{predator_trophic:.1f} 获取 T{prey_level:.1f} 生物量: {prey_biomass:.2f}kg"
+                        f"[捕食] T{predator_trophic:.1f} 获取 T{prey_level:.1f} 生物量指数: {prey_biomass:.2e}"
                     )
         
         # 生态效率（Lindeman效率）：约10-15%
         # 这包括：可食用部分比例、捕获成功率、消化吸收效率
-        # 使用12%作为基础效率（保守估计）
-        ECOLOGICAL_EFFICIENCY = 0.12
+        # 使用15%作为基础效率（给消费者更多生存空间）
+        ECOLOGICAL_EFFICIENCY = 0.15
         
         result = available_biomass * ECOLOGICAL_EFFICIENCY
         logger.debug(
-            f"[生态效率] T{predator_trophic:.1f} 可用生物量: {available_biomass:.2f}kg × {ECOLOGICAL_EFFICIENCY:.0%} = {result:.2f}kg"
+            f"[生态效率] T{predator_trophic:.1f} 可用生物量指数: {available_biomass:.2e} × {ECOLOGICAL_EFFICIENCY:.0%} = {result:.2e}"
         )
         
         return result

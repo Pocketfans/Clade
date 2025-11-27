@@ -291,19 +291,19 @@ class MortalityEngine:
                     scarcity = trophic_interactions.get(key, trophic_interactions.get("t5_scarcity", 0.0))
                 
                 # 资源因子 = max(饱和度影响, 食物稀缺影响)
-                # 当 scarcity = 2.0（最大）时，resource_factor = 0.9（几乎必死）
-                # 这确保食物链断裂时会发生真正的崩溃
+                # 【调整】缓和稀缺性的影响，避免第一回合就崩溃
+                # scarcity = 2.0（最大）时，resource_factor = 0.6
                 saturation_effect = arrays['saturation'][i] * 0.3
-                scarcity_effect = scarcity * 0.45  # 稀缺性最大影响 2.0 * 0.45 = 0.9
-                resource_factor[i] = min(max(saturation_effect, scarcity_effect), 0.9)
+                scarcity_effect = scarcity * 0.30  # 稀缺性最大影响 2.0 * 0.30 = 0.6
+                resource_factor[i] = min(max(saturation_effect, scarcity_effect), 0.6)
         
         # 向量化计算复合存活率
         # 每个因子都有上限，防止单一因子导致100%死亡
         # 但多个因子叠加可以导致极高死亡率
         survival_pressure = 1.0 - np.minimum(0.8, pressure_factor)
         survival_competition = 1.0 - np.minimum(0.6, overlap_factor)
-        # 资源/食物稀缺：上限提高到0.85，确保饥荒能导致严重死亡
-        survival_resource = 1.0 - np.minimum(0.85, resource_factor)
+        # 【调整】资源/食物稀缺上限从0.85降到0.65，避免过早崩溃
+        survival_resource = 1.0 - np.minimum(0.65, resource_factor)
         survival_grazing = 1.0 - np.minimum(0.7, grazing_pressure)
         survival_predation = 1.0 - np.minimum(0.7, predation_effect)
         

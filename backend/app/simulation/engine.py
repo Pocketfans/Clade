@@ -211,48 +211,54 @@ class SimulationEngine:
         # 每上升一级，可支撑的生物量约为下级的10-15%
         EFFICIENCY = 0.12
         
+        # 【修复】微生物生物量通常很小（克甚至毫克级别）
+        # 使用 1e-6g 作为最小值避免除以零，而不是 1.0g
+        MIN_BIOMASS = 1e-6
+        
         # === T1 受 T2 的采食压力 ===
         grazing_intensity = 0.0
         t2_scarcity = 0.0
-        if t1_biomass > 0:
+        if t1_biomass > MIN_BIOMASS:
             # T2 需要的 T1 生物量 = T2 / 效率
             required_t1 = t2_biomass / EFFICIENCY if t2_biomass > 0 else 0
-            grazing_ratio = required_t1 / max(t1_biomass, 1.0)
+            grazing_ratio = required_t1 / t1_biomass
             grazing_intensity = min(grazing_ratio * 0.5, 0.8)
-            t2_scarcity = max(0.0, min(2.0, grazing_ratio - 0.8))
+            # 当 grazing_ratio > 1.0 时才开始产生稀缺
+            # 这意味着 T2 的需求超过了 T1 的供给
+            t2_scarcity = max(0.0, min(2.0, grazing_ratio - 1.0))
         elif t2_biomass > 0:
             t2_scarcity = 2.0  # 没有T1但有T2，T2面临严重食物短缺
         
         # === T2 受 T3 的捕食压力 ===
         predation_t3 = 0.0
         t3_scarcity = 0.0
-        if t2_biomass > 0:
+        if t2_biomass > MIN_BIOMASS:
             required_t2 = t3_biomass / EFFICIENCY if t3_biomass > 0 else 0
-            predation_ratio = required_t2 / max(t2_biomass, 1.0)
+            predation_ratio = required_t2 / t2_biomass
             predation_t3 = min(predation_ratio * 0.5, 0.8)
-            t3_scarcity = max(0.0, min(2.0, predation_ratio - 0.8))
+            t3_scarcity = max(0.0, min(2.0, predation_ratio - 1.0))
         elif t3_biomass > 0:
             t3_scarcity = 2.0
         
         # === T3 受 T4 的捕食压力 ===
         predation_t4 = 0.0
         t4_scarcity = 0.0
-        if t3_biomass > 0:
+        if t3_biomass > MIN_BIOMASS:
             required_t3 = t4_biomass / EFFICIENCY if t4_biomass > 0 else 0
-            predation_ratio = required_t3 / max(t3_biomass, 1.0)
+            predation_ratio = required_t3 / t3_biomass
             predation_t4 = min(predation_ratio * 0.5, 0.8)
-            t4_scarcity = max(0.0, min(2.0, predation_ratio - 0.8))
+            t4_scarcity = max(0.0, min(2.0, predation_ratio - 1.0))
         elif t4_biomass > 0:
             t4_scarcity = 2.0
         
         # === T4 受 T5 的捕食压力 ===
         predation_t5 = 0.0
         t5_scarcity = 0.0
-        if t4_biomass > 0:
+        if t4_biomass > MIN_BIOMASS:
             required_t4 = t5_biomass / EFFICIENCY if t5_biomass > 0 else 0
-            predation_ratio = required_t4 / max(t4_biomass, 1.0)
+            predation_ratio = required_t4 / t4_biomass
             predation_t5 = min(predation_ratio * 0.5, 0.8)
-            t5_scarcity = max(0.0, min(2.0, predation_ratio - 0.8))
+            t5_scarcity = max(0.0, min(2.0, predation_ratio - 1.0))
         elif t5_biomass > 0:
             t5_scarcity = 2.0
         
@@ -841,15 +847,23 @@ class SimulationEngine:
                         report.narrative = "由于 AI 响应超时，本回合详细叙事已省略。"
                 
                 # 12. 保存地图快照
+                # 【修复】重新查询数据库获取最新物种列表
+                # 这样可以正确处理：
+                # - 本回合灭绝的物种（清除其栖息地记录）
+                # - 本回合新分化的物种（初始化其栖息地记录）
                 logger.info(f"保存地图栖息地快照...")
                 self._emit_event("stage", "💾 保存地图快照", "系统")
+                all_species_final = species_repository.list_species()
                 self.map_manager.snapshot_habitats(
-                    species_batch, turn_index=self.turn_counter
+                    all_species_final, turn_index=self.turn_counter
                 )
                 
                 # 12.1 保存人口快照（用于族谱视图的当前/峰值人口）
+                # 【修复】使用最新物种列表，确保：
+                # - 灭绝物种保存 population=0 的快照
+                # - 新分化物种也保存快照
                 logger.info(f"保存人口快照...")
-                self._save_population_snapshots(species_batch, self.turn_counter)
+                self._save_population_snapshots(all_species_final, self.turn_counter)
                 
                 # 14. 保存历史记录
                 logger.info(f"保存历史记录...")
@@ -896,7 +910,11 @@ class SimulationEngine:
         raise NotImplementedError("Use run_turns_async instead")
     
     def _save_population_snapshots(self, species_list: list, turn_index: int) -> None:
-        """保存人口快照到数据库（用于族谱视图的当前/峰值人口）"""
+        """保存人口快照到数据库（用于族谱视图的当前/峰值人口）
+        
+        【重要】必须为所有物种保存快照，包括灭绝物种（population=0）
+        这样族谱视图才能正确显示"当前规模=0"
+        """
         from ..models.species import PopulationSnapshot
         
         snapshots = []
@@ -905,8 +923,10 @@ class SimulationEngine:
                 continue
             
             population = int(species.morphology_stats.get("population", 0) or 0)
-            if population <= 0:
-                continue
+            
+            # 【修复】不再跳过 population <= 0 的物种
+            # 灭绝物种也需要记录 population=0 的快照
+            # 这样族谱的"当前规模"才能正确显示
             
             snapshots.append(PopulationSnapshot(
                 species_id=species.id,
