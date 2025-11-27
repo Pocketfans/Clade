@@ -1434,6 +1434,7 @@ def get_system_logs(lines: int = 200) -> dict:
             recent = all_lines[-lines:]
             return {"logs": [line.strip() for line in recent]}
     except Exception as e:
+        return {"logs": [], "error": str(e)}
 
 
 @router.get("/system/ai-diagnostics", tags=["system"])
