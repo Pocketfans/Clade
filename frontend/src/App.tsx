@@ -28,9 +28,10 @@ import { GlobalTrendsPanel } from "./components/GlobalTrendsPanel";
 import { SpeciesLedger } from "./components/SpeciesLedger";
 import { FoodWebGraph } from "./components/FoodWebGraph";
 import { TurnProgressOverlay } from "./components/TurnProgressOverlay";
-import { TurnSummaryModal } from "./components/TurnSummaryModal"; // 新增
-import { MapHistoryView } from "./components/MapHistoryView"; // 新增
-import { LogPanel } from "./components/LogPanel"; // 新增
+import { TurnSummaryModal } from "./components/TurnSummaryModal";
+import { MapHistoryView } from "./components/MapHistoryView";
+import { LogPanel } from "./components/LogPanel";
+import { MapLegend } from "./components/MapLegend";
 
 // API 与类型
 import type {
@@ -451,10 +452,9 @@ export default function App() {
 
   const handleSpeciesSelect = (id: string) => {
     setSelectedSpeciesId(id);
-    // 物种详情现已集成到左侧 SpeciesPanel，不再使用右侧抽屉
-    if (viewMode !== "suitability") {
-      changeViewMode("suitability", { preserveCamera: true });
-    }
+    // 物种详情现已集成到左侧 SpeciesPanel
+    // 不再自动切换视图模式，避免地图跳动
+    // 用户可以通过底部工具栏手动切换到"适宜度"视图查看该物种的分布
   };
 
   async function executeTurn(drafts: PressureDraft[]) {
@@ -797,28 +797,36 @@ export default function App() {
   return (
     <GameLayout
       mapLayer={
-        renderMode === "3d" ? (
-          <ThreeMapPanel
-            map={mapData}
-            onRefresh={refreshMap}
-            selectedTile={selectedTile}
-            onSelectTile={handleTileSelect}
-            viewMode={viewMode}
-            onViewModeChange={handleViewModeChange}
-            highlightSpeciesId={selectedSpeciesId}
+        <>
+          {renderMode === "3d" ? (
+            <ThreeMapPanel
+              map={mapData}
+              onRefresh={refreshMap}
+              selectedTile={selectedTile}
+              onSelectTile={handleTileSelect}
+              viewMode={viewMode}
+              onViewModeChange={handleViewModeChange}
+              highlightSpeciesId={selectedSpeciesId}
+            />
+          ) : (
+            <CanvasMapPanel
+              ref={mapPanelRef}
+              map={mapData}
+              onRefresh={refreshMap}
+              selectedTile={selectedTile}
+              onSelectTile={handleTileSelect}
+              viewMode={viewMode}
+              onViewModeChange={handleViewModeChange}
+              highlightSpeciesId={selectedSpeciesId}
+            />
+          )}
+          <MapLegend 
+            viewMode={viewMode} 
+            seaLevel={latestReport?.sea_level ?? 0}
+            temperature={latestReport?.global_temperature ?? 15}
+            hasSelectedSpecies={!!selectedSpeciesId}
           />
-        ) : (
-          <CanvasMapPanel
-            ref={mapPanelRef}
-            map={mapData}
-            onRefresh={refreshMap}
-            selectedTile={selectedTile}
-            onSelectTile={handleTileSelect}
-            viewMode={viewMode}
-            onViewModeChange={handleViewModeChange}
-            highlightSpeciesId={selectedSpeciesId}
-          />
-        )
+        </>
       }
       topBar={
         <TopBar

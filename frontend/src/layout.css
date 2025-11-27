@@ -619,7 +619,390 @@
   box-shadow: 0 4px 15px rgba(45, 212, 191, 0.2);
 }
 
-/* ==================== LensBar 演化主题样式 ==================== */
+/* ==================== LensBar V2 - 重新设计的地图工具栏 ==================== */
+.lensbar-v2 {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  z-index: 1000;
+  background: linear-gradient(180deg, rgba(12, 18, 12, 0.94), rgba(8, 12, 8, 0.98));
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(45, 212, 191, 0.15);
+  border-radius: 20px;
+  box-shadow: 
+    0 8px 40px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(45, 212, 191, 0.08) inset,
+    0 0 60px rgba(45, 212, 191, 0.05);
+  padding: 8px 12px;
+}
+
+/* 区块容器 */
+.lensbar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.section-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: rgba(45, 212, 191, 0.5);
+  text-align: center;
+  padding: 0 4px;
+}
+
+/* 分隔线 */
+.lensbar-divider-v2 {
+  width: 1px;
+  align-self: stretch;
+  background: linear-gradient(
+    180deg, 
+    transparent 10%, 
+    rgba(45, 212, 191, 0.25) 50%, 
+    transparent 90%
+  );
+  margin: 4px 8px;
+}
+
+/* ===== 视图控制区 ===== */
+.view-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.view-group-wrapper {
+  position: relative;
+}
+
+.view-group-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(240, 244, 232, 0.75);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+}
+
+.view-group-btn:hover {
+  background: rgba(45, 212, 191, 0.1);
+  border-color: rgba(45, 212, 191, 0.2);
+  color: rgba(240, 244, 232, 0.95);
+}
+
+.view-group-btn.active {
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.2), rgba(34, 197, 94, 0.15));
+  border-color: rgba(45, 212, 191, 0.35);
+  color: #2dd4bf;
+  box-shadow: 
+    0 0 20px rgba(45, 212, 191, 0.15),
+    inset 0 0 10px rgba(45, 212, 191, 0.05);
+}
+
+.view-group-btn.open {
+  border-color: rgba(45, 212, 191, 0.4);
+  background: rgba(45, 212, 191, 0.12);
+}
+
+.view-icon {
+  font-size: 1.2rem;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
+}
+
+.view-label {
+  font-size: 0.85rem;
+}
+
+.dropdown-arrow {
+  font-size: 0.6rem;
+  color: rgba(45, 212, 191, 0.5);
+  margin-left: 4px;
+  transition: transform 0.2s;
+}
+
+.view-group-btn.open .dropdown-arrow {
+  color: #2dd4bf;
+}
+
+/* 下拉菜单 */
+.view-dropdown {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 280px;
+  background: rgba(12, 18, 12, 0.98);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  border-radius: 16px;
+  padding: 8px;
+  box-shadow: 
+    0 -8px 32px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(45, 212, 191, 0.05) inset;
+  animation: dropdown-appear 0.2s ease;
+  z-index: 10;
+}
+
+.view-dropdown::before {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 8px solid transparent;
+  border-top-color: rgba(45, 212, 191, 0.2);
+}
+
+@keyframes dropdown-appear {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: rgba(240, 244, 232, 0.8);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.dropdown-item:hover {
+  background: rgba(45, 212, 191, 0.08);
+  border-color: rgba(45, 212, 191, 0.15);
+}
+
+.dropdown-item.active {
+  background: rgba(45, 212, 191, 0.12);
+  border-color: rgba(45, 212, 191, 0.25);
+}
+
+.item-icon {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+}
+
+.item-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.item-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: rgba(240, 244, 232, 0.95);
+}
+
+.item-desc {
+  font-size: 0.75rem;
+  color: rgba(240, 244, 232, 0.5);
+  line-height: 1.3;
+}
+
+.item-check {
+  color: #2dd4bf;
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+/* 2D/3D 切换按钮 */
+.render-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(240, 244, 232, 0.7);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.25s;
+  margin-left: 8px;
+}
+
+.render-toggle:hover {
+  background: rgba(45, 212, 191, 0.1);
+  border-color: rgba(45, 212, 191, 0.25);
+  color: #2dd4bf;
+}
+
+.render-toggle.is-3d {
+  background: rgba(45, 212, 191, 0.15);
+  border-color: rgba(45, 212, 191, 0.3);
+  color: #2dd4bf;
+  box-shadow: 0 0 15px rgba(45, 212, 191, 0.2);
+}
+
+.render-icon {
+  font-size: 1.1rem;
+}
+
+.render-label {
+  letter-spacing: 1px;
+}
+
+/* ===== 工具按钮区 ===== */
+.tool-row {
+  display: flex;
+  gap: 4px;
+}
+
+.tool-btn-v2 {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: visible;
+}
+
+.tool-btn-v2:hover {
+  background: color-mix(in srgb, var(--tool-color) 12%, transparent);
+  border-color: color-mix(in srgb, var(--tool-color) 25%, transparent);
+  transform: translateY(-3px);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--tool-color) 20%, transparent);
+}
+
+.tool-btn-v2.hovered {
+  background: color-mix(in srgb, var(--tool-color) 15%, transparent);
+  border-color: color-mix(in srgb, var(--tool-color) 30%, transparent);
+}
+
+.tool-icon-v2 {
+  font-size: 1.35rem;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+  transition: transform 0.2s;
+}
+
+.tool-btn-v2:hover .tool-icon-v2 {
+  transform: scale(1.15);
+}
+
+/* 改进的工具提示 */
+.tool-tooltip-v2 {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 140px;
+  padding: 10px 14px;
+  background: rgba(12, 18, 12, 0.98);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  border-radius: 12px;
+  text-align: center;
+  pointer-events: none;
+  animation: tooltip-appear-v2 0.2s ease;
+  box-shadow: 
+    0 -4px 20px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(45, 212, 191, 0.05) inset;
+  z-index: 100;
+}
+
+.tool-tooltip-v2::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: rgba(45, 212, 191, 0.2);
+}
+
+@keyframes tooltip-appear-v2 {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.tooltip-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(240, 244, 232, 0.95);
+  margin-bottom: 4px;
+}
+
+.tooltip-desc {
+  font-size: 0.72rem;
+  color: rgba(240, 244, 232, 0.55);
+  line-height: 1.4;
+}
+
+/* ===== 当前视图指示器 ===== */
+.current-view-indicator {
+  position: absolute;
+  top: -32px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: rgba(12, 18, 12, 0.9);
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  border-radius: 20px;
+  font-size: 0.75rem;
+  color: rgba(45, 212, 191, 0.8);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.lensbar-v2:hover .current-view-indicator {
+  opacity: 1;
+}
+
+.indicator-icon {
+  font-size: 1rem;
+}
+
+.indicator-label {
+  font-weight: 500;
+}
+
+/* ==================== 旧版 LensBar 样式（保留兼容性） ==================== */
 .lensbar-container {
   position: fixed;
   bottom: 24px;

@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from .api.routes import router as api_router, initialize_environment, set_backend_session_id
 from .api.admin_routes import router as admin_router
+from .api.embedding_routes import router as embedding_router
 from .core.config import get_settings, setup_logging
 from .core.database import init_db
 
@@ -37,3 +38,4 @@ def healthcheck() -> dict[str, str]:
 
 app.include_router(api_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
+app.include_router(embedding_router)  # 已包含 /api/embedding 前缀

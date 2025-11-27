@@ -1914,7 +1914,202 @@ h1, h2, h3 {
   font-weight: 600;
 }
 
-/* 地图图例 */
+/* 地图图例 V2 - 重新设计 */
+.map-legend-v2 {
+  position: absolute;
+  bottom: 90px;
+  right: 20px;
+  background: linear-gradient(135deg, rgba(12, 18, 12, 0.95), rgba(8, 12, 8, 0.98));
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(45, 212, 191, 0.15);
+  border-radius: 16px;
+  padding: 0;
+  min-width: 180px;
+  max-width: 240px;
+  max-height: 400px;
+  overflow: hidden;
+  z-index: 50;
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(45, 212, 191, 0.05) inset;
+  transition: all 0.3s ease;
+}
+
+.map-legend-v2.collapsed {
+  min-width: auto;
+  max-width: 48px;
+  padding: 0;
+}
+
+.legend-toggle {
+  position: absolute;
+  top: 50%;
+  left: -12px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 48px;
+  background: rgba(12, 18, 12, 0.95);
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  color: rgba(45, 212, 191, 0.6);
+  font-size: 0.7rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.legend-toggle:hover {
+  background: rgba(45, 212, 191, 0.1);
+  color: #2dd4bf;
+}
+
+.legend-header-v2 {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid rgba(45, 212, 191, 0.1);
+  background: linear-gradient(180deg, rgba(45, 212, 191, 0.06), transparent);
+}
+
+.legend-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #2dd4bf;
+  margin-bottom: 2px;
+}
+
+.legend-subtitle {
+  font-size: 0.72rem;
+  color: rgba(240, 244, 232, 0.5);
+}
+
+.legend-env-info {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(45, 212, 191, 0.1);
+}
+
+.env-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+}
+
+.env-icon {
+  font-size: 0.9rem;
+}
+
+.env-value {
+  font-family: var(--font-mono);
+  color: rgba(240, 244, 232, 0.7);
+  font-weight: 500;
+}
+
+.legend-items-v2 {
+  padding: 10px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.legend-items-v2::-webkit-scrollbar {
+  width: 4px;
+}
+
+.legend-items-v2::-webkit-scrollbar-track {
+  background: rgba(45, 212, 191, 0.05);
+  border-radius: 2px;
+}
+
+.legend-items-v2::-webkit-scrollbar-thumb {
+  background: rgba(45, 212, 191, 0.2);
+  border-radius: 2px;
+}
+
+.legend-item-v2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.legend-color-v2 {
+  width: 20px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  flex-shrink: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.legend-text-v2 {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.legend-label-v2 {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: rgba(240, 244, 232, 0.85);
+}
+
+.legend-range {
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  color: rgba(240, 244, 232, 0.45);
+}
+
+.legend-collapsed-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+.collapsed-icon {
+  font-size: 1.4rem;
+  opacity: 0.7;
+}
+
+/* 生物分布指示器图例 */
+.legend-section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(45, 212, 191, 0.2), transparent);
+  margin: 10px 0;
+}
+
+.legend-habitat-section {
+  padding: 0 14px 10px;
+}
+
+.legend-habitat-section .legend-subtitle {
+  font-size: 0.72rem;
+  color: rgba(240, 244, 232, 0.5);
+  margin-bottom: 8px;
+}
+
+.legend-habitat-items {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.legend-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* 旧版图例样式（保留兼容性） */
 .map-legend {
   position: absolute;
   bottom: 20px;

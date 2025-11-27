@@ -77,6 +77,7 @@ from ..services.system.save_manager import SaveManager
 from ..services.species.species_generator import SpeciesGenerator
 from ..services.analytics.ecosystem_health import EcosystemHealthService
 from ..services.species.predation import PredationService
+from ..services.analytics.embedding_integration import EmbeddingIntegrationService
 from ..simulation.engine import SimulationEngine
 from ..simulation.environment import EnvironmentSystem
 from ..simulation.species import MortalityEngine
@@ -184,7 +185,7 @@ adaptation_service = AdaptationService(model_router)
 genetic_distance_calculator = GeneticDistanceCalculator()
 hybridization_service = HybridizationService(genetic_distance_calculator)
 gene_flow_service = GeneFlowService()
-save_manager = SaveManager(settings.saves_dir)
+save_manager = SaveManager(settings.saves_dir, embedding_service=embedding_service)
 species_generator = SpeciesGenerator(model_router)
 ui_config_path = Path(settings.ui_config_path)
 pressure_templates: list[PressureTemplate] = [
@@ -387,6 +388,10 @@ def apply_ui_config(config: UIConfig) -> UIConfig:
 
 
 ui_config = apply_ui_config(environment_repository.load_ui_config(ui_config_path))
+
+# 【新增】Embedding 集成服务 - 管理分类学、演化预测、叙事生成等扩展功能
+embedding_integration = EmbeddingIntegrationService(embedding_service, model_router)
+
 simulation_engine = SimulationEngine(
     environment=environment_system,
     mortality=mortality_engine,
@@ -407,6 +412,7 @@ simulation_engine = SimulationEngine(
     reproduction_service=reproduction_service,
     adaptation_service=adaptation_service,
     gene_flow_service=gene_flow_service,
+    embedding_integration=embedding_integration,  # 【新增】Embedding集成服务
 )
 watchlist: set[str] = set()
 action_queue = {"queued_rounds": 0, "running": False}
@@ -1203,7 +1209,22 @@ async def save_game(request: SaveGameRequest) -> dict:
         logs = history_repository.list_turns(limit=1)
         turn_index = logs[0].turn_index if logs else 0
         
-        save_dir = save_manager.save_game(request.save_name, turn_index)
+        # 【新增】获取 Embedding 集成数据
+        taxonomy_data = None
+        event_embeddings = None
+        try:
+            integration_data = embedding_integration.export_for_save()
+            taxonomy_data = integration_data.get("taxonomy")
+            event_embeddings = integration_data.get("narrative")
+        except Exception as e:
+            print(f"[存档API] 获取Embedding集成数据失败（非致命）: {e}")
+        
+        save_dir = save_manager.save_game(
+            request.save_name, 
+            turn_index,
+            taxonomy_data=taxonomy_data,
+            event_embeddings=event_embeddings
+        )
         return {"success": True, "save_dir": str(save_dir), "turn_index": turn_index}
     except Exception as e:
         print(f"[存档API错误] {str(e)}")
@@ -1221,6 +1242,19 @@ async def load_game(request: LoadGameRequest) -> dict:
         # 【关键修复】更新 simulation_engine 的回合计数器
         simulation_engine.turn_counter = turn_index
         print(f"[存档加载] 已恢复回合计数器: {turn_index}")
+        
+        # 【新增】恢复 Embedding 集成数据
+        try:
+            integration_restore_data = {}
+            if save_data.get("taxonomy"):
+                integration_restore_data["taxonomy"] = save_data["taxonomy"]
+            if save_data.get("event_embeddings"):
+                integration_restore_data["narrative"] = save_data["event_embeddings"]
+            if integration_restore_data:
+                embedding_integration.import_from_save(integration_restore_data)
+                print(f"[存档加载] Embedding集成数据已恢复")
+        except Exception as e:
+            print(f"[存档加载] 恢复Embedding集成数据失败（非致命）: {e}")
         
         # 设置当前存档名称（用于自动保存）
         # 如果加载的是自动保存，提取原始存档名

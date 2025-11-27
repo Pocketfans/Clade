@@ -67,6 +67,9 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
   // Sprites Reference: map tile ID -> Array of 3 sprites (left, center, right)
   const tileSpritesRef = useRef<Map<number, Sprite[]>>(new Map());
   
+  // Habitat indicator sprites: map tile ID -> Array of 3 sprites
+  const habitatIndicatorsRef = useRef<Map<number, Sprite[]>>(new Map());
+  
   // Graphics for dynamic updates
   const hoverGraphicsRef = useRef<Graphics | null>(null);
   const selectGraphicsRef = useRef<Graphics | null>(null);
@@ -123,6 +126,25 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
     }
     return colorMap;
   }, [map?.habitats, viewMode, highlightSpeciesId]);
+
+  // 计算每个地块的物种数量（用于显示生物指示器）
+  const habitatInfo = useMemo(() => {
+    const tileSpeciesCount = new Map<number, number>(); // tile ID -> 物种数量
+    const tileHasHighlighted = new Map<number, boolean>(); // tile ID -> 是否有选中物种
+    
+    if (map?.habitats) {
+      for (const hab of map.habitats) {
+        const current = tileSpeciesCount.get(hab.tile_id) || 0;
+        tileSpeciesCount.set(hab.tile_id, current + 1);
+        
+        if (highlightSpeciesId && hab.lineage_code === highlightSpeciesId) {
+          tileHasHighlighted.set(hab.tile_id, true);
+        }
+      }
+    }
+    
+    return { tileSpeciesCount, tileHasHighlighted };
+  }, [map?.habitats, highlightSpeciesId]);
 
   // Create Blob Texture for Vegetation
   const createBlobTexture = (app: Application) => {
@@ -320,6 +342,65 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
           container.addChild(vegContainer);
       }
       
+      // D. Habitat Indicator Layer (生物栖息标记)
+      // 显示哪些地块有生物栖息
+      const habitatContainer = new Container();
+      
+      // 创建小圆点纹理作为生物指示器
+      const indicatorG = new Graphics();
+      indicatorG.circle(0, 0, 5);
+      indicatorG.fill({ color: 0xffffff, alpha: 1.0 });
+      const indicatorTexture = app.renderer.generateTexture({
+        target: indicatorG,
+        resolution: 2,
+        antialias: true,
+      });
+      
+      // 计算每个地块的物种数量（在这里计算以避免依赖外部 memo）
+      const localTileSpeciesCount = new Map<number, number>();
+      if (map.habitats) {
+        for (const hab of map.habitats) {
+          const current = localTileSpeciesCount.get(hab.tile_id) || 0;
+          localTileSpeciesCount.set(hab.tile_id, current + 1);
+        }
+      }
+      
+      map.tiles.forEach(tile => {
+        const pos = layout.positions.get(tile.id);
+        if (!pos) return;
+        
+        const speciesCount = localTileSpeciesCount.get(tile.id) || 0;
+        if (speciesCount === 0) return; // 没有生物的地块不显示
+        
+        // 创建指示器 sprite
+        const indicator = new Sprite(indicatorTexture);
+        indicator.anchor.set(0.5);
+        indicator.position.set(pos.x + HEX_WIDTH / 3, pos.y - HEX_HEIGHT / 3); // 右上角位置
+        
+        // 根据物种数量调整大小和颜色（初始状态）
+        const scale = Math.min(1.2, 0.5 + speciesCount * 0.1);
+        indicator.scale.set(scale);
+        
+        if (speciesCount >= 5) {
+          indicator.tint = 0x22c55e; // 绿色 - 生物多样性高
+        } else if (speciesCount >= 2) {
+          indicator.tint = 0x86efac; // 浅绿色
+        } else {
+          indicator.tint = 0xfbbf24; // 黄色 - 单一物种
+        }
+        indicator.alpha = 0.7;
+        
+        habitatContainer.addChild(indicator);
+        
+        // 存储指示器 sprite 的引用
+        if (!habitatIndicatorsRef.current.has(tile.id)) {
+          habitatIndicatorsRef.current.set(tile.id, []);
+        }
+        habitatIndicatorsRef.current.get(tile.id)!.push(indicator);
+      });
+      
+      container.addChild(habitatContainer);
+      
       console.log(`[CanvasMapPanel] 创建世界容器 offset=${offsetX}, sprites=${createdCount}`);
       return container;
     };
@@ -449,6 +530,7 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
         hoverGraphicsRef.current = null;
         selectGraphicsRef.current = null;
         tileSpritesRef.current.clear();
+        habitatIndicatorsRef.current.clear();
       }
     };
   }, [layout, map, createSprites]); // 依赖 layout, map 和 createSprites
@@ -490,6 +572,36 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
     });
 
   }, [map, viewMode, highlightSpeciesId, suitabilityColors]);
+
+  // Update Habitat Indicators
+  useEffect(() => {
+    if (!habitatIndicatorsRef.current.size) return;
+    
+    habitatIndicatorsRef.current.forEach((sprites, tileId) => {
+      const speciesCount = habitatInfo.tileSpeciesCount.get(tileId) || 0;
+      const hasHighlighted = habitatInfo.tileHasHighlighted.get(tileId) || false;
+      
+      for (const sprite of sprites) {
+        // 更新颜色和透明度
+        if (hasHighlighted) {
+          sprite.tint = 0x2dd4bf; // 翡翠青 - 选中物种存在
+          sprite.alpha = 0.95;
+          sprite.scale.set(1.0); // 稍微放大
+        } else {
+          if (speciesCount >= 5) {
+            sprite.tint = 0x22c55e;
+          } else if (speciesCount >= 2) {
+            sprite.tint = 0x86efac;
+          } else {
+            sprite.tint = 0xfbbf24;
+          }
+          sprite.alpha = 0.7;
+          const scale = Math.min(1.2, 0.5 + speciesCount * 0.1);
+          sprite.scale.set(scale);
+        }
+      }
+    });
+  }, [habitatInfo]);
 
   // Camera Loop
   const updateCamera = useCallback(() => {

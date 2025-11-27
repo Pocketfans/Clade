@@ -4,7 +4,7 @@ import json
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from ...models.species import Species
 from ...models.environment import MapState, MapTile, HabitatPopulation
@@ -13,13 +13,31 @@ from ...repositories.species_repository import species_repository
 from ...repositories.environment_repository import environment_repository
 from ...repositories.history_repository import history_repository
 
+if TYPE_CHECKING:
+    from .embedding import EmbeddingService
+
 
 class SaveManager:
-    """管理游戏存档的保存和加载"""
+    """管理游戏存档的保存和加载
+    
+    【重要改进】
+    1. 支持保存和恢复 embedding 数据
+    2. 支持保存分类学数据（Clade）
+    3. 支持保存事件 embedding 索引
+    """
 
-    def __init__(self, saves_dir: str | Path) -> None:
+    def __init__(
+        self, 
+        saves_dir: str | Path,
+        embedding_service: 'EmbeddingService | None' = None
+    ) -> None:
         self.saves_dir = Path(saves_dir)
         self.saves_dir.mkdir(parents=True, exist_ok=True)
+        self._embedding_service = embedding_service
+
+    def set_embedding_service(self, service: 'EmbeddingService') -> None:
+        """设置 embedding 服务（延迟注入）"""
+        self._embedding_service = service
 
     def list_saves(self) -> list[dict[str, Any]]:
         """列出所有存档"""
@@ -44,12 +62,18 @@ class SaveManager:
                 except ValueError:
                     timestamp = 0
                 
+                # 检查是否有 embedding 数据
+                has_embeddings = (save_dir / "embeddings.json").exists()
+                has_taxonomy = (save_dir / "taxonomy.json").exists()
+                
                 formatted_save = {
                     "name": metadata.get("save_name", save_dir.name),
                     "turn": metadata.get("turn_index", 0),
                     "species_count": metadata.get("species_count", 0),
                     "timestamp": timestamp,
                     "scenario": metadata.get("scenario", "Unknown"),
+                    "has_embeddings": has_embeddings,
+                    "has_taxonomy": has_taxonomy,
                     # Keep original fields just in case
                     "save_name": metadata.get("save_name", save_dir.name),
                     "turn_index": metadata.get("turn_index", 0),
@@ -92,8 +116,24 @@ class SaveManager:
         print(f"[存档管理器] 存档创建成功: {save_dir.name}")
         return metadata
 
-    def save_game(self, save_name: str, turn_index: int) -> Path:
-        """保存当前游戏状态"""
+    def save_game(
+        self, 
+        save_name: str, 
+        turn_index: int,
+        taxonomy_data: dict[str, Any] | None = None,
+        event_embeddings: dict[str, Any] | None = None,
+    ) -> Path:
+        """保存当前游戏状态
+        
+        Args:
+            save_name: 存档名称
+            turn_index: 当前回合数
+            taxonomy_data: 分类学数据（可选）
+            event_embeddings: 事件 embedding 数据（可选）
+        
+        Returns:
+            存档目录路径
+        """
         print(f"[存档管理器] 保存游戏: {save_name}, 回合={turn_index}")
         
         # 查找或创建存档目录
@@ -115,8 +155,8 @@ class SaveManager:
             "turn_index": turn_index,
             "saved_at": datetime.now().isoformat(),
             "species": [sp.model_dump(mode="json") for sp in species_list],
-            "map_tiles": [tile.model_dump(mode="json") for tile in map_tiles],  # 保存地图地块
-            "habitats": [h.model_dump(mode="json") for h in habitats],  # 保存栖息地分布
+            "map_tiles": [tile.model_dump(mode="json") for tile in map_tiles],
+            "habitats": [h.model_dump(mode="json") for h in habitats],
             "map_state": map_state.model_dump(mode="json") if map_state else None,
             "history_logs": [log.model_dump(mode="json") for log in history_logs],
             "history_count": len(history_logs),
@@ -129,11 +169,51 @@ class SaveManager:
             encoding="utf-8"
         )
         
+        # ========== 保存 Embedding 数据 ==========
+        if self._embedding_service and species_list:
+            try:
+                descriptions = [sp.description for sp in species_list]
+                embedding_data = self._embedding_service.export_embeddings(descriptions)
+                embedding_data["species_count"] = len(species_list)
+                embedding_data["saved_at"] = datetime.now().isoformat()
+                
+                (save_dir / "embeddings.json").write_text(
+                    json.dumps(embedding_data, ensure_ascii=False),
+                    encoding="utf-8"
+                )
+                print(f"[存档管理器] 已保存 {len(embedding_data.get('embeddings', {}))} 个 embedding 向量")
+            except Exception as e:
+                print(f"[存档管理器] 保存 embedding 数据失败: {e}")
+        
+        # ========== 保存分类学数据 ==========
+        if taxonomy_data:
+            try:
+                (save_dir / "taxonomy.json").write_text(
+                    json.dumps(taxonomy_data, ensure_ascii=False, indent=2),
+                    encoding="utf-8"
+                )
+                print(f"[存档管理器] 已保存分类学数据")
+            except Exception as e:
+                print(f"[存档管理器] 保存分类学数据失败: {e}")
+        
+        # ========== 保存事件 Embedding ==========
+        if event_embeddings:
+            try:
+                (save_dir / "event_embeddings.json").write_text(
+                    json.dumps(event_embeddings, ensure_ascii=False),
+                    encoding="utf-8"
+                )
+                print(f"[存档管理器] 已保存事件 embedding 数据")
+            except Exception as e:
+                print(f"[存档管理器] 保存事件 embedding 失败: {e}")
+        
         # 更新元数据
         metadata = json.loads((save_dir / "metadata.json").read_text(encoding="utf-8"))
         metadata["last_saved"] = datetime.now().isoformat()
         metadata["turn_index"] = turn_index
         metadata["species_count"] = len(species_list)
+        metadata["has_embeddings"] = (save_dir / "embeddings.json").exists()
+        metadata["has_taxonomy"] = (save_dir / "taxonomy.json").exists()
         
         (save_dir / "metadata.json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2),
@@ -144,7 +224,15 @@ class SaveManager:
         return save_dir
 
     def load_game(self, save_name: str) -> dict[str, Any]:
-        """加载游戏存档"""
+        """加载游戏存档
+        
+        Returns:
+            包含以下键的字典:
+            - turn_index, species, map_tiles, habitats, map_state, history_logs
+            - embeddings_loaded: bool - 是否成功加载了 embedding
+            - taxonomy: dict | None - 分类学数据
+            - event_embeddings: dict | None - 事件 embedding 数据
+        """
         print(f"[存档管理器] 加载游戏: {save_name}")
         
         save_dir = self._find_save_dir(save_name)
@@ -162,16 +250,17 @@ class SaveManager:
         
         # 1. 清除当前运行时数据
         print("[存档管理器] 清除当前运行时状态...")
-        # 先清除环境数据（包含可能引用物种的 habitat_populations）
         environment_repository.clear_state()
         species_repository.clear_state()
         history_repository.clear_state()
 
         # 恢复物种数据到数据库
+        restored_species = []
         for species_data in save_data.get("species", []):
             normalized = self._normalize_species_payload(species_data)
             species = Species(**normalized)
             species_repository.upsert(species)
+            restored_species.append(species)
         
         # 恢复地图地块
         if save_data.get("map_tiles"):
@@ -194,7 +283,6 @@ class SaveManager:
         if save_data.get("history_logs"):
             print(f"[存档管理器] 恢复 {len(save_data['history_logs'])} 条历史记录...")
             for log_data in save_data["history_logs"]:
-                # normalize dates if needed, similar to species
                 if isinstance(log_data.get("created_at"), str):
                      try:
                         log_data["created_at"] = datetime.fromisoformat(log_data["created_at"].replace("Z", "+00:00"))
@@ -202,6 +290,45 @@ class SaveManager:
                         pass
                 log = TurnLog(**log_data)
                 history_repository.log_turn(log)
+        
+        # ========== 恢复 Embedding 数据 ==========
+        embeddings_loaded = False
+        embeddings_path = save_dir / "embeddings.json"
+        if embeddings_path.exists() and self._embedding_service:
+            try:
+                embedding_data = json.loads(embeddings_path.read_text(encoding="utf-8"))
+                descriptions = [sp.description for sp in restored_species]
+                imported = self._embedding_service.import_embeddings(embedding_data, descriptions)
+                embeddings_loaded = imported > 0
+                print(f"[存档管理器] 已恢复 {imported} 个 embedding 向量")
+            except Exception as e:
+                print(f"[存档管理器] 恢复 embedding 数据失败: {e}")
+        
+        save_data["embeddings_loaded"] = embeddings_loaded
+        
+        # ========== 加载分类学数据 ==========
+        taxonomy_path = save_dir / "taxonomy.json"
+        if taxonomy_path.exists():
+            try:
+                save_data["taxonomy"] = json.loads(taxonomy_path.read_text(encoding="utf-8"))
+                print(f"[存档管理器] 已加载分类学数据")
+            except Exception as e:
+                print(f"[存档管理器] 加载分类学数据失败: {e}")
+                save_data["taxonomy"] = None
+        else:
+            save_data["taxonomy"] = None
+        
+        # ========== 加载事件 Embedding ==========
+        event_embeddings_path = save_dir / "event_embeddings.json"
+        if event_embeddings_path.exists():
+            try:
+                save_data["event_embeddings"] = json.loads(event_embeddings_path.read_text(encoding="utf-8"))
+                print(f"[存档管理器] 已加载事件 embedding 数据")
+            except Exception as e:
+                print(f"[存档管理器] 加载事件 embedding 失败: {e}")
+                save_data["event_embeddings"] = None
+        else:
+            save_data["event_embeddings"] = None
         
         print(f"[存档管理器] 游戏加载成功: {save_name}")
         return save_data
@@ -248,4 +375,7 @@ class SaveManager:
             except ValueError:
                 payload["updated_at"] = datetime.utcnow()
         return payload
-
+    
+    def get_save_dir(self, save_name: str) -> Path | None:
+        """获取存档目录路径（公开方法）"""
+        return self._find_save_dir(save_name)

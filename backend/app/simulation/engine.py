@@ -56,6 +56,7 @@ from ..services.species.tiering import SpeciesTieringService
 from .environment import EnvironmentSystem
 from .species import MortalityEngine, MortalityResult
 from .tile_based_mortality import TileBasedMortalityEngine, AggregatedMortalityResult
+from ..services.analytics.embedding_integration import EmbeddingIntegrationService
 
 
 @dataclass(slots=True)
@@ -86,6 +87,7 @@ class SimulationEngine:
         reproduction_service: ReproductionService,
         adaptation_service: AdaptationService,
         gene_flow_service: GeneFlowService,
+        embedding_integration: EmbeddingIntegrationService | None = None,
     ) -> None:
         self.environment = environment
         self.mortality = mortality
@@ -109,11 +111,16 @@ class SimulationEngine:
         self.gene_activation_service = GeneActivationService()
         self.tile_mortality = TileBasedMortalityEngine()  # 新增：按地块计算死亡率
         self.ai_pressure_service = create_ai_pressure_service(router)  # 新增：AI压力响应服务
+        
+        # 【新增】Embedding 集成服务 - 管理分类学、演化预测、叙事生成等扩展功能
+        self.embedding_integration = embedding_integration or EmbeddingIntegrationService(embeddings, router)
+        
         self.turn_counter = 0
         self.watchlist: set[str] = set()
         self._event_callback = None  # 事件回调函数
         self._use_tile_based_mortality = True  # 是否使用按地块计算的死亡率
         self._use_ai_pressure_response = True  # 是否使用AI压力响应修正
+        self._use_embedding_integration = True  # 是否使用Embedding集成功能
     
     def _emit_event(self, event_type: str, message: str, category: str = "其他", **extra):
         """发送事件到前端"""
@@ -400,6 +407,17 @@ class SimulationEngine:
                 
                 logger.info(f"当前物种数量: {len(species_batch)} (总共{len(all_species)}个，其中{len(extinct_codes)}个已灭绝)")
                 self._emit_event("info", f"当前存活物种: {len(species_batch)} 个", "物种")
+                
+                # 【Embedding集成】回合开始钩子 - 更新索引
+                if self._use_embedding_integration and species_batch:
+                    try:
+                        self.embedding_integration.on_turn_start(self.turn_counter, species_batch)
+                        # 记录压力事件
+                        self.embedding_integration.on_pressure_applied(
+                            self.turn_counter, command.pressures, modifiers
+                        )
+                    except Exception as e:
+                        logger.warning(f"[Embedding集成] 回合开始钩子失败: {e}")
                 
                 if species_batch and (abs(temp_delta_for_habitats) > 0.1 or abs(sea_delta_for_habitats) > 0.5):
                     habitat_manager.adjust_habitats_for_climate(
@@ -999,6 +1017,32 @@ class SimulationEngine:
                     logger.info(f"[AI并行] 开始阶段2: {ai_task_names[1]} (2/{total_tasks})...")
                     self._emit_event("ai_progress", f"🔄 正在执行: {ai_task_names[1]}", "AI",
                                     total=total_tasks, completed=completed_count, current_task=ai_task_names[1])
+                    
+                    # 【Embedding集成】获取演化提示辅助分化决策
+                    if self._use_embedding_integration:
+                        try:
+                            evolution_hints = {}
+                            # 将环境修改器映射到压力向量类型
+                            pressure_vectors = self.embedding_integration.map_pressures_to_vectors(modifiers)
+                            
+                            # 为高演化潜力的物种获取演化提示
+                            for result in critical_results + focus_results:
+                                sp = result.species
+                                # 只为种群较大、死亡率中等的物种获取提示（分化候选）
+                                pop = sp.morphology_stats.get("population", 0)
+                                if pop > 5000 and 0.05 < result.death_rate < 0.5:
+                                    hint = self.embedding_integration.get_evolution_hints(
+                                        sp, pressure_vectors
+                                    )
+                                    if hint:
+                                        evolution_hints[sp.lineage_code] = hint
+                            
+                            if evolution_hints:
+                                self.speciation.set_evolution_hints(evolution_hints)
+                                logger.info(f"[Embedding集成] 为 {len(evolution_hints)} 个物种提供演化提示")
+                        except Exception as e:
+                            logger.warning(f"[Embedding集成] 获取演化提示失败: {e}")
+                    
                     try:
                         branching = await asyncio.wait_for(
                             self.speciation.process_async(
@@ -1074,6 +1118,21 @@ class SimulationEngine:
                             pop = int(sp.morphology_stats.get("population", 0))
                             logger.info(f"  - {sp.common_name}: 初始人口 {pop:,}")
                             self._emit_event("speciation", f"🌱 新物种: {sp.common_name} (从 {sp.parent_code} 分化)", "分化")
+                            
+                            # 【Embedding集成】记录分化事件
+                            if self._use_embedding_integration:
+                                try:
+                                    parent_sp = next(
+                                        (s for s in species_batch if s.lineage_code == sp.parent_code), 
+                                        None
+                                    )
+                                    if parent_sp:
+                                        self.embedding_integration.on_speciation(
+                                            self.turn_counter, parent_sp, [sp],
+                                            trigger_reason="环境压力分化"
+                                        )
+                                except Exception as e:
+                                    logger.warning(f"[Embedding集成] 记录分化事件失败: {e}")
                         
                         # 更新 species_batch 以包含新物种
                         species_batch.extend(new_species)
@@ -1160,15 +1219,49 @@ class SimulationEngine:
                 logger.info(f"保存人口快照...")
                 self._save_population_snapshots(all_species_final, self.turn_counter)
                 
+                # 【Embedding集成】记录灭绝事件
+                if self._use_embedding_integration:
+                    try:
+                        for result in combined_results:
+                            if result.species.status == "extinct":
+                                self.embedding_integration.on_extinction(
+                                    self.turn_counter,
+                                    result.species,
+                                    cause=result.death_causes if hasattr(result, 'death_causes') else "环境压力"
+                                )
+                    except Exception as e:
+                        logger.warning(f"[Embedding集成] 记录灭绝事件失败: {e}")
+                
+                # 【Embedding集成】回合结束钩子 - 更新分类树、导出数据
+                embedding_turn_data = {}
+                if self._use_embedding_integration:
+                    try:
+                        embedding_turn_data = self.embedding_integration.on_turn_end(
+                            self.turn_counter, species_batch
+                        )
+                        if embedding_turn_data.get("taxonomy"):
+                            logger.info(f"[Embedding集成] 分类树已更新")
+                    except Exception as e:
+                        logger.warning(f"[Embedding集成] 回合结束钩子失败: {e}")
+                
                 # 14. 保存历史记录
                 logger.info(f"保存历史记录...")
                 self._emit_event("stage", "💾 保存历史记录", "系统")
+                
+                # 将 embedding 集成数据添加到报告中（可选）
+                record_data = report.model_dump(mode="json")
+                if embedding_turn_data:
+                    record_data["embedding_integration"] = {
+                        "has_taxonomy": "taxonomy" in embedding_turn_data,
+                        "has_narrative": "narrative" in embedding_turn_data,
+                    }
+                
                 history_repository.log_turn(
                     TurnLog(
                         turn_index=report.turn_index,
                         pressures_summary=report.pressures_summary,
                         narrative=report.narrative,
-                        record_data=report.model_dump(mode="json"),
+                        record_data=record_data,
                     )
                 )
                 

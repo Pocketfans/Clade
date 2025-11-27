@@ -47,6 +47,9 @@ class SpeciationService:
         self._tile_population_cache: dict[str, dict[int, float]] = {}  # {lineage_code: {tile_id: population}}
         self._tile_adjacency: dict[int, set[int]] = {}  # {tile_id: {adjacent_tile_ids}}
         self._speciation_candidates: dict[str, dict] = {}  # 预筛选的分化候选数据
+        
+        # 【Embedding集成】演化提示缓存
+        self._evolution_hints: dict[str, dict] = {}  # {lineage_code: {reference_species, predicted_traits, ...}}
     
     def set_tile_mortality_data(
         self, 
@@ -86,6 +89,19 @@ class SpeciationService:
         self._tile_mortality_cache.clear()
         self._tile_population_cache.clear()
         self._speciation_candidates.clear()
+        self._evolution_hints.clear()
+    
+    def set_evolution_hints(self, hints: dict[str, dict]) -> None:
+        """设置演化提示（由 EmbeddingIntegrationService 提供）
+        
+        Args:
+            hints: {lineage_code: {reference_species, predicted_traits, confidence}}
+        """
+        self._evolution_hints = hints
+    
+    def get_evolution_hint(self, lineage_code: str) -> dict | None:
+        """获取特定物种的演化提示"""
+        return self._evolution_hints.get(lineage_code)
 
     async def process_async(
         self,

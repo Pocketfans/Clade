@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { ViewMode } from "../MapViewSelector";
 
 interface Props {
@@ -11,10 +11,54 @@ interface Props {
   onOpenTrends: () => void;
   onOpenMapHistory?: () => void;
   onOpenLogs?: () => void;
-  onCreateSpecies?: () => void;  // 新增：创建物种入口
+  onCreateSpecies?: () => void;
   is3D?: boolean;
   onToggle3D?: () => void;
 }
+
+// 视图模式分组
+const VIEW_GROUPS = {
+  terrain: {
+    label: "地形",
+    icon: "🗺️",
+    modes: [
+      { id: "terrain" as ViewMode, label: "实景地图", icon: "🌍", description: "综合地形、覆盖物与气候的真实世界风格" },
+      { id: "terrain_type" as ViewMode, label: "地形分类", icon: "🏔️", description: "纯地形分类（深海/浅海/平原/丘陵/山地）" },
+      { id: "elevation" as ViewMode, label: "海拔高度", icon: "📐", description: "海拔高度渐变色阶（-11000m 至 8848m）" },
+    ]
+  },
+  climate: {
+    label: "气候",
+    icon: "🌡️",
+    modes: [
+      { id: "climate" as ViewMode, label: "气候带", icon: "🌡️", description: "气候带与温度分布" },
+    ]
+  },
+  ecology: {
+    label: "生态",
+    icon: "🌿",
+    modes: [
+      { id: "biodiversity" as ViewMode, label: "生物热力", icon: "🧬", description: "物种分布与多样性热力图" },
+      { id: "suitability" as ViewMode, label: "适宜度", icon: "🎯", description: "当前选中物种的生存适宜度分布" },
+    ]
+  }
+};
+
+// 分析工具定义
+const ANALYSIS_TOOLS = [
+  { id: "create", label: "创建物种", icon: "✨", description: "设计并投放新物种", color: "#f59e0b" },
+  { id: "genealogy", label: "演化族谱", icon: "🧬", description: "查看物种演化关系树", color: "#c084fc" },
+  { id: "foodweb", label: "食物网", icon: "🕸️", description: "分析捕食与被捕食关系", color: "#f43f5e" },
+  { id: "niche", label: "生态位对比", icon: "📊", description: "对比不同物种的生态位", color: "#38bdf8" },
+  { id: "trends", label: "全球趋势", icon: "📈", description: "查看环境与种群变化趋势", color: "#4ade80" },
+];
+
+// 历史工具
+const HISTORY_TOOLS = [
+  { id: "maphistory", label: "地质变迁", icon: "🌋", description: "回顾地图的地质变化历史", color: "#a78bfa" },
+  { id: "history", label: "演化年鉴", icon: "📜", description: "查看完整的演化历史记录", color: "#fbbf24" },
+  { id: "logs", label: "系统日志", icon: "🖥️", description: "查看详细的系统运行日志", color: "#94a3b8" },
+];
 
 export function LensBar({ 
   currentMode, 
@@ -30,86 +74,200 @@ export function LensBar({
   is3D = false,
   onToggle3D
 }: Props) {
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [hoveredTool, setHoveredTool] = useState<string | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const lenses: Array<{ id: ViewMode; label: string; icon: string; color: string }> = [
-    { id: "terrain", label: "实景", icon: "🌍", color: "#22c55e" },
-    { id: "terrain_type", label: "地形", icon: "🏔️", color: "#a78bfa" },
-    { id: "elevation", label: "海拔", icon: "📏", color: "#fb923c" },
-    { id: "climate", label: "气候", icon: "🌡️", color: "#f43f5e" },
-    { id: "biodiversity", label: "生态", icon: "🌿", color: "#4ade80" },
-    { id: "suitability", label: "适宜", icon: "🎯", color: "#2dd4bf" },
-  ];
+  // 点击外部关闭下拉菜单
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setActiveDropdown(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
-  const tools = [
-    { id: "create", label: "创建物种", icon: "✨", action: onCreateSpecies, color: "#f59e0b" },
-    { id: "genealogy", label: "族谱", icon: "🧬", action: onToggleGenealogy, color: "#c084fc" },
-    { id: "trends", label: "全球趋势", icon: "📈", action: onOpenTrends, color: "#4ade80" },
-    { id: "niche", label: "生态位", icon: "📊", action: onToggleNiche, color: "#38bdf8" },
-    { id: "foodweb", label: "食物网", icon: "🕸️", action: onToggleFoodWeb, color: "#f43f5e" },
-    { id: "maphistory", label: "地图变迁", icon: "🗺️", action: onOpenMapHistory, color: "#a78bfa" },
-    { id: "logs", label: "系统日志", icon: "🖥️", action: onOpenLogs, color: "#94a3b8" },
-    { id: "history", label: "年鉴", icon: "📜", action: onToggleHistory, color: "#fbbf24" },
-  ].filter(tool => tool.action);
+  // 获取当前模式所在的分组
+  const getCurrentGroupKey = () => {
+    for (const [key, group] of Object.entries(VIEW_GROUPS)) {
+      if (group.modes.some(m => m.id === currentMode)) {
+        return key;
+      }
+    }
+    return "terrain";
+  };
+
+  // 获取当前模式的信息
+  const getCurrentModeInfo = () => {
+    for (const group of Object.values(VIEW_GROUPS)) {
+      const mode = group.modes.find(m => m.id === currentMode);
+      if (mode) return mode;
+    }
+    return VIEW_GROUPS.terrain.modes[0];
+  };
+
+  const handleToolClick = (toolId: string) => {
+    switch (toolId) {
+      case "create": onCreateSpecies?.(); break;
+      case "genealogy": onToggleGenealogy(); break;
+      case "foodweb": onToggleFoodWeb(); break;
+      case "niche": onToggleNiche(); break;
+      case "trends": onOpenTrends(); break;
+      case "maphistory": onOpenMapHistory?.(); break;
+      case "history": onToggleHistory(); break;
+      case "logs": onOpenLogs?.(); break;
+    }
+  };
+
+  const currentModeInfo = getCurrentModeInfo();
+  const currentGroupKey = getCurrentGroupKey();
 
   return (
-    <div className="lensbar-container">
-      {/* Map Lenses Group */}
-      <div className="lensbar-group lensbar-lenses">
-        {lenses.map(lens => {
-          const isActive = currentMode === lens.id;
-          return (
+    <div className="lensbar-v2" ref={dropdownRef}>
+      {/* ===== 左侧：地图视图选择 ===== */}
+      <div className="lensbar-section lensbar-views">
+        <div className="section-label">视图</div>
+        <div className="view-controls">
+          {/* 视图分组按钮 */}
+          {Object.entries(VIEW_GROUPS).map(([groupKey, group]) => {
+            const isActiveGroup = currentGroupKey === groupKey;
+            const isDropdownOpen = activeDropdown === groupKey;
+            const groupModes = group.modes;
+            const activeModeInGroup = groupModes.find(m => m.id === currentMode);
+
+            return (
+              <div key={groupKey} className="view-group-wrapper">
+                <button
+                  className={`view-group-btn ${isActiveGroup ? 'active' : ''} ${isDropdownOpen ? 'open' : ''}`}
+                  onClick={() => {
+                    if (groupModes.length === 1) {
+                      // 只有一个模式，直接切换
+                      onModeChange(groupModes[0].id);
+                      setActiveDropdown(null);
+                    } else {
+                      // 多个模式，展开下拉菜单
+                      setActiveDropdown(isDropdownOpen ? null : groupKey);
+                    }
+                  }}
+                >
+                  <span className="view-icon">{activeModeInGroup?.icon || group.icon}</span>
+                  <span className="view-label">
+                    {activeModeInGroup?.label || group.label}
+                  </span>
+                  {groupModes.length > 1 && (
+                    <span className="dropdown-arrow">{isDropdownOpen ? '▲' : '▼'}</span>
+                  )}
+                </button>
+
+                {/* 下拉菜单 */}
+                {isDropdownOpen && groupModes.length > 1 && (
+                  <div className="view-dropdown">
+                    {groupModes.map(mode => (
+                      <button
+                        key={mode.id}
+                        className={`dropdown-item ${currentMode === mode.id ? 'active' : ''}`}
+                        onClick={() => {
+                          onModeChange(mode.id);
+                          setActiveDropdown(null);
+                        }}
+                      >
+                        <span className="item-icon">{mode.icon}</span>
+                        <div className="item-content">
+                          <span className="item-label">{mode.label}</span>
+                          <span className="item-desc">{mode.description}</span>
+                        </div>
+                        {currentMode === mode.id && <span className="item-check">✓</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* 2D/3D 切换 */}
+          {onToggle3D && (
             <button
-              key={lens.id}
-              onClick={() => onModeChange(lens.id)}
-              title={`切换至${lens.label}视图`}
-              className={`lens-btn ${isActive ? 'active' : ''}`}
-              style={{
-                '--lens-color': lens.color,
-              } as React.CSSProperties}
+              className={`render-toggle ${is3D ? 'is-3d' : 'is-2d'}`}
+              onClick={onToggle3D}
+              title={is3D ? "切换至2D平面视图" : "切换至3D立体视图"}
             >
-              <span className="lens-icon">{lens.icon}</span>
-              <span className="lens-label">{lens.label}</span>
-              {isActive && <div className="lens-active-indicator" />}
+              <span className="render-icon">{is3D ? '🌐' : '🗺️'}</span>
+              <span className="render-label">{is3D ? '3D' : '2D'}</span>
             </button>
-          );
-        })}
+          )}
+        </div>
       </div>
 
-      {/* Functional Tools Group */}
-      <div className="lensbar-group lensbar-tools">
-        {/* 3D Toggle */}
-        {onToggle3D && (
-          <button
-            onClick={onToggle3D}
-            title={is3D ? "切换回2D视图" : "切换至3D视图"}
-            className={`tool-btn tool-3d ${is3D ? 'active' : ''}`}
-          >
-            <span className="tool-3d-text">{is3D ? "3D" : "2D"}</span>
-          </button>
-        )}
+      {/* ===== 分隔线 ===== */}
+      <div className="lensbar-divider-v2" />
 
-        <div className="lensbar-divider" />
+      {/* ===== 中间：分析工具 ===== */}
+      <div className="lensbar-section lensbar-analysis">
+        <div className="section-label">分析</div>
+        <div className="tool-row">
+          {ANALYSIS_TOOLS.filter(t => {
+            if (t.id === "create") return !!onCreateSpecies;
+            return true;
+          }).map(tool => (
+            <button
+              key={tool.id}
+              className={`tool-btn-v2 ${hoveredTool === tool.id ? 'hovered' : ''}`}
+              style={{ '--tool-color': tool.color } as React.CSSProperties}
+              onClick={() => handleToolClick(tool.id)}
+              onMouseEnter={() => setHoveredTool(tool.id)}
+              onMouseLeave={() => setHoveredTool(null)}
+            >
+              <span className="tool-icon-v2">{tool.icon}</span>
+              {hoveredTool === tool.id && (
+                <div className="tool-tooltip-v2">
+                  <div className="tooltip-title">{tool.label}</div>
+                  <div className="tooltip-desc">{tool.description}</div>
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
 
-        {tools.map(tool => (
-          <button
-            key={tool.id}
-            onClick={tool.action}
-            title={tool.label}
-            className={`tool-btn ${hoveredTool === tool.id ? 'hovered' : ''}`}
-            style={{
-              '--tool-color': tool.color,
-            } as React.CSSProperties}
-            onMouseEnter={() => setHoveredTool(tool.id)}
-            onMouseLeave={() => setHoveredTool(null)}
-          >
-            <span className="tool-icon">{tool.icon}</span>
-            <div className="tool-glow" />
-            {hoveredTool === tool.id && (
-              <div className="tool-tooltip">{tool.label}</div>
-            )}
-          </button>
-        ))}
+      {/* ===== 分隔线 ===== */}
+      <div className="lensbar-divider-v2" />
+
+      {/* ===== 右侧：历史与系统 ===== */}
+      <div className="lensbar-section lensbar-history">
+        <div className="section-label">历史</div>
+        <div className="tool-row">
+          {HISTORY_TOOLS.filter(t => {
+            if (t.id === "maphistory") return !!onOpenMapHistory;
+            if (t.id === "logs") return !!onOpenLogs;
+            return true;
+          }).map(tool => (
+            <button
+              key={tool.id}
+              className={`tool-btn-v2 ${hoveredTool === tool.id ? 'hovered' : ''}`}
+              style={{ '--tool-color': tool.color } as React.CSSProperties}
+              onClick={() => handleToolClick(tool.id)}
+              onMouseEnter={() => setHoveredTool(tool.id)}
+              onMouseLeave={() => setHoveredTool(null)}
+            >
+              <span className="tool-icon-v2">{tool.icon}</span>
+              {hoveredTool === tool.id && (
+                <div className="tool-tooltip-v2">
+                  <div className="tooltip-title">{tool.label}</div>
+                  <div className="tooltip-desc">{tool.description}</div>
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ===== 当前视图信息指示 ===== */}
+      <div className="current-view-indicator">
+        <span className="indicator-icon">{currentModeInfo.icon}</span>
+        <span className="indicator-label">{currentModeInfo.label}</span>
       </div>
     </div>
   );

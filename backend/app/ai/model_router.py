@@ -624,6 +624,84 @@ class ModelRouter:
             
             return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
+    async def chat(
+        self,
+        prompt: str,
+        capability: str = "turn_report",
+        system_prompt: str | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
+        """通用聊天接口 - 直接传入完整 prompt 文本进行对话
+        
+        此方法用于不需要预定义 prompt 模板的场景，如动态生成的叙事、解释等。
+        
+        Args:
+            prompt: 完整的用户提示文本
+            capability: 使用的模型配置（决定使用哪个模型、超时等设置）
+            system_prompt: 可选的系统提示
+            max_tokens: 可选的最大输出 token 数
+            
+        Returns:
+            LLM 的响应文本
+            
+        Raises:
+            RuntimeError: 当配置缺失或调用失败时
+        """
+        config = self.resolve(capability)
+        override = self.overrides.get(capability, {})
+        base_url = override.get("base_url") or self.api_base_url
+        api_key = override.get("api_key") or self.api_key
+        timeout_value = override.get("timeout") or self.timeout or 60
+        model_name = override.get("model") or config.model
+        extra_body = override.get("extra_body") or config.extra_body
+        
+        # 检查是否为本地模式（无 API 配置）
+        if config.provider == "local" or not base_url or not api_key:
+            logger.warning(f"[chat] {capability} 无 API 配置，返回占位符响应")
+            return f"[本地模式] 无法生成响应: {prompt[:100]}..."
+        
+        # 构建消息列表
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        
+        # 构建请求
+        endpoint = config.endpoint or "/chat/completions"
+        base_url_stripped = base_url.rstrip('/')
+        if not base_url_stripped.endswith('/v1') and endpoint == "/chat/completions":
+            endpoint = "/v1/chat/completions"
+        url = f"{base_url_stripped}{endpoint}"
+        
+        body: dict[str, Any] = {
+            "model": model_name,
+            "messages": messages,
+        }
+        if max_tokens:
+            body["max_tokens"] = max_tokens
+        if extra_body:
+            body.update(extra_body)
+        
+        headers = {"Authorization": f"Bearer {api_key}", "Connection": "close"}
+        
+        logger.debug(f"[chat] {capability} -> {url} (timeout={timeout_value}s)")
+        
+        async with self._semaphore:
+            try:
+                async with httpx.AsyncClient(timeout=timeout_value, http2=False) as client:
+                    response = await client.post(url, json=body, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
+            except httpx.TimeoutException:
+                logger.error(f"[chat] {capability} timeout after {timeout_value}s")
+                raise RuntimeError(f"Chat request timed out after {timeout_value}s") from None
+            except httpx.HTTPError as e:
+                logger.error(f"[chat] {capability} HTTP error: {e}")
+                raise RuntimeError(f"Chat request failed: {e}") from None
+            
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            return content
+
     async def astream_capability(
         self,
         capability: str,
