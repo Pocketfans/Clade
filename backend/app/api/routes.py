@@ -1476,8 +1476,6 @@ def reset_ai_diagnostics() -> dict:
     model_router._total_timeouts = 0
     model_router._request_stats = {}
     return {"success": True, "message": "诊断统计已重置"}
-        print(f"[日志读取错误] {e}")
-        return {"logs": [f"读取失败: {str(e)}"]}
 
 
 # ========== 生态系统健康指标 API ==========
