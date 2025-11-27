@@ -452,21 +452,25 @@ export default function App() {
       console.log("🌍 [演化] 开始推演，压力数:", drafts.length);
       console.log("📊 [演化] 正在解析环境压力...");
       
+      console.log("⏳ [演化] 等待后端响应...");
+      const startTime = Date.now();
       const next = await runTurn(drafts);
+      const elapsed = Date.now() - startTime;
       
-      console.log("✅ [演化] 推演完成，收到报告数:", next.length);
+      console.log(`✅ [演化] 推演完成，收到报告数: ${next.length}，耗时: ${elapsed}ms`);
       console.log("📈 [演化] 更新物种数据和地图状态...");
       
       setReports((prev) => normalizeReports([...prev, ...next]));
       
       // 并行刷新，加快速度，并捕获错误避免阻塞
       console.log("🔄 [演化] 刷新地图和物种列表...");
+      const refreshStart = Date.now();
       await Promise.all([
         refreshMap().catch(e => console.error("刷新地图失败:", e)),
         refreshSpeciesList().catch(e => console.error("刷新物种列表失败:", e)),
         refreshQueue().catch(e => console.error("刷新队列失败:", e)),
       ]);
-      console.log("✅ [演化] 刷新完成");
+      console.log(`✅ [演化] 刷新完成，耗时: ${Date.now() - refreshStart}ms`);
       
       setSpeciesRefreshTrigger(prev => prev + 1); // 触发物种详情刷新
       setPendingPressures([]);

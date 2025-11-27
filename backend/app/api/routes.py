@@ -549,6 +549,11 @@ async def run_turns(command: TurnCommand) -> list[TurnReport]:
         action_queue["queued_rounds"] = max(action_queue["queued_rounds"] - command.rounds, 0)
         simulation_running = False
         
+        # 【诊断日志】记录响应数据量，帮助排查卡顿问题
+        if reports:
+            total_species = sum(len(r.species) for r in reports)
+            print(f"[响应准备] 返回 {len(reports)} 个报告, 共 {total_species} 个物种快照")
+        
         return reports
     except Exception as e:
         action_queue["running"] = False

@@ -44,11 +44,29 @@ export async function runTurn(pressures: PressureDraft[] = []): Promise<TurnRepo
   console.log("🚀 [演化] 发送推演请求到后端...");
   console.log("📋 [演化] 应用压力数量:", pressures.length);
   
-  const res = await fetch("/api/turns/run", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rounds: 1, pressures }),
-  });
+  // 添加超时控制（5分钟），避免无限等待
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    console.error("⏰ [演化] 请求超时（5分钟），正在中断...");
+    controller.abort();
+  }, 5 * 60 * 1000);
+  
+  let res: Response;
+  try {
+    res = await fetch("/api/turns/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rounds: 1, pressures }),
+      signal: controller.signal,
+    });
+  } catch (fetchError: any) {
+    clearTimeout(timeoutId);
+    if (fetchError.name === 'AbortError') {
+      throw new Error("推演请求超时，请重试");
+    }
+    throw fetchError;
+  }
+  clearTimeout(timeoutId);
   
   if (!res.ok) {
     console.error("❌ [演化] 推演请求失败, 状态码:", res.status);
