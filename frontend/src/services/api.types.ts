@@ -6,9 +6,69 @@
 
 export interface SaveMetadata {
   name: string;
+  save_name: string;      // 原始存档名
   turn: number;
+  turn_index: number;     // 与turn相同，兼容不同格式
   species_count: number;
   timestamp: number;
+  scenario: string;       // 剧本/场景名称
+  last_saved: string;     // ISO格式的最后保存时间
+  created_at?: string;    // ISO格式的创建时间
+}
+
+// 辅助函数：清理存档名称显示
+export function formatSaveName(rawName: string): { displayName: string; isAutoSave: boolean } {
+  // 检测自动保存
+  const isAutoSave = rawName.toLowerCase().includes('autosave');
+  
+  // 清理常见的时间戳模式
+  let displayName = rawName
+    // 移除 save_ 前缀
+    .replace(/^save_/, '')
+    // 移除 autosave_ 前缀中的时间戳（保留核心名称）
+    .replace(/^autosave_(\d+)_\d{8}_\d{6}$/, '自动存档 #$1')
+    // 移除尾部时间戳 _YYYYMMDD_HHMMSS
+    .replace(/_\d{8}_\d{6}$/, '')
+    // 移除开头的时间戳 YYYYMMDD_HHMMSS_
+    .replace(/^\d{8}_\d{6}_/, '');
+  
+  // 如果清理后为空或纯数字，使用原名
+  if (!displayName || /^\d+$/.test(displayName)) {
+    if (isAutoSave) {
+      const match = rawName.match(/autosave_(\d+)/i);
+      displayName = match ? `自动存档 #${match[1]}` : '自动存档';
+    } else {
+      displayName = rawName;
+    }
+  }
+  
+  return { displayName, isAutoSave };
+}
+
+// 辅助函数：格式化相对时间
+export function formatRelativeTime(isoString: string): string {
+  try {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+    
+    if (diffMins < 1) return '刚刚';
+    if (diffMins < 60) return `${diffMins} 分钟前`;
+    if (diffHours < 24) return `${diffHours} 小时前`;
+    if (diffDays < 7) return `${diffDays} 天前`;
+    
+    return date.toLocaleDateString('zh-CN', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  } catch {
+    return '未知时间';
+  }
 }
 
 export interface SpeciesSnapshot {
@@ -29,6 +89,7 @@ export interface SpeciesSnapshot {
   trophic_level?: number;
   grazing_pressure?: number;
   predation_pressure?: number;
+  ai_narrative?: string | null; // AI生成的物种叙事
 }
 
 export interface BackgroundSummary {
@@ -203,6 +264,11 @@ export interface UIConfig {
   embedding_provider_id?: string | null;
   embedding_model?: string | null;
   embedding_dimensions?: number | null;
+  
+  // 5. 自动保存配置
+  autosave_enabled?: boolean;      // 是否启用自动保存
+  autosave_interval?: number;      // 每N回合自动保存一次
+  autosave_max_slots?: number;     // 最大自动保存槽位数
 
   // --- Legacy Fields (For backward compatibility types) ---
   ai_provider?: string | null;
@@ -267,4 +333,63 @@ export interface NicheCompareResult {
   overlap: number;
   competition_intensity: number;
   niche_dimensions: Record<string, Record<string, number>>;
+}
+
+// ========== 食物网相关类型 ==========
+
+export interface FoodWebNode {
+  id: string;
+  name: string;
+  trophic_level: number;
+  population: number;
+  diet_type: string;
+  habitat_type: string;
+  prey_count: number;
+  predator_count: number;
+}
+
+export interface FoodWebLink {
+  source: string;  // 猎物
+  target: string;  // 捕食者
+  value: number;   // 偏好比例
+  predator_name: string;
+  prey_name: string;
+}
+
+export interface FoodWebData {
+  nodes: FoodWebNode[];
+  links: FoodWebLink[];
+  keystone_species: string[];
+  trophic_levels: Record<number, string[]>;
+  total_species: number;
+  total_links: number;
+}
+
+export interface SpeciesFoodChain {
+  species: {
+    code: string;
+    name: string;
+    trophic_level: number;
+  };
+  prey_chain: FoodChainNode[];
+  predator_chain: FoodChainNode[];
+  food_dependency: number;
+  predation_pressure: number;
+}
+
+export interface FoodChainNode {
+  code: string;
+  name: string;
+  trophic_level: number;
+  depth: number;
+  prey?: FoodChainNode[];
+  predators?: FoodChainNode[];
+}
+
+export interface ExtinctionImpact {
+  extinct_species: string;
+  directly_affected: string[];
+  indirectly_affected: string[];
+  food_chain_collapse_risk: number;
+  affected_biomass_percentage: number;
 }

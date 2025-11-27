@@ -76,6 +76,7 @@ from ..services.species.tiering import SpeciesTieringService, TieringConfig
 from ..services.system.save_manager import SaveManager
 from ..services.species.species_generator import SpeciesGenerator
 from ..services.analytics.ecosystem_health import EcosystemHealthService
+from ..services.species.predation import PredationService
 from ..simulation.engine import SimulationEngine
 from ..simulation.environment import EnvironmentSystem
 from ..simulation.species import MortalityEngine
@@ -122,6 +123,18 @@ model_router = ModelRouter(
             provider="openai", 
             model=settings.speciation_model,
             extra_body={"response_format": {"type": "json_object"}}  # 强制JSON
+        ),
+        # 【新增】综合状态评估（合并了压力评估+紧急响应）
+        "species_status_eval": ModelConfig(
+            provider="openai", 
+            model=settings.speciation_model,
+            extra_body={"response_format": {"type": "json_object"}}
+        ),
+        # 【新增】物种叙事（合并了Critical+Focus增润）
+        "species_narrative": ModelConfig(
+            provider="openai", 
+            model=settings.speciation_model,  # 使用与分化相同的模型
+            extra_body={"response_format": {"type": "json_object"}}
         ),
     },
     base_url=settings.ai_base_url,
@@ -198,6 +211,10 @@ pressure_queue: list[list[PressureConfig]] = []
 # 事件队列：用于实时推送演化日志到前端
 simulation_events: Queue = Queue()
 simulation_running = False
+
+# 自动保存相关
+current_save_name: str | None = None  # 当前存档名称
+autosave_counter: int = 0  # 自动保存回合计数器
 
 
 def _serialize_species_detail(species) -> SpeciesDetail:
@@ -451,10 +468,19 @@ def initialize_environment() -> None:
         print(traceback.format_exc())
 
 
-def push_simulation_event(event_type: str, message: str, category: str = "其他", **extra):
-    """推送演化事件到前端"""
+def push_simulation_event(event_type: str, message: str, category: str = "其他", force: bool = False, **extra):
+    """推送演化事件到前端
+    
+    Args:
+        event_type: 事件类型 (start, complete, error, stage, etc.)
+        message: 事件消息
+        category: 事件分类
+        force: 是否强制推送（即使 simulation_running=False）
+        **extra: 额外参数
+    """
     global simulation_events, simulation_running
-    if simulation_running:
+    # 允许在 simulation_running=False 时也能推送关键事件（如 complete, error）
+    if simulation_running or force or event_type in ("complete", "error", "turn_complete"):
         try:
             event = {
                 "type": event_type,
@@ -465,6 +491,9 @@ def push_simulation_event(event_type: str, message: str, category: str = "其他
             # 添加额外参数（如AI进度信息）
             event.update(extra)
             simulation_events.put(event)
+            # 对于关键事件，打印日志确认
+            if event_type in ("complete", "error", "turn_complete"):
+                print(f"[SSE事件] 已推送 {event_type}: {message}")
         except Exception as e:
             print(f"[事件推送错误] {str(e)}")
 
@@ -511,10 +540,91 @@ async def stream_simulation_events():
     )
 
 
+def _perform_autosave(turn_index: int) -> bool:
+    """执行自动保存
+    
+    Returns:
+        bool: 是否成功保存
+    """
+    global current_save_name, autosave_counter
+    
+    if not current_save_name:
+        print("[自动保存] 跳过: 没有当前存档")
+        return False
+    
+    # 读取配置
+    config = environment_repository.load_ui_config(ui_config_path)
+    
+    if not config.autosave_enabled:
+        return False
+    
+    autosave_counter += 1
+    
+    # 检查是否达到保存间隔
+    if autosave_counter < config.autosave_interval:
+        print(f"[自动保存] 跳过: 计数 {autosave_counter}/{config.autosave_interval}")
+        return False
+    
+    # 重置计数器
+    autosave_counter = 0
+    
+    try:
+        # 生成自动保存存档名称
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        autosave_name = f"autosave_{current_save_name}_{timestamp}"
+        
+        print(f"[自动保存] 开始保存: {autosave_name}, 回合={turn_index}")
+        push_simulation_event("autosave", f"💾 自动保存中...", "系统")
+        
+        # 创建自动保存
+        save_manager.create_save(autosave_name, f"自动保存 - T{turn_index}")
+        save_manager.save_game(autosave_name, turn_index)
+        
+        # 清理旧的自动保存（保留最新的N个）
+        _cleanup_old_autosaves(current_save_name, config.autosave_max_slots)
+        
+        print(f"[自动保存] 完成: {autosave_name}")
+        push_simulation_event("autosave_complete", f"✅ 自动保存完成 (T{turn_index})", "系统")
+        return True
+    except Exception as e:
+        print(f"[自动保存] 失败: {str(e)}")
+        push_simulation_event("autosave_error", f"⚠️ 自动保存失败: {str(e)}", "错误")
+        return False
+
+
+def _cleanup_old_autosaves(base_save_name: str, max_slots: int) -> None:
+    """清理旧的自动保存，只保留最新的N个"""
+    try:
+        all_saves = save_manager.list_saves()
+        
+        # 筛选出属于当前存档的自动保存
+        autosaves = [
+            s for s in all_saves 
+            if s.get("name", "").startswith(f"autosave_{base_save_name}_")
+        ]
+        
+        # 按时间戳排序（从新到旧）
+        autosaves.sort(key=lambda s: s.get("timestamp", 0), reverse=True)
+        
+        # 删除超出限制的旧存档
+        for old_save in autosaves[max_slots:]:
+            save_name = old_save.get("name")
+            if save_name:
+                print(f"[自动保存] 清理旧存档: {save_name}")
+                save_manager.delete_save(save_name)
+    except Exception as e:
+        print(f"[自动保存] 清理旧存档失败: {str(e)}")
+
+
 @router.post("/turns/run", response_model=list[TurnReport])
 async def run_turns(command: TurnCommand) -> list[TurnReport]:
     import traceback
-    global simulation_running
+    import time as time_module
+    global simulation_running, autosave_counter
+    
+    start_time = time_module.time()
+    
     try:
         print(f"[推演开始] 回合数: {command.rounds}, 压力数: {len(command.pressures)}")
         
@@ -541,26 +651,46 @@ async def run_turns(command: TurnCommand) -> list[TurnReport]:
         simulation_engine._event_callback = push_simulation_event
         
         reports = await simulation_engine.run_turns_async(command)
-        print(f"[推演完成] 生成了 {len(reports)} 个报告")
         
+        elapsed = time_module.time() - start_time
+        print(f"[推演完成] 生成了 {len(reports)} 个报告, 耗时 {elapsed:.1f}秒")
+        
+        # 【关键】在设置 simulation_running=False 之前发送完成事件
         push_simulation_event("complete", f"推演完成！生成了 {len(reports)} 个报告", "系统")
+        # 同时发送 turn_complete 事件（前端同时检查两种事件类型）
+        push_simulation_event("turn_complete", f"回合推演完成", "系统")
         
         action_queue["running"] = False
         action_queue["queued_rounds"] = max(action_queue["queued_rounds"] - command.rounds, 0)
         simulation_running = False
+        
+        # 【自动保存】每回合结束后检查是否需要自动保存
+        if reports:
+            latest_turn = reports[-1].turn_index
+            _perform_autosave(latest_turn)
         
         # 【诊断日志】记录响应数据量，帮助排查卡顿问题
         if reports:
             total_species = sum(len(r.species) for r in reports)
             print(f"[响应准备] 返回 {len(reports)} 个报告, 共 {total_species} 个物种快照")
         
+        # 【调试】确认即将返回响应
+        print(f"[HTTP响应] 正在序列化并返回响应...")
+        
         return reports
+        
     except Exception as e:
+        elapsed = time_module.time() - start_time
+        print(f"[推演错误] {str(e)}, 耗时 {elapsed:.1f}秒")
+        print(traceback.format_exc())
+        
+        # 【关键修复】先发送 error 事件，再设置 simulation_running=False
+        # 使用 force=True 确保事件一定能发送
+        push_simulation_event("error", f"推演失败: {str(e)}", "错误", force=True)
+        
         action_queue["running"] = False
         simulation_running = False
-        print(f"[推演错误] {str(e)}")
-        print(traceback.format_exc())
-        push_simulation_event("error", f"推演失败: {str(e)}", "错误")
+        
         raise HTTPException(status_code=500, detail=f"推演执行失败: {str(e)}")
 
 
@@ -871,12 +1001,18 @@ def list_saves() -> list[dict]:
 @router.post("/saves/create")
 async def create_save(request: CreateSaveRequest) -> dict:
     """创建新存档"""
+    global current_save_name, autosave_counter
     try:
         print(f"[存档API] 创建存档: {request.save_name}, 剧本: {request.scenario}")
         
         # 【关键修复】重置回合计数器
         simulation_engine.turn_counter = 0
         print(f"[存档API] 回合计数器已重置为 0")
+        
+        # 设置当前存档名称（用于自动保存）
+        current_save_name = request.save_name
+        autosave_counter = 0
+        print(f"[存档API] 当前存档名称设置为: {current_save_name}")
         
         # 1. 清空当前数据库（确保新存档从干净状态开始）
         print(f"[存档API] 清空当前数据...")
@@ -1077,6 +1213,7 @@ async def save_game(request: SaveGameRequest) -> dict:
 @router.post("/saves/load")
 async def load_game(request: LoadGameRequest) -> dict:
     """加载游戏存档"""
+    global current_save_name, autosave_counter
     try:
         save_data = save_manager.load_game(request.save_name)
         turn_index = save_data.get("turn_index", 0)
@@ -1084,6 +1221,21 @@ async def load_game(request: LoadGameRequest) -> dict:
         # 【关键修复】更新 simulation_engine 的回合计数器
         simulation_engine.turn_counter = turn_index
         print(f"[存档加载] 已恢复回合计数器: {turn_index}")
+        
+        # 设置当前存档名称（用于自动保存）
+        # 如果加载的是自动保存，提取原始存档名
+        if request.save_name.startswith("autosave_"):
+            # 格式: autosave_{原存档名}_{时间戳}
+            parts = request.save_name.split("_")
+            if len(parts) >= 3:
+                # 重建原始存档名（可能包含下划线）
+                current_save_name = "_".join(parts[1:-2]) if len(parts) > 3 else parts[1]
+            else:
+                current_save_name = request.save_name
+        else:
+            current_save_name = request.save_name
+        autosave_counter = 0
+        print(f"[存档加载] 当前存档名称设置为: {current_save_name}")
         
         return {"success": True, "turn_index": turn_index}
     except FileNotFoundError as e:
@@ -1629,6 +1781,93 @@ def get_ecosystem_health() -> EcosystemHealthResponse:
         health_grade=report.health_grade,
         health_summary=report.health_summary,
     )
+
+
+# 初始化捕食网服务
+predation_service = PredationService()
+
+
+@router.get("/ecosystem/food-web", tags=["ecosystem"])
+def get_food_web():
+    """获取真实的食物网数据
+    
+    返回基于物种prey_species字段的真实捕食关系，用于前端可视化。
+    
+    返回格式：
+    {
+        "nodes": [
+            {
+                "id": "A1",
+                "name": "物种名称",
+                "trophic_level": 2.0,
+                "population": 1000,
+                "diet_type": "herbivore",
+                "habitat_type": "marine",
+                "prey_count": 2,
+                "predator_count": 3
+            }
+        ],
+        "links": [
+            {
+                "source": "A1",  // 猎物
+                "target": "B1",  // 捕食者
+                "value": 0.7,    // 偏好比例
+                "predator_name": "捕食者名称",
+                "prey_name": "猎物名称"
+            }
+        ],
+        "keystone_species": ["A1", "A2"],  // 关键物种
+        "trophic_levels": {1: ["A1"], 2: ["B1", "B2"]},
+        "total_species": 10,
+        "total_links": 15
+    }
+    """
+    all_species = species_repository.list_species()
+    return predation_service.build_food_web(all_species)
+
+
+@router.get("/ecosystem/food-web/{lineage_code}", tags=["ecosystem"])
+def get_species_food_chain(lineage_code: str):
+    """获取特定物种的食物链
+    
+    返回该物种的上下游食物关系：
+    - prey_chain: 该物种的猎物及猎物的猎物（向下追溯）
+    - predator_chain: 捕食该物种的捕食者及其捕食者（向上追溯）
+    - food_dependency: 食物依赖满足度 (0-1)
+    - predation_pressure: 被捕食压力 (0-1)
+    """
+    species = species_repository.get_by_lineage(lineage_code)
+    if not species:
+        raise HTTPException(status_code=404, detail=f"物种 {lineage_code} 不存在")
+    
+    all_species = species_repository.list_species()
+    return predation_service.get_species_food_chain(species, all_species)
+
+
+@router.get("/ecosystem/extinction-impact/{lineage_code}", tags=["ecosystem"])
+def analyze_extinction_impact(lineage_code: str):
+    """分析物种灭绝的影响
+    
+    预测如果该物种灭绝会对生态系统造成什么影响：
+    - directly_affected: 直接受影响的捕食者（以该物种为食）
+    - indirectly_affected: 间接受影响的物种（二级以上）
+    - food_chain_collapse_risk: 食物链崩溃风险 (0-1)
+    - affected_biomass_percentage: 受影响生物量百分比
+    """
+    species = species_repository.get_by_lineage(lineage_code)
+    if not species:
+        raise HTTPException(status_code=404, detail=f"物种 {lineage_code} 不存在")
+    
+    all_species = species_repository.list_species()
+    impact = predation_service.analyze_extinction_impact(species, all_species)
+    
+    return {
+        "extinct_species": impact.extinct_species,
+        "directly_affected": impact.directly_affected,
+        "indirectly_affected": impact.indirectly_affected,
+        "food_chain_collapse_risk": impact.food_chain_collapse_risk,
+        "affected_biomass_percentage": impact.affected_biomass_percentage,
+    }
 
 
 # ========== 玩家干预 API ==========

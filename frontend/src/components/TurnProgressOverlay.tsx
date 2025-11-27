@@ -9,15 +9,17 @@ interface Props {
 // 连接状态类型
 type ConnectionStatus = "connecting" | "connected" | "receiving" | "error" | "disconnected";
 
-// 演化阶段定义
+// 演化阶段定义 - 与后端新流程匹配
 const EVOLUTION_STAGES = [
   { id: "pressure", icon: "🌡️", label: "环境压力", color: "#fb923c" },
   { id: "geology", icon: "🗺️", label: "地质演化", color: "#8b5cf6" },
-  { id: "mortality", icon: "💀", label: "死亡计算", color: "#f43f5e" },
+  { id: "ecology", icon: "📊", label: "生态分析", color: "#fbbf24" },
+  { id: "mortality", icon: "💀", label: "死亡/迁徙", color: "#f43f5e" },
+  { id: "ai_eval", icon: "🤖", label: "AI评估", color: "#a855f7" },
   { id: "reproduction", icon: "🐣", label: "繁殖增长", color: "#4ade80" },
-  { id: "speciation", icon: "🔀", label: "物种分化", color: "#c084fc" },
-  { id: "migration", icon: "🦅", label: "迁徙路径", color: "#38bdf8" },
-  { id: "report", icon: "📝", label: "生成报告", color: "#2dd4bf" },
+  { id: "evolution", icon: "🧬", label: "演化事件", color: "#2dd4bf" },
+  { id: "ai_tasks", icon: "🔀", label: "AI处理", color: "#c084fc" },
+  { id: "report", icon: "📝", label: "生成报告", color: "#38bdf8" },
 ];
 
 // AI并发处理进度状态
@@ -135,16 +137,27 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
     return () => clearInterval(timer);
   }, [aiProgress, lastAIActivity]);
 
-  // 根据阶段文本判断当前阶段索引
+  // 根据阶段文本判断当前阶段索引 - 与新流程匹配
   const detectStageIndex = useCallback((stageText: string): number => {
     const lowerText = stageText.toLowerCase();
+    // 0. 环境压力
     if (lowerText.includes("压力") || lowerText.includes("pressure")) return 0;
+    // 1. 地质演化
     if (lowerText.includes("地图") || lowerText.includes("地质") || lowerText.includes("geology") || lowerText.includes("海平面")) return 1;
-    if (lowerText.includes("死亡") || lowerText.includes("mortality") || lowerText.includes("灭绝")) return 2;
-    if (lowerText.includes("繁殖") || lowerText.includes("reproduction") || lowerText.includes("种群")) return 3;
-    if (lowerText.includes("分化") || lowerText.includes("speciation") || lowerText.includes("AI并发")) return 4;
-    if (lowerText.includes("迁徙") || lowerText.includes("migration")) return 5;
-    if (lowerText.includes("报告") || lowerText.includes("report") || lowerText.includes("叙事")) return 6;
+    // 2. 生态分析（物种列表、分层、生态位）
+    if (lowerText.includes("物种列表") || lowerText.includes("分层") || lowerText.includes("生态位") || lowerText.includes("ecology")) return 2;
+    // 3. 死亡/迁徙（营养级、死亡率、迁徙）
+    if (lowerText.includes("死亡") || lowerText.includes("mortality") || lowerText.includes("营养级") || lowerText.includes("迁徙") || lowerText.includes("migration") || lowerText.includes("阶段1") || lowerText.includes("阶段2") || lowerText.includes("阶段3")) return 3;
+    // 4. AI综合评估
+    if ((lowerText.includes("ai") && lowerText.includes("评估")) || lowerText.includes("ai综合") || lowerText.includes("阶段3.5")) return 4;
+    // 5. 繁殖增长
+    if (lowerText.includes("繁殖") || lowerText.includes("reproduction") || lowerText.includes("种群")) return 5;
+    // 6. 演化事件（基因激活、基因流动、亚种晋升）
+    if (lowerText.includes("基因") || lowerText.includes("激活") || lowerText.includes("流动") || lowerText.includes("亚种") || lowerText.includes("晋升")) return 6;
+    // 7. AI处理（叙事、适应、分化）
+    if (lowerText.includes("ai顺序") || lowerText.includes("分化") || lowerText.includes("speciation") || lowerText.includes("适应") || lowerText.includes("叙事生成")) return 7;
+    // 8. 生成报告
+    if (lowerText.includes("报告") || lowerText.includes("report")) return 8;
     return -1;
   }, []);
 
@@ -558,47 +571,78 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
           justify-content: center;
           z-index: 10000;
           backdrop-filter: blur(12px);
+          padding: 12px;
         }
 
         .evolution-panel {
           background: linear-gradient(145deg, rgba(15, 25, 20, 0.95), rgba(8, 16, 12, 0.98));
           border: 1px solid rgba(45, 212, 191, 0.2);
           border-radius: 20px;
-          padding: 32px 40px;
+          padding: 20px 24px;
           text-align: center;
-          max-width: 950px;
-          width: 92%;
+          max-width: 720px;
+          width: 95%;
           box-shadow: 
             0 30px 100px rgba(0, 0, 0, 0.7),
             0 0 80px rgba(45, 212, 191, 0.08),
             inset 0 1px 0 rgba(255, 255, 255, 0.03);
-          max-height: 90vh;
+          max-height: calc(100vh - 24px);
           display: flex;
           flex-direction: column;
           overflow: hidden;
         }
 
-        /* 状态栏 */
+        /* 大屏幕（>=1200px）稍微增加宽度 */
+        @media (min-width: 1200px) {
+          .evolution-panel {
+            max-width: 780px;
+            padding: 24px 28px;
+          }
+        }
+        
+        /* 低分辨率屏幕（<1024px）紧凑模式 */
+        @media (max-width: 1024px) {
+          .evolution-overlay {
+            padding: 8px;
+          }
+          .evolution-panel {
+            padding: 16px 18px;
+            border-radius: 16px;
+            max-width: 680px;
+          }
+        }
+        
+        /* 非常小的屏幕（<768px） */
+        @media (max-width: 768px) {
+          .evolution-panel {
+            padding: 12px 14px;
+            border-radius: 12px;
+            max-width: 100%;
+          }
+        }
+
+        /* 状态栏 - 紧凑响应式 */
         .status-bar {
           display: flex;
           justify-content: center;
-          gap: 24px;
-          margin-bottom: 20px;
-          padding: 10px 16px;
+          flex-wrap: wrap;
+          gap: 8px 14px;
+          margin-bottom: 10px;
+          padding: 6px 12px;
           background: rgba(0, 0, 0, 0.3);
-          border-radius: 10px;
+          border-radius: 8px;
           border: 1px solid rgba(255, 255, 255, 0.05);
         }
 
         .status-item {
           display: flex;
           align-items: center;
-          gap: 6px;
-          font-size: 0.8rem;
+          gap: 4px;
+          font-size: 0.7rem;
         }
 
         .status-icon {
-          font-size: 0.9rem;
+          font-size: 0.8rem;
         }
 
         .status-text {
@@ -607,17 +651,17 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         }
 
         .abort-btn {
-          padding: 6px 12px;
+          padding: 4px 8px;
           background: rgba(239, 68, 68, 0.2);
           border: 1px solid rgba(239, 68, 68, 0.4);
-          border-radius: 6px;
+          border-radius: 5px;
           color: #fca5a5;
-          font-size: 0.75rem;
+          font-size: 0.65rem;
           cursor: pointer;
           transition: all 0.2s ease;
           display: flex;
           align-items: center;
-          gap: 4px;
+          gap: 3px;
         }
 
         .abort-btn:hover:not(:disabled) {
@@ -630,13 +674,42 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
           opacity: 0.5;
           cursor: not-allowed;
         }
+        
+        /* 低分辨率优化状态栏 */
+        @media (max-width: 1024px) {
+          .status-bar {
+            gap: 6px 10px;
+            padding: 5px 10px;
+            margin-bottom: 8px;
+          }
+          .status-item {
+            font-size: 0.65rem;
+          }
+          .status-icon {
+            font-size: 0.75rem;
+          }
+        }
+        
+        @media (max-width: 768px) {
+          .status-bar {
+            gap: 5px 8px;
+            padding: 4px 8px;
+          }
+          .status-item {
+            font-size: 0.6rem;
+          }
+          .abort-btn {
+            padding: 3px 6px;
+            font-size: 0.6rem;
+          }
+        }
 
-        /* DNA 加载动画 */
+        /* DNA 加载动画 - 紧凑版 */
         .dna-loader {
           position: relative;
-          margin: 0 auto 24px;
-          width: 70px;
-          height: 80px;
+          margin: 0 auto 10px;
+          width: 50px;
+          height: 55px;
         }
 
         .dna-strand-container {
@@ -652,38 +725,38 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
           display: flex;
           align-items: center;
           justify-content: center;
-          height: 7px;
+          height: 5px;
           animation: dna-wave 1.8s ease-in-out infinite;
         }
 
         .dna-node-left, .dna-node-right {
-          width: 9px;
-          height: 9px;
+          width: 6px;
+          height: 6px;
           border-radius: 50%;
           background: #2dd4bf;
-          box-shadow: 0 0 12px rgba(45, 212, 191, 0.7);
+          box-shadow: 0 0 8px rgba(45, 212, 191, 0.7);
         }
 
         .dna-node-right {
           background: #22c55e;
-          box-shadow: 0 0 12px rgba(34, 197, 94, 0.7);
+          box-shadow: 0 0 8px rgba(34, 197, 94, 0.7);
         }
 
         .dna-bridge {
-          width: 28px;
+          width: 20px;
           height: 2px;
           background: linear-gradient(90deg, rgba(45, 212, 191, 0.9), rgba(34, 197, 94, 0.9));
           border-radius: 2px;
         }
 
         @keyframes dna-wave {
-          0%, 100% { transform: translateX(-12px) rotateY(0deg); }
-          50% { transform: translateX(12px) rotateY(180deg); }
+          0%, 100% { transform: translateX(-8px) rotateY(0deg); }
+          50% { transform: translateX(8px) rotateY(180deg); }
         }
 
         .dna-glow {
           position: absolute;
-          inset: -25px;
+          inset: -15px;
           background: radial-gradient(ellipse at center, rgba(45, 212, 191, 0.12), transparent 65%);
           animation: glow-pulse 2.5s ease-in-out infinite;
         }
@@ -698,23 +771,23 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: 10px;
-          margin-bottom: 12px;
+          gap: 6px;
+          margin-bottom: 5px;
         }
 
         .title-icon {
-          font-size: 1.8rem;
+          font-size: 1.3rem;
           animation: title-bounce 2.5s ease-in-out infinite;
         }
 
         @keyframes title-bounce {
           0%, 100% { transform: translateY(0) rotate(0deg); }
-          25% { transform: translateY(-3px) rotate(-3deg); }
-          75% { transform: translateY(-3px) rotate(3deg); }
+          25% { transform: translateY(-2px) rotate(-3deg); }
+          75% { transform: translateY(-2px) rotate(3deg); }
         }
 
         .title-text {
-          font-size: 1.7rem;
+          font-size: 1.2rem;
           font-weight: 700;
           font-family: var(--font-display);
           background: linear-gradient(135deg, #2dd4bf, #22c55e, #4ade80);
@@ -730,30 +803,78 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         }
 
         .evolution-message {
-          font-size: 1rem;
+          font-size: 0.82rem;
           color: rgba(240, 244, 232, 0.7);
-          margin-bottom: 24px;
-          line-height: 1.5;
+          margin-bottom: 12px;
+          line-height: 1.35;
+        }
+        
+        /* 低分辨率优化动画和标题 */
+        @media (max-width: 1024px) {
+          .dna-loader {
+            width: 42px;
+            height: 46px;
+            margin-bottom: 8px;
+          }
+          .dna-node-left, .dna-node-right {
+            width: 5px;
+            height: 5px;
+          }
+          .dna-bridge {
+            width: 16px;
+          }
+          .evolution-title {
+            margin-bottom: 4px;
+          }
+          .title-icon {
+            font-size: 1.1rem;
+          }
+          .title-text {
+            font-size: 1.05rem;
+          }
+          .evolution-message {
+            font-size: 0.78rem;
+            margin-bottom: 10px;
+          }
+        }
+        
+        @media (max-width: 768px) {
+          .dna-loader {
+            width: 36px;
+            height: 40px;
+            margin-bottom: 6px;
+          }
+          .title-text {
+            font-size: 0.95rem;
+          }
+          .evolution-message {
+            font-size: 0.72rem;
+            margin-bottom: 8px;
+          }
         }
 
-        /* 进度阶段指示器 */
+        /* 进度阶段指示器 - 紧凑布局 */
         .progress-stages {
           display: flex;
-          justify-content: space-between;
+          justify-content: center;
           align-items: flex-start;
-          margin-bottom: 24px;
-          padding: 0 10px;
+          margin-bottom: 16px;
+          padding: 0;
           position: relative;
+          flex-wrap: wrap;
+          gap: 6px 2px;
         }
 
         .progress-stage {
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 6px;
+          gap: 3px;
           z-index: 1;
-          opacity: 0.4;
+          opacity: 0.35;
           transition: all 0.4s ease;
+          flex-shrink: 0;
+          width: 58px;
         }
 
         .progress-stage.active {
@@ -761,13 +882,13 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         }
 
         .progress-stage.current .stage-circle {
-          transform: scale(1.15);
-          box-shadow: 0 0 20px var(--stage-color);
+          transform: scale(1.08);
+          box-shadow: 0 0 14px var(--stage-color);
         }
 
         .stage-circle {
-          width: 36px;
-          height: 36px;
+          width: 28px;
+          height: 28px;
           border-radius: 50%;
           background: rgba(0, 0, 0, 0.4);
           border: 2px solid rgba(255, 255, 255, 0.1);
@@ -783,14 +904,18 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         }
 
         .stage-emoji {
-          font-size: 1.1rem;
+          font-size: 0.85rem;
         }
 
         .stage-label {
-          font-size: 0.65rem;
+          font-size: 0.6rem;
           color: rgba(255, 255, 255, 0.5);
-          max-width: 60px;
+          max-width: 58px;
           text-align: center;
+          line-height: 1.15;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
         .progress-stage.active .stage-label {
@@ -798,78 +923,151 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         }
 
         .progress-line {
-          position: absolute;
-          left: 28px;
-          top: 18px;
-          height: 2px;
-          background: linear-gradient(90deg, #2dd4bf, #22c55e);
-          transition: width 0.5s ease;
-          z-index: 0;
+          display: none;
+        }
+        
+        /* 低分辨率屏幕阶段指示器紧凑模式 */
+        @media (max-width: 1024px) {
+          .progress-stages {
+            margin-bottom: 14px;
+            gap: 4px 0;
+          }
+          .progress-stage {
+            width: 52px;
+          }
+          .stage-circle {
+            width: 26px;
+            height: 26px;
+          }
+          .stage-emoji {
+            font-size: 0.8rem;
+          }
+          .stage-label {
+            font-size: 0.55rem;
+            max-width: 52px;
+          }
+        }
+        
+        @media (max-width: 768px) {
+          .progress-stages {
+            margin-bottom: 10px;
+            gap: 3px 0;
+          }
+          .progress-stage {
+            width: 44px;
+          }
+          .stage-circle {
+            width: 22px;
+            height: 22px;
+          }
+          .stage-emoji {
+            font-size: 0.7rem;
+          }
+          .stage-label {
+            font-size: 0.5rem;
+            max-width: 44px;
+          }
         }
 
-        /* 当前阶段卡片 */
+        /* 当前阶段卡片 - 紧凑版 */
         .current-stage-card {
           position: relative;
           background: linear-gradient(135deg, rgba(45, 212, 191, 0.08), rgba(34, 197, 94, 0.04));
           border: 1px solid rgba(45, 212, 191, 0.2);
-          border-radius: 14px;
-          padding: 16px 20px;
-          margin-bottom: 20px;
+          border-radius: 10px;
+          padding: 10px 14px;
+          margin-bottom: 12px;
           display: flex;
           align-items: center;
-          gap: 14px;
+          gap: 10px;
           overflow: hidden;
         }
 
         .stage-icon-large {
-          font-size: 1.6rem;
+          font-size: 1.2rem;
           flex-shrink: 0;
         }
 
         .stage-text-main {
-          font-size: 0.95rem;
+          font-size: 0.82rem;
           color: #f0f4e8;
           font-weight: 500;
           flex: 1;
           text-align: left;
+          line-height: 1.35;
         }
 
         .stage-pulse-indicator {
-          width: 10px;
-          height: 10px;
+          width: 8px;
+          height: 8px;
           background: #4ade80;
           border-radius: 50%;
           animation: pulse-indicator 1.2s ease-in-out infinite;
+          flex-shrink: 0;
         }
 
         @keyframes pulse-indicator {
           0%, 100% { opacity: 1; transform: scale(1); }
           50% { opacity: 0.4; transform: scale(0.7); }
         }
+        
+        /* 低分辨率优化当前阶段卡片 */
+        @media (max-width: 1024px) {
+          .current-stage-card {
+            padding: 8px 12px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            gap: 8px;
+          }
+          .stage-icon-large {
+            font-size: 1.1rem;
+          }
+          .stage-text-main {
+            font-size: 0.78rem;
+          }
+        }
+        
+        @media (max-width: 768px) {
+          .current-stage-card {
+            padding: 6px 10px;
+            margin-bottom: 8px;
+          }
+          .stage-icon-large {
+            font-size: 1rem;
+          }
+          .stage-text-main {
+            font-size: 0.72rem;
+          }
+        }
 
-        /* 流式文本容器 - 大幅改进 */
+        /* 流式文本容器 - 优化低分辨率显示 */
         .streaming-container {
           background: linear-gradient(135deg, rgba(34, 197, 94, 0.06), rgba(45, 212, 191, 0.03));
           border: 1px solid rgba(34, 197, 94, 0.2);
-          border-radius: 14px;
-          margin-bottom: 20px;
+          border-radius: 10px;
+          margin-bottom: 10px;
           overflow: hidden;
+          flex: 1;
+          min-height: 100px;
+          display: flex;
+          flex-direction: column;
         }
 
         .streaming-header {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 12px 16px;
+          padding: 8px 12px;
           background: rgba(0, 0, 0, 0.2);
           border-bottom: 1px solid rgba(34, 197, 94, 0.1);
+          flex-shrink: 0;
         }
 
         .streaming-title {
           display: flex;
           align-items: center;
-          gap: 10px;
-          font-size: 0.85rem;
+          gap: 6px;
+          font-size: 0.75rem;
           color: #4ade80;
           font-weight: 600;
         }
@@ -897,25 +1095,27 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         }
 
         .token-count {
-          font-size: 0.75rem;
+          font-size: 0.7rem;
           color: rgba(255, 255, 255, 0.5);
           font-family: var(--font-mono, monospace);
           background: rgba(0, 0, 0, 0.3);
-          padding: 3px 8px;
+          padding: 2px 6px;
           border-radius: 4px;
         }
 
         .streaming-content {
-          padding: 16px;
-          max-height: 180px;
+          padding: 10px 12px;
+          flex: 1;
+          min-height: 80px;
+          max-height: 30vh;
           overflow-y: auto;
           scroll-behavior: smooth;
         }
 
         .streaming-text {
           color: rgba(240, 244, 232, 0.9);
-          font-size: 0.9rem;
-          line-height: 1.7;
+          font-size: 0.8rem;
+          line-height: 1.6;
           white-space: pre-wrap;
           text-align: left;
           font-family: var(--font-body);
@@ -933,24 +1133,55 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
           0%, 100% { opacity: 1; }
           50% { opacity: 0; }
         }
+        
+        /* 低分辨率优化流式文本 */
+        @media (max-width: 1024px) {
+          .streaming-container {
+            border-radius: 8px;
+            min-height: 80px;
+          }
+          .streaming-header {
+            padding: 6px 10px;
+          }
+          .streaming-title {
+            font-size: 0.7rem;
+          }
+          .streaming-content {
+            padding: 8px 10px;
+            max-height: 35vh;
+          }
+          .streaming-text {
+            font-size: 0.75rem;
+            line-height: 1.5;
+          }
+        }
+        
+        @media (max-width: 768px) {
+          .streaming-content {
+            max-height: 40vh;
+          }
+          .streaming-text {
+            font-size: 0.7rem;
+          }
+        }
 
-        /* 日志容器 */
+        /* 日志容器 - 优化低分辨率显示 */
         .evolution-log-container {
           background: rgba(0, 0, 0, 0.25);
           border: 1px solid rgba(45, 212, 191, 0.1);
-          border-radius: 12px;
-          flex: 1;
-          min-height: 150px;
-          max-height: 220px;
+          border-radius: 10px;
+          min-height: 80px;
+          max-height: 150px;
           overflow: hidden;
           display: flex;
           flex-direction: column;
+          flex-shrink: 0;
         }
 
         .log-header {
-          font-size: 0.85rem;
+          font-size: 0.75rem;
           color: rgba(240, 244, 232, 0.7);
-          padding: 12px 16px;
+          padding: 8px 12px;
           font-weight: 600;
           display: flex;
           align-items: center;
@@ -961,15 +1192,15 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         }
 
         .log-count {
-          font-size: 0.7rem;
+          font-size: 0.6rem;
           color: rgba(240, 244, 232, 0.4);
           background: rgba(255, 255, 255, 0.05);
-          padding: 2px 8px;
-          border-radius: 10px;
+          padding: 2px 5px;
+          border-radius: 8px;
         }
 
         .log-list {
-          padding: 8px;
+          padding: 5px;
           overflow-y: auto;
           flex: 1;
         }
@@ -979,24 +1210,24 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          gap: 8px;
+          gap: 5px;
           height: 100%;
           color: rgba(240, 244, 232, 0.3);
-          font-size: 0.85rem;
+          font-size: 0.75rem;
         }
 
         .empty-icon {
-          font-size: 1.5rem;
+          font-size: 1.2rem;
           opacity: 0.5;
         }
 
         .log-pending {
-          font-size: 0.65rem;
+          font-size: 0.55rem;
           color: #fbbf24;
           background: rgba(251, 191, 36, 0.15);
-          padding: 2px 6px;
-          border-radius: 8px;
-          margin-left: 4px;
+          padding: 1px 4px;
+          border-radius: 6px;
+          margin-left: 3px;
           animation: pending-pulse 1s ease-in-out infinite;
         }
 
@@ -1008,12 +1239,12 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         .log-item {
           display: flex;
           align-items: center;
-          gap: 10px;
-          padding: 8px 12px;
-          margin-bottom: 4px;
+          gap: 6px;
+          padding: 5px 8px;
+          margin-bottom: 2px;
           background: rgba(45, 212, 191, 0.02);
-          border-left: 3px solid var(--log-color);
-          border-radius: 6px;
+          border-left: 2px solid var(--log-color);
+          border-radius: 4px;
         }
 
         .log-item-animated {
@@ -1023,7 +1254,7 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         @keyframes log-slide-in {
           from { 
             opacity: 0; 
-            transform: translateX(-20px) scale(0.95);
+            transform: translateX(-15px) scale(0.95);
             background: rgba(45, 212, 191, 0.1);
           }
           to { 
@@ -1032,14 +1263,42 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
             background: rgba(45, 212, 191, 0.02);
           }
         }
+        
+        /* 低分辨率优化日志 */
+        @media (max-width: 1024px) {
+          .evolution-log-container {
+            min-height: 70px;
+            max-height: 130px;
+            border-radius: 8px;
+          }
+          .log-header {
+            padding: 6px 10px;
+            font-size: 0.7rem;
+          }
+          .log-item {
+            padding: 4px 6px;
+            gap: 5px;
+          }
+        }
+        
+        @media (max-width: 768px) {
+          .evolution-log-container {
+            min-height: 50px;
+            max-height: 100px;
+          }
+          .log-header {
+            padding: 5px 8px;
+            font-size: 0.65rem;
+          }
+        }
 
-        /* AI并发处理进度样式 */
+        /* AI并发处理进度样式 - 紧凑响应式 */
         .ai-progress-container {
           background: linear-gradient(135deg, rgba(139, 92, 246, 0.08), rgba(168, 85, 247, 0.04));
           border: 1px solid rgba(139, 92, 246, 0.25);
-          border-radius: 14px;
-          margin-bottom: 20px;
-          padding: 16px;
+          border-radius: 10px;
+          margin-bottom: 10px;
+          padding: 10px 12px;
           overflow: hidden;
         }
 
@@ -1047,28 +1306,31 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 12px;
+          margin-bottom: 8px;
+          flex-wrap: wrap;
+          gap: 6px;
         }
 
         .ai-progress-title {
           display: flex;
           align-items: center;
-          gap: 10px;
-          font-size: 0.9rem;
+          gap: 6px;
+          font-size: 0.78rem;
           color: #c084fc;
           font-weight: 600;
         }
 
         .ai-activity-indicator {
-          width: 10px;
-          height: 10px;
+          width: 9px;
+          height: 9px;
           border-radius: 50%;
           background: #a855f7;
+          flex-shrink: 0;
         }
 
         .ai-activity-indicator.active {
           animation: ai-pulse 0.8s ease-in-out infinite;
-          box-shadow: 0 0 12px rgba(168, 85, 247, 0.6);
+          box-shadow: 0 0 10px rgba(168, 85, 247, 0.6);
         }
 
         .ai-activity-indicator.stale {
@@ -1088,56 +1350,55 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
 
         .ai-progress-stats {
           display: flex;
-          gap: 12px;
+          gap: 8px;
           align-items: center;
         }
 
         .ai-progress-count {
-          font-size: 0.8rem;
+          font-size: 0.7rem;
           color: rgba(255, 255, 255, 0.7);
           font-family: var(--font-mono, monospace);
           background: rgba(139, 92, 246, 0.2);
-          padding: 3px 10px;
-          border-radius: 6px;
+          padding: 2px 6px;
+          border-radius: 4px;
         }
 
         .ai-elapsed-time {
-          font-size: 0.75rem;
+          font-size: 0.65rem;
           color: rgba(255, 255, 255, 0.5);
           font-family: var(--font-mono, monospace);
         }
 
         .ai-progress-bar-container {
-          height: 6px;
+          height: 4px;
           background: rgba(0, 0, 0, 0.3);
-          border-radius: 3px;
+          border-radius: 2px;
           overflow: hidden;
-          margin-bottom: 10px;
+          margin-bottom: 6px;
         }
 
         .ai-progress-bar {
           height: 100%;
           background: linear-gradient(90deg, #8b5cf6, #a855f7, #c084fc);
-          border-radius: 3px;
+          border-radius: 2px;
           transition: width 0.5s ease-out;
-          box-shadow: 0 0 10px rgba(139, 92, 246, 0.4);
+          box-shadow: 0 0 6px rgba(139, 92, 246, 0.4);
         }
 
         .ai-current-task {
-          font-size: 0.8rem;
+          font-size: 0.7rem;
           color: rgba(255, 255, 255, 0.6);
           text-align: left;
-          padding-left: 4px;
         }
 
         .ai-waiting-hint {
-          font-size: 0.75rem;
+          font-size: 0.65rem;
           color: #fbbf24;
           text-align: center;
-          margin-top: 8px;
-          padding: 6px 10px;
+          margin-top: 5px;
+          padding: 4px 6px;
           background: rgba(251, 191, 36, 0.1);
-          border-radius: 6px;
+          border-radius: 4px;
           animation: hint-fade 2s ease-in-out infinite;
         }
 
@@ -1145,23 +1406,52 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
           0%, 100% { opacity: 0.7; }
           50% { opacity: 1; }
         }
+        
+        /* 低分辨率优化AI进度 */
+        @media (max-width: 1024px) {
+          .ai-progress-container {
+            padding: 8px 10px;
+            margin-bottom: 8px;
+            border-radius: 8px;
+          }
+          .ai-progress-title {
+            font-size: 0.72rem;
+          }
+          .ai-progress-count {
+            font-size: 0.65rem;
+          }
+          .ai-current-task {
+            font-size: 0.65rem;
+          }
+        }
+        
+        @media (max-width: 768px) {
+          .ai-progress-container {
+            padding: 6px 8px;
+          }
+          .ai-progress-title {
+            font-size: 0.68rem;
+          }
+        }
 
         .log-icon {
-          font-size: 0.9rem;
+          font-size: 0.82rem;
           flex-shrink: 0;
         }
 
         .log-text {
           flex: 1;
-          font-size: 0.78rem;
+          font-size: 0.72rem;
           color: rgba(240, 244, 232, 0.85);
           text-align: left;
-          line-height: 1.4;
+          line-height: 1.35;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
         .log-category {
-          font-size: 0.6rem;
-          padding: 2px 6px;
+          font-size: 0.55rem;
+          padding: 2px 5px;
           border-radius: 4px;
           color: rgba(255, 255, 255, 0.7);
           flex-shrink: 0;
@@ -1170,24 +1460,50 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         /* 滚动条样式 */
         .streaming-content::-webkit-scrollbar,
         .log-list::-webkit-scrollbar {
-          width: 5px;
+          width: 4px;
         }
 
         .streaming-content::-webkit-scrollbar-track,
         .log-list::-webkit-scrollbar-track {
           background: rgba(0, 0, 0, 0.2);
-          border-radius: 3px;
+          border-radius: 2px;
         }
 
         .streaming-content::-webkit-scrollbar-thumb,
         .log-list::-webkit-scrollbar-thumb {
           background: rgba(45, 212, 191, 0.3);
-          border-radius: 3px;
+          border-radius: 2px;
         }
 
         .streaming-content::-webkit-scrollbar-thumb:hover,
         .log-list::-webkit-scrollbar-thumb:hover {
           background: rgba(45, 212, 191, 0.5);
+        }
+        
+        /* 低分辨率优化日志文本 */
+        @media (max-width: 1024px) {
+          .log-icon {
+            font-size: 0.75rem;
+          }
+          .log-text {
+            font-size: 0.68rem;
+          }
+          .log-category {
+            font-size: 0.5rem;
+            padding: 1px 4px;
+          }
+        }
+        
+        @media (max-width: 768px) {
+          .log-icon {
+            font-size: 0.7rem;
+          }
+          .log-text {
+            font-size: 0.62rem;
+          }
+          .log-category {
+            display: none;
+          }
         }
       `}</style>
     </div>

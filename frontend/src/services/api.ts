@@ -10,6 +10,9 @@
   UIConfig,
   SpeciesListItem,
   NicheCompareResult,
+  FoodWebData,
+  SpeciesFoodChain,
+  ExtinctionImpact,
 } from "./api.types";
 
 /**
@@ -479,4 +482,36 @@ export async function getTaskDiagnostics(): Promise<TaskDiagnostics> {
   } catch (error: any) {
     return { success: false, error: error.message || "网络错误" };
   }
+}
+
+// ========== 食物网 API ==========
+
+/**
+ * 获取真实的食物网数据
+ * 基于物种的prey_species字段，返回真实的捕食关系
+ */
+export async function fetchFoodWeb(): Promise<FoodWebData> {
+  const res = await fetch("/api/ecosystem/food-web");
+  if (!res.ok) throw new Error("获取食物网数据失败");
+  return res.json();
+}
+
+/**
+ * 获取特定物种的食物链
+ * 返回该物种的上下游捕食关系
+ */
+export async function fetchSpeciesFoodChain(lineageCode: string): Promise<SpeciesFoodChain> {
+  const res = await fetch(`/api/ecosystem/food-web/${encodeURIComponent(lineageCode)}`);
+  if (!res.ok) throw new Error("获取食物链数据失败");
+  return res.json();
+}
+
+/**
+ * 分析物种灭绝的影响
+ * 预测如果该物种灭绝会对生态系统造成什么影响
+ */
+export async function analyzeExtinctionImpact(lineageCode: string): Promise<ExtinctionImpact> {
+  const res = await fetch(`/api/ecosystem/extinction-impact/${encodeURIComponent(lineageCode)}`);
+  if (!res.ok) throw new Error("分析灭绝影响失败");
+  return res.json();
 }

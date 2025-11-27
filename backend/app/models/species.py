@@ -59,6 +59,16 @@ class Species(SQLModel, table=True):
     # 上次描述更新的回合
     last_description_update_turn: int = 0
     
+    # ========== 捕食关系系统 ==========
+    # 该物种捕食的物种代码列表 (prey_species)
+    # 示例: ["A1", "B2"] 表示该物种以A1和B2为食
+    prey_species: list[str] = Field(default=[], sa_column=Column(JSON))
+    # 捕食偏好比例 (与prey_species对应)
+    # 示例: {"A1": 0.7, "B2": 0.3} 表示70%吃A1，30%吃B2
+    prey_preferences: dict[str, float] = Field(default={}, sa_column=Column(JSON))
+    # 食性类型: herbivore(草食), carnivore(肉食), omnivore(杂食), detritivore(腐食), autotroph(自养)
+    diet_type: str = Field(default="omnivore")
+    
     # ========== 共生/依赖关系系统 ==========
     # 依赖的物种代码列表（该物种依赖于这些物种生存）
     # 示例: ["A1", "B2"] 表示该物种依赖A1和B2

@@ -27,6 +27,7 @@ import numpy as np
 from ..models.environment import HabitatPopulation, MapTile
 from ..models.species import Species
 from ..services.species.niche import NicheMetrics
+from ..services.species.predation import PredationService
 from ..core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,13 @@ class AggregatedMortalityResult:
     
     # 新增：地块级别详情
     tile_details: list[TileMortalityResult] | None = None
+    
+    # 新增：AI评估结果字段
+    ai_status_eval: object | None = None  # SpeciesStatusEval
+    ai_narrative: str = ""
+    ai_headline: str = ""
+    ai_mood: str = ""
+    death_causes: str = ""  # 主要死因描述
 
 
 class TileBasedMortalityEngine:
@@ -109,6 +117,9 @@ class TileBasedMortalityEngine:
         
         # 【新增】地块邻接关系
         self._tile_adjacency: dict[int, set[int]] = {}
+        
+        # 【新增】捕食网服务
+        self._predation_service = PredationService()
     
     def build_matrices(
         self,
@@ -671,22 +682,29 @@ class TileBasedMortalityEngine:
             species_list, species_arrays, batch_population_matrix
         )
         
-        # ========== 5. 组合所有因子 ==========
-        # 复合存活率 = (1-环境) × (1-竞争) × (1-营养级) × (1-资源)
+        # ========== 5. 计算捕食网压力（新增）==========
+        # 基于真实捕食关系计算饥饿压力和被捕食压力
+        predation_network_pressure = self._compute_predation_network_pressure(
+            species_list, species_arrays, batch_population_matrix
+        )
+        
+        # ========== 6. 组合所有因子 ==========
+        # 复合存活率 = (1-环境) × (1-竞争) × (1-营养级) × (1-资源) × (1-捕食网)
         survival = (
             (1.0 - np.minimum(0.8, env_pressure)) *
             (1.0 - np.minimum(0.6, competition_pressure)) *
             (1.0 - np.minimum(0.7, trophic_pressure)) *
-            (1.0 - np.minimum(0.65, resource_pressure))
+            (1.0 - np.minimum(0.65, resource_pressure)) *
+            (1.0 - np.minimum(0.7, predation_network_pressure))
         )
         
         mortality = 1.0 - survival
         
-        # ========== 6. 应用世代累积死亡率 ==========
+        # ========== 7. 应用世代累积死亡率 ==========
         if _settings.enable_generational_mortality:
             mortality = self._apply_generational_mortality(species_arrays, mortality)
         
-        # ========== 7. 边界约束 ==========
+        # ========== 8. 边界约束 ==========
         mortality = np.clip(mortality, 0.03, 0.98)
         
         return mortality
@@ -894,9 +912,16 @@ class TileBasedMortalityEngine:
         # 批量计算各种压力
         t1, t2, t3, t4, t5 = [biomass_by_level[:, i] for i in range(5)]
         
+        # 【修复】使用np.divide的where参数避免除零警告
+        # 先保护分母，确保不会除以0
+        safe_t1 = np.maximum(t1, MIN_BIOMASS)
+        safe_t2 = np.maximum(t2, MIN_BIOMASS)
+        safe_t3 = np.maximum(t3, MIN_BIOMASS)
+        safe_t4 = np.maximum(t4, MIN_BIOMASS)
+        
         # === T1 受 T2 采食 ===
         req_t1 = np.where(t2 > 0, t2 / EFFICIENCY, 0)
-        grazing_ratio = np.where(t1 > MIN_BIOMASS, req_t1 / t1, 0)
+        grazing_ratio = np.divide(req_t1, safe_t1, out=np.zeros_like(req_t1), where=t1 > MIN_BIOMASS)
         grazing = np.minimum(grazing_ratio * 0.5, 0.8)
         scarcity_t2 = np.where(t1 > MIN_BIOMASS, 
                                np.clip(grazing_ratio - 1.0, 0, 2.0),
@@ -904,7 +929,7 @@ class TileBasedMortalityEngine:
         
         # === T2 受 T3 捕食 ===
         req_t2 = np.where(t3 > 0, t3 / EFFICIENCY, 0)
-        ratio_t2 = np.where(t2 > MIN_BIOMASS, req_t2 / t2, 0)
+        ratio_t2 = np.divide(req_t2, safe_t2, out=np.zeros_like(req_t2), where=t2 > MIN_BIOMASS)
         pred_t3 = np.minimum(ratio_t2 * 0.5, 0.8)
         scarcity_t3 = np.where(t2 > MIN_BIOMASS,
                                np.clip(ratio_t2 - 1.0, 0, 2.0),
@@ -912,7 +937,7 @@ class TileBasedMortalityEngine:
         
         # === T3 受 T4 捕食 ===
         req_t3 = np.where(t4 > 0, t4 / EFFICIENCY, 0)
-        ratio_t3 = np.where(t3 > MIN_BIOMASS, req_t3 / t3, 0)
+        ratio_t3 = np.divide(req_t3, safe_t3, out=np.zeros_like(req_t3), where=t3 > MIN_BIOMASS)
         pred_t4 = np.minimum(ratio_t3 * 0.5, 0.8)
         scarcity_t4 = np.where(t3 > MIN_BIOMASS,
                                np.clip(ratio_t3 - 1.0, 0, 2.0),
@@ -920,7 +945,7 @@ class TileBasedMortalityEngine:
         
         # === T4 受 T5 捕食 ===
         req_t4 = np.where(t5 > 0, t5 / EFFICIENCY, 0)
-        ratio_t4 = np.where(t4 > MIN_BIOMASS, req_t4 / t4, 0)
+        ratio_t4 = np.divide(req_t4, safe_t4, out=np.zeros_like(req_t4), where=t4 > MIN_BIOMASS)
         pred_t5 = np.minimum(ratio_t4 * 0.5, 0.8)
         scarcity_t5 = np.where(t4 > MIN_BIOMASS,
                                np.clip(ratio_t4 - 1.0, 0, 2.0),
@@ -1064,6 +1089,116 @@ class TileBasedMortalityEngine:
         resource_pressure = np.where(batch_population_matrix > 0, resource_pressure, 0.0)
         
         return np.clip(resource_pressure, 0.0, 0.65)
+    
+    def _compute_predation_network_pressure(
+        self,
+        species_list: list[Species],
+        species_arrays: dict[str, np.ndarray],
+        batch_population_matrix: np.ndarray,
+    ) -> np.ndarray:
+        """计算基于真实捕食关系的压力（矩阵优化版）
+        
+        【核心改进】
+        使用矩阵运算批量计算，而非逐个物种循环：
+        
+        1. 构建捕食关系稀疏矩阵
+        2. 批量计算饥饿压力（捕食者角度）
+        3. 批量计算被捕食压力（猎物角度）
+        
+        Args:
+            species_list: 当前批次的物种列表
+            species_arrays: 物种属性数组
+            batch_population_matrix: 当前批次对应的population子矩阵
+            
+        Returns:
+            (num_tiles × num_species) 的捕食网压力矩阵
+        """
+        n_tiles = len(self._tiles)
+        n_species = len(species_list)
+        
+        if batch_population_matrix is None or n_species == 0:
+            return np.zeros((n_tiles, n_species))
+        
+        # ========== 1. 构建捕食关系矩阵 (n_species × n_species) ==========
+        # matrix[i,j] > 0 表示物种i捕食物种j
+        code_to_idx = {sp.lineage_code: idx for idx, sp in enumerate(species_list)}
+        predation_matrix = np.zeros((n_species, n_species), dtype=np.float32)
+        
+        for sp_idx, species in enumerate(species_list):
+            for prey_code in (species.prey_species or []):
+                prey_idx = code_to_idx.get(prey_code)
+                if prey_idx is not None:
+                    preference = (species.prey_preferences or {}).get(prey_code, 0.5)
+                    predation_matrix[sp_idx, prey_idx] = preference
+        
+        # ========== 2. 获取物种属性向量 ==========
+        trophic_levels = species_arrays['trophic_level']
+        weights = np.array([
+            sp.morphology_stats.get("body_weight_g", 1.0) 
+            for sp in species_list
+        ], dtype=np.float64)
+        
+        # ========== 3. 按地块批量计算 ==========
+        predation_pressure = np.zeros((n_tiles, n_species), dtype=np.float64)
+        
+        for tile_idx in range(n_tiles):
+            tile_pop = batch_population_matrix[tile_idx, :]  # (n_species,)
+            
+            # 跳过空地块
+            if tile_pop.sum() == 0:
+                continue
+            
+            # 生物量向量
+            tile_biomass = tile_pop * weights  # (n_species,)
+            
+            # === 饥饿压力（捕食者角度）===
+            # available_prey[i] = 捕食者i在该地块可获得的猎物生物量
+            # = sum(predation_matrix[i, j] * prey_biomass[j])
+            available_prey = predation_matrix @ tile_biomass
+            
+            # 捕食者需求 = 自身生物量 × 0.1（每天需要体重10%的食物）
+            predator_demand = tile_biomass * 0.1
+            
+            # 饥饿压力 = max(0, (需求 - 供给) / 需求)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                starvation_ratio = np.where(
+                    predator_demand > 0,
+                    np.maximum(0, (predator_demand - available_prey) / predator_demand),
+                    0.0
+                )
+            starvation_ratio = np.nan_to_num(starvation_ratio, 0.0)
+            
+            # 生产者（营养级<2）不受饥饿压力
+            starvation_ratio = np.where(trophic_levels < 2.0, 0.0, starvation_ratio)
+            
+            # 饥饿压力 = ratio^1.5 * 0.5
+            starvation_pressure = (starvation_ratio ** 1.5) * 0.5
+            
+            # === 被捕食压力（猎物角度）===
+            # predation_demand[j] = 所有捕食者对猎物j的需求
+            # = sum(predation_matrix[:, j] * predator_biomass * 0.1)
+            predation_demand_vec = (predation_matrix.T @ (tile_biomass * 0.1))
+            
+            # 被捕食压力 = 需求 / 生物量 的sigmoid
+            with np.errstate(divide='ignore', invalid='ignore'):
+                pressure_ratio = np.where(
+                    tile_biomass > 0,
+                    predation_demand_vec / tile_biomass,
+                    0.0
+                )
+            pressure_ratio = np.nan_to_num(pressure_ratio, 0.0)
+            
+            # Sigmoid转换: ratio=1 → 0.27, ratio=2 → 0.46, ratio=5 → 0.73
+            predation_from_hunters = (2.0 / (1.0 + np.exp(-pressure_ratio)) - 1.0) * 0.3
+            
+            # 综合压力
+            tile_pressure = starvation_pressure + predation_from_hunters
+            
+            # 只对有种群的物种应用
+            has_pop = tile_pop > 0
+            predation_pressure[tile_idx, has_pop] = tile_pressure[has_pop]
+        
+        return np.clip(predation_pressure, 0.0, 0.7)
     
     def _apply_generational_mortality(
         self,

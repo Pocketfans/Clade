@@ -24,6 +24,7 @@ class SpeciesSnapshot(BaseModel):
     trophic_level: float | None = None
     grazing_pressure: float | None = None  # 新增：承受的啃食压力
     predation_pressure: float | None = None  # 新增：承受的捕食压力
+    ai_narrative: str | None = None  # 【新增】AI生成的物种叙事（描述物种当前状态和演化故事）
 
 
 class BranchingEvent(BaseModel):

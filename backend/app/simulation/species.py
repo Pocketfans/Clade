@@ -191,6 +191,13 @@ class MortalityResult:
     tier: str
     grazing_pressure: float = 0.0  # 新增：被捕食压力(T1受T2)
     predation_pressure: float = 0.0  # 新增：被捕食压力(T2受T3+)
+    
+    # 新增：AI评估结果字段
+    ai_status_eval: object | None = None  # SpeciesStatusEval
+    ai_narrative: str = ""
+    ai_headline: str = ""
+    ai_mood: str = ""
+    death_causes: str = ""  # 主要死因描述
 
 
 class MortalityEngine:

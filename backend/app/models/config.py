@@ -46,6 +46,11 @@ class UIConfig(BaseModel):
     embedding_provider_id: str | None = None
     embedding_model: str | None = None
     
+    # 5. 自动保存配置
+    autosave_enabled: bool = True  # 是否启用自动保存
+    autosave_interval: int = 1     # 每N回合自动保存一次
+    autosave_max_slots: int = 5    # 最大自动保存槽位数
+    
     # --- Legacy Fields (Keep for migration) ---
     ai_provider: str | None = None
     ai_model: str | None = None

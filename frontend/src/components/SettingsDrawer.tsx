@@ -12,7 +12,7 @@ interface Props {
   onSave: (config: UIConfig) => Promise<void>;
 }
 
-type Tab = "connection" | "models" | "memory";
+type Tab = "connection" | "models" | "memory" | "autosave";
 
 // ========== 常量定义 ==========
 
@@ -626,6 +626,13 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
               label="向量记忆" 
               desc="Embedding 设置"
             />
+            <NavButton 
+              active={tab === "autosave"} 
+              onClick={() => dispatch({ type: 'SET_TAB', tab: 'autosave' })} 
+              icon="💾" 
+              label="自动保存" 
+              desc="回合自动存档"
+            />
           </div>
           
         </nav>
@@ -1057,6 +1064,166 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                     🗑️ 清理缓存
                   </button>
                   <p className="stats-hint">统计功能开发中...</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: 自动保存 */}
+          {tab === "autosave" && (
+            <div className="tab-content fade-in">
+              <div className="section-header">
+                <h3>💾 自动保存设置</h3>
+                <p>配置游戏自动保存功能，确保您的进度不会丢失。</p>
+              </div>
+              
+              <div className="memory-layout">
+                <div className="memory-main">
+                  <div className="tip-box info">
+                    💡 自动保存会在每个回合结束后自动创建存档，存档名称格式为 <code>autosave_存档名_时间戳</code>。旧的自动保存会被自动清理。
+                  </div>
+
+                  <div className="form-fields">
+                    {/* 启用自动保存 */}
+                    <div className="form-field toggle-field">
+                      <label className="toggle-container">
+                        <input
+                          type="checkbox"
+                          checked={form.autosave_enabled ?? true}
+                          onChange={(e) => dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_enabled', value: e.target.checked })}
+                        />
+                        <span className="toggle-slider"></span>
+                        <span className="toggle-label">启用自动保存</span>
+                      </label>
+                      <span className="field-hint">每回合结束后自动保存游戏进度</span>
+                    </div>
+
+                    {/* 保存间隔 */}
+                    <label className="form-field">
+                      <span className="field-label">保存间隔</span>
+                      <div className="input-with-unit">
+                        <input
+                          className="field-input"
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={form.autosave_interval ?? 1}
+                          onChange={(e) => dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_interval', value: parseInt(e.target.value) || 1 })}
+                          disabled={!(form.autosave_enabled ?? true)}
+                        />
+                        <span className="unit-label">回合</span>
+                      </div>
+                      <span className="field-hint">每隔多少回合自动保存一次（默认：每回合）</span>
+                    </label>
+
+                    {/* 最大保存槽位 */}
+                    <label className="form-field">
+                      <span className="field-label">最大保存数量</span>
+                      <div className="input-with-unit">
+                        <input
+                          className="field-input"
+                          type="number"
+                          min="1"
+                          max="50"
+                          value={form.autosave_max_slots ?? 5}
+                          onChange={(e) => dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_max_slots', value: parseInt(e.target.value) || 5 })}
+                          disabled={!(form.autosave_enabled ?? true)}
+                        />
+                        <span className="unit-label">个</span>
+                      </div>
+                      <span className="field-hint">保留最近的自动保存数量，超出后自动删除旧存档</span>
+                    </label>
+                  </div>
+
+                  {/* 预设配置 */}
+                  <div className="preset-section">
+                    <h4>快速配置</h4>
+                    <div className="preset-buttons autosave-presets">
+                      <button
+                        type="button"
+                        className={`preset-btn ${(form.autosave_interval ?? 1) === 1 && (form.autosave_max_slots ?? 5) === 5 ? 'active' : ''}`}
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_enabled', value: true });
+                          dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_interval', value: 1 });
+                          dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_max_slots', value: 5 });
+                        }}
+                      >
+                        🔒 安全模式
+                        <span className="preset-desc">每回合保存，保留5个</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`preset-btn ${(form.autosave_interval ?? 1) === 5 && (form.autosave_max_slots ?? 5) === 3 ? 'active' : ''}`}
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_enabled', value: true });
+                          dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_interval', value: 5 });
+                          dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_max_slots', value: 3 });
+                        }}
+                      >
+                        ⚖️ 平衡模式
+                        <span className="preset-desc">每5回合保存，保留3个</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`preset-btn ${(form.autosave_interval ?? 1) === 10 && (form.autosave_max_slots ?? 5) === 2 ? 'active' : ''}`}
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_enabled', value: true });
+                          dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_interval', value: 10 });
+                          dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_max_slots', value: 2 });
+                        }}
+                      >
+                        🚀 性能模式
+                        <span className="preset-desc">每10回合保存，保留2个</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`preset-btn ${!(form.autosave_enabled ?? true) ? 'active' : ''}`}
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_GLOBAL', field: 'autosave_enabled', value: false });
+                        }}
+                      >
+                        ❌ 关闭
+                        <span className="preset-desc">禁用自动保存</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 自动保存说明 */}
+                <div className="memory-stats">
+                  <h4>📝 说明</h4>
+                  <div className="info-list">
+                    <div className="info-item">
+                      <span className="info-icon">📁</span>
+                      <div>
+                        <strong>存档位置</strong>
+                        <p>data/saves/autosave_*</p>
+                      </div>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-icon">🔄</span>
+                      <div>
+                        <strong>自动清理</strong>
+                        <p>超出数量限制的旧存档会被自动删除</p>
+                      </div>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-icon">⏱️</span>
+                      <div>
+                        <strong>保存时机</strong>
+                        <p>在每回合AI推演完成后执行</p>
+                      </div>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-icon">📊</span>
+                      <div>
+                        <strong>当前状态</strong>
+                        <p style={{ color: (form.autosave_enabled ?? true) ? '#10b981' : '#ef4444' }}>
+                          {(form.autosave_enabled ?? true) ? '✅ 已启用' : '❌ 已禁用'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

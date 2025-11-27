@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from typing import Sequence
+
 from ...models.species import Species
 from ...ai.model_router import ModelRouter
 from .population_calculator import PopulationCalculator
 from .trait_config import TraitConfig
+from .predation import PredationService
 
 
 class SpeciesGenerator:
@@ -12,13 +15,20 @@ class SpeciesGenerator:
     def __init__(self, router: ModelRouter) -> None:
         self.router = router
         self.pop_calc = PopulationCalculator()
+        self.predation_service = PredationService()
 
-    def generate_from_prompt(self, prompt: str, lineage_code: str = "A1") -> Species:
+    def generate_from_prompt(
+        self, 
+        prompt: str, 
+        lineage_code: str = "A1",
+        existing_species: Sequence[Species] | None = None
+    ) -> Species:
         """根据自然语言描述生成物种
         
         Args:
             prompt: 用户的自然语言描述
             lineage_code: 谱系代码，默认A1
+            existing_species: 可选的现有物种列表（用于推断捕食关系）
             
         Returns:
             Species对象
@@ -26,10 +36,43 @@ class SpeciesGenerator:
         print(f"[物种生成器] 生成物种: {lineage_code}")
         print(f"[物种生成器] 用户描述: {prompt}")
         
+        # 【优化】生成简洁的现有物种列表（不传全部物种给LLM）
+        existing_species_context = ""
+        if existing_species:
+            # 根据prompt推测营养级范围
+            prompt_lower = prompt.lower()
+            if any(kw in prompt_lower for kw in ["植物", "藻类", "光合", "plant", "algae", "自养"]):
+                target_trophic = (1.0, 1.5)  # 生产者
+            elif any(kw in prompt_lower for kw in ["草食", "herbivore", "滤食"]):
+                target_trophic = (1.0, 2.5)  # 显示生产者作为猎物
+            elif any(kw in prompt_lower for kw in ["肉食", "捕食", "carnivore", "predator"]):
+                target_trophic = (2.0, 4.0)  # 显示消费者作为猎物
+            else:
+                target_trophic = None  # 不筛选
+            
+            # 根据prompt推测栖息地
+            target_habitat = None
+            if any(kw in prompt_lower for kw in ["海洋", "海水", "ocean", "marine"]):
+                target_habitat = "marine"
+            elif any(kw in prompt_lower for kw in ["淡水", "湖泊", "河流"]):
+                target_habitat = "freshwater"
+            elif any(kw in prompt_lower for kw in ["陆地", "terrestrial"]):
+                target_habitat = "terrestrial"
+            
+            existing_species_context = self.predation_service.generate_existing_species_context(
+                existing_species,
+                target_trophic_range=target_trophic,
+                target_habitat=target_habitat,
+                max_species=15  # 只显示15个最相关的物种
+            )
+        else:
+            existing_species_context = "暂无现有物种"
+        
         # 构建AI请求
         payload = {
             "user_prompt": prompt,
             "lineage_code": lineage_code,
+            "existing_species_context": existing_species_context,
             "requirements": {
                 "latin_name": "拉丁学名（Genus species格式）",
                 "common_name": "中文俗名",
@@ -82,6 +125,16 @@ class SpeciesGenerator:
             common_name = species_data.get("common_name", f"物种{lineage_code}")
             habitat_type = species_data.get("habitat_type", "terrestrial")
             
+            # 提取捕食关系字段
+            diet_type = species_data.get("diet_type", "omnivore")
+            prey_species = species_data.get("prey_species", [])
+            prey_preferences = species_data.get("prey_preferences", {})
+            
+            # 验证食性类型
+            valid_diet_types = ["autotroph", "herbivore", "carnivore", "omnivore", "detritivore"]
+            if diet_type not in valid_diet_types:
+                diet_type = "omnivore"
+            
             # 创建物种对象
             # 注意：不再使用 ecological_vector，系统会基于 description 自动计算 embedding
             species = Species(
@@ -98,6 +151,10 @@ class SpeciesGenerator:
                 status="alive",
                 is_background=False,
                 created_turn=0,
+                # 捕食关系
+                diet_type=diet_type,
+                prey_species=prey_species if isinstance(prey_species, list) else [],
+                prey_preferences=prey_preferences if isinstance(prey_preferences, dict) else {},
             )
             
             print(f"[物种生成器] 物种生成成功: {species.latin_name} / {species.common_name}")

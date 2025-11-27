@@ -9,10 +9,18 @@ import {
   ArrowLeft, 
   Trash2, 
   Save,
-  Clock
+  Clock,
+  Users,
+  Zap,
+  RefreshCw,
+  ChevronDown,
+  Archive,
+  Check,
+  FolderOpen
 } from "lucide-react";
 
-import type { UIConfig } from "../services/api.types";
+import type { UIConfig, SaveMetadata } from "../services/api.types";
+import { formatSaveName, formatRelativeTime } from "../services/api.types";
 import { listSaves, createSave, loadGame, deleteSave } from "../services/api";
 
 export interface StartPayload {
@@ -29,12 +37,24 @@ interface Props {
 
 export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
   const [stage, setStage] = useState<"root" | "create" | "load" | "blank">("root");
-  const [saves, setSaves] = useState<any[]>([]);
+  const [saves, setSaves] = useState<SaveMetadata[]>([]);
   const [saveName, setSaveName] = useState("");
   const [mapSeed, setMapSeed] = useState("");
   const [speciesPrompts, setSpeciesPrompts] = useState<string[]>(["", "", ""]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [autoSaveDrawerOpen, setAutoSaveDrawerOpen] = useState(false);
+  
+  // 分离手动存档和自动存档
+  const manualSaves = saves.filter(s => {
+    const name = s.name || s.save_name;
+    return !name.toLowerCase().includes('autosave');
+  });
+  const autoSaves = saves.filter(s => {
+    const name = s.name || s.save_name;
+    return name.toLowerCase().includes('autosave');
+  });
 
   useEffect(() => {
     if (stage === "load") {
@@ -42,13 +62,16 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
     }
   }, [stage]);
 
-  async function loadSavesList() {
+  async function loadSavesList(isRefresh = false) {
+    if (isRefresh) setRefreshing(true);
     try {
       const data = await listSaves();
       setSaves(data);
     } catch (error: any) {
       console.error("加载存档列表失败:", error);
       setError(error.message);
+    } finally {
+      if (isRefresh) setRefreshing(false);
     }
   }
 
@@ -125,7 +148,8 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
 
   async function handleDeleteSave(e: React.MouseEvent, save_name: string) {
     e.stopPropagation();
-    if (!window.confirm(`确定要删除存档 "${save_name}" 吗？此操作不可恢复。`)) {
+    const { displayName } = formatSaveName(save_name);
+    if (!window.confirm(`确定要删除存档「${displayName}」吗？\n\n此操作无法撤销！`)) {
       return;
     }
 
@@ -432,51 +456,177 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
           {/* 读取存档 */}
           {stage === "load" && (
             <div className="glass-card fade-in">
-              <h2 className="text-xl font-display mb-lg">编年史记录</h2>
+              <div className="saves-header-row">
+                <h2 className="text-xl font-display">编年史记录</h2>
+                <div className="saves-header-right">
+                  <span className="saves-count-badge">
+                    {manualSaves.length} 个存档
+                    {autoSaves.length > 0 && <span className="count-auto"> + {autoSaves.length} 自动</span>}
+                  </span>
+                  <button 
+                    className="refresh-icon-btn"
+                    onClick={() => loadSavesList(true)}
+                    disabled={refreshing}
+                    title="刷新列表"
+                  >
+                    <RefreshCw size={14} className={refreshing ? 'spinning' : ''} />
+                  </button>
+                </div>
+              </div>
+              
               {saves.length === 0 ? (
-                <div className="text-center p-xl text-muted border border-dashed border-white/20 rounded-lg">
-                  <BookOpen size={48} style={{ margin: '0 auto 1rem', opacity: 0.3 }} />
-                  <p>暂无历史记录，请先开创新纪元。</p>
+                <div className="empty-saves-state">
+                  <BookOpen size={48} strokeWidth={1.5} />
+                  <p>暂无历史记录</p>
+                  <span>开创新纪元后，您的存档将显示在这里</span>
                 </div>
               ) : (
-                <div className="flex flex-col gap-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
-                  {saves.map((save, idx) => (
-                    <div 
-                      key={save.save_name} 
-                      className="p-md rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-all flex justify-between items-center list-item"
-                      style={{ animationDelay: `${idx * 0.05}s` }}
-                    >
-                      <div>
-                        <h4 className="font-medium text-lg mb-1">{save.save_name}</h4>
-                        <div className="flex gap-4 text-sm text-muted">
-                          <span className="flex items-center gap-1"><Globe size={12}/> {save.scenario}</span>
-                          <span className="flex items-center gap-1"><Clock size={12}/> 回合 {save.turn_index + 1}</span>
-                          <span>{save.species_count} 物种</span>
-                        </div>
-                        <div className="text-xs text-muted mt-1 opacity-60">
-                          {new Date(save.last_saved).toLocaleString("zh-CN")}
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleLoadSave(save.save_name)}
-                          disabled={loading}
-                          className="btn btn-primary btn-sm"
-                          title="读取存档"
-                        >
-                          <Play size={16} />
-                        </button>
-                        <button
-                          onClick={(e) => handleDeleteSave(e, save.save_name)}
-                          disabled={loading}
-                          className="btn btn-danger btn-sm"
-                          title="删除存档"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
+                <div className="saves-sections-wrapper">
+                  {/* 手动存档列表 */}
+                  {manualSaves.length > 0 && (
+                    <div className="saves-grid">
+                      {manualSaves.map((save, idx) => {
+                        const rawName = save.name || save.save_name;
+                        const { displayName } = formatSaveName(rawName);
+                        const scenario = save.scenario || '未知剧本';
+                        const relativeTime = save.last_saved ? formatRelativeTime(save.last_saved) : 
+                          (save.timestamp ? formatRelativeTime(new Date(save.timestamp * 1000).toISOString()) : '未知');
+                        const turnNum = (save.turn ?? save.turn_index ?? 0) + 1;
+                        
+                        return (
+                          <div 
+                            key={rawName} 
+                            className="save-item"
+                            style={{ animationDelay: `${idx * 0.04}s` }}
+                          >
+                            <div className="save-item-main">
+                              <div className="save-item-title">
+                                <span className="save-item-name">{displayName}</span>
+                              </div>
+                              
+                              <div className="save-item-scenario">
+                                <Globe size={11} />
+                                <span>{scenario}</span>
+                              </div>
+                              
+                              <div className="save-item-stats">
+                                <span className="stat">
+                                  <Clock size={11} />
+                                  <strong>T{turnNum}</strong>
+                                </span>
+                                <span className="stat-sep">·</span>
+                                <span className="stat">
+                                  <Users size={11} />
+                                  <strong>{save.species_count}</strong> 物种
+                                </span>
+                                <span className="stat-sep">·</span>
+                                <span className="stat time">{relativeTime}</span>
+                              </div>
+                            </div>
+                            
+                            <div className="save-item-actions">
+                              <button
+                                onClick={() => handleLoadSave(rawName)}
+                                disabled={loading}
+                                className="save-action-btn primary"
+                                title="读取存档"
+                              >
+                                <Play size={15} />
+                              </button>
+                              <button
+                                onClick={(e) => handleDeleteSave(e, rawName)}
+                                disabled={loading}
+                                className="save-action-btn danger"
+                                title="删除存档"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  ))}
+                  )}
+                  
+                  {/* 手动存档为空时的提示 */}
+                  {manualSaves.length === 0 && autoSaves.length > 0 && (
+                    <div className="no-manual-saves-hint">
+                      <FolderOpen size={24} strokeWidth={1.5} />
+                      <span>暂无手动存档</span>
+                    </div>
+                  )}
+                  
+                  {/* 自动存档抽屉 */}
+                  {autoSaves.length > 0 && (
+                    <div className="autosave-drawer-wrapper">
+                      <button
+                        type="button"
+                        className={`autosave-drawer-toggle ${autoSaveDrawerOpen ? 'open' : ''}`}
+                        onClick={() => setAutoSaveDrawerOpen(!autoSaveDrawerOpen)}
+                      >
+                        <div className="drawer-left">
+                          <Archive size={14} />
+                          <span>自动存档</span>
+                          <span className="drawer-badge">{autoSaves.length}</span>
+                        </div>
+                        <ChevronDown size={16} className={`drawer-arrow ${autoSaveDrawerOpen ? 'open' : ''}`} />
+                      </button>
+                      
+                      {autoSaveDrawerOpen && (
+                        <div className="autosave-drawer-content">
+                          {autoSaves.map((save, idx) => {
+                            const rawName = save.name || save.save_name;
+                            const { displayName } = formatSaveName(rawName);
+                            const relativeTime = save.last_saved ? formatRelativeTime(save.last_saved) : 
+                              (save.timestamp ? formatRelativeTime(new Date(save.timestamp * 1000).toISOString()) : '未知');
+                            const turnNum = (save.turn ?? save.turn_index ?? 0) + 1;
+                            
+                            return (
+                              <div 
+                                key={rawName} 
+                                className="autosave-item"
+                                style={{ animationDelay: `${idx * 0.03}s` }}
+                              >
+                                <div className="autosave-item-main">
+                                  <div className="autosave-item-title">
+                                    <Zap size={11} className="zap-icon" />
+                                    <span>{displayName}</span>
+                                  </div>
+                                  
+                                  <div className="autosave-item-meta">
+                                    <span><strong>T{turnNum}</strong></span>
+                                    <span className="sep">·</span>
+                                    <span><strong>{save.species_count}</strong> 物种</span>
+                                    <span className="sep">·</span>
+                                    <span className="time">{relativeTime}</span>
+                                  </div>
+                                </div>
+                                
+                                <div className="autosave-item-actions">
+                                  <button
+                                    onClick={() => handleLoadSave(rawName)}
+                                    disabled={loading}
+                                    className="save-action-btn primary small"
+                                    title="读取存档"
+                                  >
+                                    <Play size={13} />
+                                  </button>
+                                  <button
+                                    onClick={(e) => handleDeleteSave(e, rawName)}
+                                    disabled={loading}
+                                    className="save-action-btn danger small"
+                                    title="删除存档"
+                                  >
+                                    <Trash2 size={11} />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

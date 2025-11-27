@@ -259,15 +259,19 @@ class AdaptationService:
                 # 应用LLM建议的特质变化
                 llm_changes = self._apply_llm_recommendations(species, res)
                 if llm_changes:
+                    # 【修复】提取并使用 priority 字段
+                    priority = res.get("priority", "medium")
                     adaptation_events.append({
                         "lineage_code": species.lineage_code,
                         "common_name": species.common_name,
                         "changes": llm_changes,
                         "type": "llm_adaptation",
+                        "priority": priority,  # high/medium/low
                         "analysis": res.get("analysis", ""),
                         "rationale": res.get("rationale", ""),
                     })
-                    logger.info(f"[LLM适应] {species.common_name}: {llm_changes}")
+                    priority_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(priority, "⚪")
+                    logger.info(f"[LLM适应] {priority_emoji} {species.common_name}: {llm_changes}")
             
             logger.info(f"[适应性] LLM智能适应完成")
 

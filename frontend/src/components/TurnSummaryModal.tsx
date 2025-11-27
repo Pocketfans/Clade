@@ -226,6 +226,71 @@ export function TurnSummaryModal({ report, previousReport, onClose }: Props) {
             )}
           </section>
           
+          {/* 物种故事 - 显示有AI叙事的物种 */}
+          {report.species.filter(s => s.ai_narrative).length > 0 && (
+            <section style={{ marginBottom: "32px" }}>
+              <h3 
+                style={{
+                  fontSize: "1.3rem",
+                  fontWeight: 600,
+                  color: "#10b981",
+                  marginBottom: "16px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  cursor: "pointer"
+                }}
+                onClick={() => toggleSection("species_stories")}
+              >
+                🦎 物种故事 {expandedSection === "species_stories" ? "▼" : "▶"}
+              </h3>
+              {expandedSection === "species_stories" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                  {report.species.filter(s => s.ai_narrative).map((species, idx) => (
+                    <div 
+                      key={`story-${idx}`}
+                      style={{
+                        background: "rgba(16, 185, 129, 0.05)",
+                        border: "1px solid rgba(16, 185, 129, 0.2)",
+                        borderRadius: "12px",
+                        padding: "16px",
+                      }}
+                    >
+                      <div style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        marginBottom: "12px"
+                      }}>
+                        <span style={{
+                          fontWeight: 600,
+                          color: "#10b981",
+                          fontSize: "1.1rem"
+                        }}>
+                          {species.common_name}
+                        </span>
+                        <span style={{
+                          color: "rgba(255, 255, 255, 0.5)",
+                          fontSize: "0.85rem"
+                        }}>
+                          {species.tier || ""} · 死亡率 {(species.death_rate * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                      <p style={{
+                        margin: 0,
+                        fontSize: "0.95rem",
+                        lineHeight: "1.7",
+                        color: "rgba(255, 255, 255, 0.85)",
+                      }}>
+                        {species.ai_narrative}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+          
           {/* 重大事件 */}
           {(report.major_events.length > 0 || report.branching_events.length > 0 || extinctSpecies.length > 0) && (
             <section style={{ marginBottom: "32px" }}>

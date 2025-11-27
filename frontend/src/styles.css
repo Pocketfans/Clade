@@ -453,6 +453,446 @@ button:disabled,
   border-radius: 12px;
 }
 
+/* ===== MainMenu 存档列表新样式 ===== */
+.saves-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(45, 212, 191, 0.1);
+}
+
+.saves-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.saves-count-badge {
+  font-size: 0.7rem;
+  color: rgba(240, 244, 232, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(45, 212, 191, 0.08);
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+}
+
+.saves-count-badge .count-auto {
+  color: rgba(251, 191, 36, 0.65);
+  font-weight: 500;
+}
+
+.refresh-icon-btn {
+  width: 1.75rem;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(45, 212, 191, 0.06);
+  border: 1px solid rgba(45, 212, 191, 0.12);
+  border-radius: 0.375rem;
+  color: rgba(240, 244, 232, 0.5);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.refresh-icon-btn:hover:not(:disabled) {
+  background: rgba(45, 212, 191, 0.12);
+  color: #2dd4bf;
+}
+
+.refresh-icon-btn .spinning {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.empty-saves-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 1.5rem;
+  color: rgba(240, 244, 232, 0.4);
+  text-align: center;
+  border: 1px dashed rgba(45, 212, 191, 0.15);
+  border-radius: 0.75rem;
+  background: rgba(45, 212, 191, 0.02);
+}
+
+.empty-saves-state p {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 500;
+  color: rgba(240, 244, 232, 0.65);
+}
+
+.empty-saves-state span {
+  font-size: 0.8rem;
+  color: rgba(240, 244, 232, 0.4);
+}
+
+.saves-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 28rem;
+  overflow-y: auto;
+  padding-right: 0.35rem;
+}
+
+.saves-grid::-webkit-scrollbar {
+  width: 5px;
+}
+
+.saves-grid::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 3px;
+}
+
+.saves-grid::-webkit-scrollbar-thumb {
+  background: rgba(45, 212, 191, 0.2);
+  border-radius: 3px;
+}
+
+.saves-grid::-webkit-scrollbar-thumb:hover {
+  background: rgba(45, 212, 191, 0.35);
+}
+
+.save-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.8rem 1rem;
+  background: rgba(45, 212, 191, 0.025);
+  border: 1px solid rgba(45, 212, 191, 0.08);
+  border-radius: 0.625rem;
+  transition: all 0.2s ease;
+  animation: slideUp 0.25s ease both;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.save-item:hover {
+  background: rgba(45, 212, 191, 0.06);
+  border-color: rgba(45, 212, 191, 0.15);
+}
+
+.save-item.autosave {
+  border-left: 2px solid rgba(251, 191, 36, 0.45);
+}
+
+.save-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.save-item-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.save-item-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #f0f4e8;
+}
+
+.auto-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.1rem 0.4rem;
+  background: rgba(251, 191, 36, 0.12);
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: #fbbf24;
+}
+
+.save-item-scenario {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  color: rgba(240, 244, 232, 0.45);
+}
+
+.save-item-scenario span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-item-stats {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  color: rgba(240, 244, 232, 0.55);
+  flex-wrap: wrap;
+}
+
+.save-item-stats .stat {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.save-item-stats .stat strong {
+  font-weight: 600;
+  color: rgba(240, 244, 232, 0.75);
+}
+
+.save-item-stats .stat.time {
+  color: rgba(240, 244, 232, 0.4);
+}
+
+.save-item-stats .stat-sep {
+  color: rgba(240, 244, 232, 0.2);
+}
+
+.save-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.75rem;
+}
+
+.save-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: none;
+  border-radius: 0.4rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.save-action-btn.primary {
+  background: linear-gradient(135deg, #2dd4bf, #22c55e);
+  color: #0a0d08;
+}
+
+.save-action-btn.primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #14b8a6, #16a34a);
+  transform: scale(1.05);
+}
+
+.save-action-btn.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.save-action-btn.danger {
+  background: rgba(244, 63, 94, 0.08);
+  border: 1px solid rgba(244, 63, 94, 0.15);
+  color: rgba(244, 63, 94, 0.6);
+}
+
+.save-action-btn.danger:hover:not(:disabled) {
+  background: rgba(244, 63, 94, 0.15);
+  border-color: rgba(244, 63, 94, 0.3);
+  color: #f43f5e;
+}
+
+.save-action-btn.danger:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.save-action-btn.small {
+  width: 1.625rem;
+  height: 1.625rem;
+}
+
+/* ===== MainMenu 自动存档抽屉 ===== */
+.saves-sections-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 28rem;
+  overflow-y: auto;
+  padding-right: 0.35rem;
+}
+
+.no-manual-saves-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.25rem;
+  color: rgba(240, 244, 232, 0.4);
+  font-size: 0.8rem;
+  border: 1px dashed rgba(45, 212, 191, 0.1);
+  border-radius: 0.625rem;
+  background: rgba(45, 212, 191, 0.02);
+}
+
+.autosave-drawer-wrapper {
+  margin-top: 0.25rem;
+  border: 1px solid rgba(251, 191, 36, 0.12);
+  border-radius: 0.75rem;
+  background: rgba(251, 191, 36, 0.03);
+  overflow: hidden;
+}
+
+.autosave-drawer-toggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: transparent;
+  border: none;
+  color: rgba(240, 244, 232, 0.75);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.autosave-drawer-toggle:hover {
+  background: rgba(251, 191, 36, 0.06);
+  color: rgba(240, 244, 232, 0.95);
+}
+
+.autosave-drawer-toggle.open {
+  border-bottom: 1px solid rgba(251, 191, 36, 0.1);
+}
+
+.drawer-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.drawer-badge {
+  padding: 0.15rem 0.5rem;
+  background: rgba(251, 191, 36, 0.15);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #fbbf24;
+}
+
+.drawer-arrow {
+  transition: transform 0.2s ease;
+  color: rgba(240, 244, 232, 0.5);
+}
+
+.drawer-arrow.open {
+  transform: rotate(180deg);
+}
+
+.autosave-drawer-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.625rem;
+  animation: drawerExpand 0.2s ease;
+}
+
+@keyframes drawerExpand {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.autosave-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: rgba(251, 191, 36, 0.02);
+  border: 1px solid rgba(251, 191, 36, 0.06);
+  border-radius: 0.5rem;
+  transition: all 0.2s;
+  animation: slideUp 0.2s ease both;
+}
+
+.autosave-item:hover {
+  background: rgba(251, 191, 36, 0.06);
+  border-color: rgba(251, 191, 36, 0.12);
+}
+
+.autosave-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.autosave-item-title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #f0f4e8;
+}
+
+.autosave-item-title .zap-icon {
+  color: #fbbf24;
+  flex-shrink: 0;
+}
+
+.autosave-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.68rem;
+  color: rgba(240, 244, 232, 0.5);
+}
+
+.autosave-item-meta strong {
+  font-weight: 600;
+  color: rgba(240, 244, 232, 0.7);
+}
+
+.autosave-item-meta .sep {
+  color: rgba(240, 244, 232, 0.2);
+}
+
+.autosave-item-meta .time {
+  color: rgba(240, 244, 232, 0.4);
+}
+
+.autosave-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: 0.5rem;
+}
+
 .muted {
   color: rgba(226, 236, 255, 0.6);
 }

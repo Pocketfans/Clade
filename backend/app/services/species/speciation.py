@@ -16,6 +16,7 @@ from .gene_library import GeneLibraryService
 from .genetic_distance import GeneticDistanceCalculator
 from .trait_config import TraitConfig
 from .trophic import TrophicLevelCalculator
+from .speciation_rules import SpeciationRules, speciation_rules  # 【新增】规则引擎
 from ...core.config import get_settings
 
 # 获取配置
@@ -36,6 +37,7 @@ class SpeciationService:
         self.trophic_calculator = TrophicLevelCalculator()
         self.genetic_calculator = GeneticDistanceCalculator()
         self.gene_library_service = GeneLibraryService()
+        self.rules = speciation_rules  # 【新增】规则引擎实例
         self.max_speciation_per_turn = 20
         self.max_deferred_requests = 60
         self._deferred_requests: list[dict[str, Any]] = []
@@ -557,6 +559,26 @@ class SpeciationService:
                     mortality_gradient, is_isolated
                 )
                 
+                # 【新增】规则引擎预处理：计算约束条件
+                environment_pressure_dict = {
+                    "temperature": 0,  # 从 pressure_summary 解析或使用默认值
+                    "humidity": 0,
+                    "salinity": 0,
+                }
+                # 尝试从 pressures 中提取实际压力值（如果可用）
+                if hasattr(self, '_current_pressures') and self._current_pressures:
+                    for p in self._current_pressures:
+                        if hasattr(p, 'modifiers'):
+                            environment_pressure_dict.update(p.modifiers)
+                
+                rule_constraints = self.rules.preprocess(
+                    parent_species=species,
+                    offspring_index=idx + 1,
+                    total_offspring=num_offspring,
+                    environment_pressure=environment_pressure_dict,
+                    pressure_context=pressure_summary,
+                )
+                
                 ai_payload = {
                     "parent_lineage": species.lineage_code,
                     "latin_name": species.latin_name,
@@ -584,6 +606,18 @@ class SpeciationService:
                     "mortality_gradient": mortality_gradient,
                     "num_isolation_regions": len(clusters) if clusters else 1,
                     "is_geographic_isolation": is_isolated and len(clusters) >= 2 if clusters else False,
+                    # 【新增】规则引擎约束（供简化版Prompt使用）
+                    "trait_budget_summary": rule_constraints["trait_budget_summary"],
+                    "organ_constraints_summary": rule_constraints["organ_constraints_summary"],
+                    "evolution_direction": rule_constraints["evolution_direction"],
+                    "direction_description": rule_constraints["direction_description"],
+                    "suggested_increases": ", ".join(rule_constraints["suggested_increases"]),
+                    "suggested_decreases": ", ".join(rule_constraints["suggested_decreases"]),
+                    "habitat_options": ", ".join(rule_constraints["habitat_options"]),
+                    "trophic_range": rule_constraints["trophic_range"],
+                    # 【新增】捕食关系信息
+                    "diet_type": species.diet_type or "omnivore",
+                    "prey_species_summary": self._summarize_prey_species(species),
                 }
                 
                 entries.append({
@@ -687,6 +721,13 @@ class SpeciationService:
                 ai_content.get("common_name"),
                 len(str(ai_content.get("description", ""))),
             )
+            
+            # 【新增】规则引擎后验证：验证并修正AI输出
+            ai_content = self.rules.validate_and_fix(
+                ai_content, 
+                ctx["parent"],
+                preprocess_result=None  # 如果需要可以传入预处理结果
+            )
 
             new_species = self._create_species(
                 parent=ctx["parent"],
@@ -780,6 +821,12 @@ class SpeciationService:
             biological_domain = payload.get('biological_domain', 'protist')
             organs_summary = payload.get('current_organs_summary', '无已记录的器官系统')
             
+            # 【关键】获取规则引擎约束信息
+            organ_constraints = payload.get('organ_constraints_summary', '无器官约束')
+            trait_budget = payload.get('trait_budget_summary', '增加上限: +3.0, 减少下限: -1.5')
+            trophic_range = payload.get('trophic_range', '1.5-2.5')
+            parent_trophic = payload.get('parent_trophic_level', 2.0)
+            
             # 【新增】获取地块级信息
             tile_context = payload.get('tile_context', '未知区域')
             region_mortality = payload.get('region_mortality', 0.5)
@@ -797,12 +844,15 @@ class SpeciationService:
 - 新编码: {ctx['new_code']}
 - 栖息地: {payload.get('habitat_type')}
 - 生物类群: {biological_domain}
-- 营养级: {payload.get('parent_trophic_level', 2.0):.2f}
+- 营养级: T{parent_trophic:.1f}（允许范围：{trophic_range}）
 - 描述: {payload.get('traits', '')[:200]}
-- 现有器官: {organs_summary[:100]}
+- 现有器官: {organs_summary}
 - 幸存者: {payload.get('survivors', 0):,}
 - 分化类型: {payload.get('speciation_type')}
 - 子代编号: 第{payload.get('offspring_index', 1)}个（共{payload.get('total_offspring', 1)}个）
+- 【属性预算】: {trait_budget}
+- 【器官约束⚠️必须遵守current_stage】:
+{organ_constraints}
 - 【地块背景】: {tile_context[:150]}
 - 区域死亡率: {region_mortality:.1%}（{region_pressure_level}）
 - 死亡率梯度: {mortality_gradient:.1%}
@@ -1171,6 +1221,40 @@ class SpeciationService:
         if new_habitat_type not in valid_habitats:
             new_habitat_type = parent.habitat_type
         
+        # ========== 继承或更新捕食关系 ==========
+        # 优先使用AI返回的捕食关系，否则继承父代
+        new_diet_type = ai_payload.get("diet_type", parent.diet_type)
+        # 确保食性类型有效
+        valid_diet_types = ["autotroph", "herbivore", "carnivore", "omnivore", "detritivore"]
+        if new_diet_type not in valid_diet_types:
+            new_diet_type = parent.diet_type
+        
+        # 继承或更新猎物列表
+        ai_prey_species = ai_payload.get("prey_species")
+        if ai_prey_species is not None and isinstance(ai_prey_species, list):
+            new_prey_species = ai_prey_species
+            logger.info(f"[分化] {new_code} 使用AI指定的猎物: {new_prey_species}")
+        else:
+            # 继承父代猎物
+            new_prey_species = list(parent.prey_species) if parent.prey_species else []
+            logger.info(f"[分化] {new_code} 继承父代猎物: {new_prey_species}")
+        
+        # 继承或更新猎物偏好
+        ai_prey_preferences = ai_payload.get("prey_preferences")
+        if ai_prey_preferences is not None and isinstance(ai_prey_preferences, dict):
+            new_prey_preferences = ai_prey_preferences
+        else:
+            # 继承父代偏好
+            new_prey_preferences = dict(parent.prey_preferences) if parent.prey_preferences else {}
+        
+        # 验证捕食关系与营养级的一致性
+        if new_trophic < 2.0 and new_prey_species:
+            # 生产者不应该有猎物
+            logger.warning(f"[分化警告] {new_code} 营养级<2.0但有猎物，清空猎物列表")
+            new_prey_species = []
+            new_prey_preferences = {}
+            new_diet_type = "autotroph"
+        
         # 不再继承 ecological_vector，让系统基于 description 自动计算 embedding
         return Species(
             lineage_code=new_code,
@@ -1190,6 +1274,10 @@ class SpeciationService:
             capabilities=capabilities,
             genus_code=parent.genus_code,
             taxonomic_rank="subspecies",
+            # 捕食关系
+            diet_type=new_diet_type,
+            prey_species=new_prey_species,
+            prey_preferences=new_prey_preferences,
         )
     
     def _inherit_habitat_distribution(
@@ -2969,6 +3057,50 @@ class SpeciationService:
                 summaries.append(f"- {cat_name}: {organ_type}（完善）")
         
         return "\n".join(summaries) if summaries else "无已记录的器官系统"
+    
+    def _summarize_prey_species(self, species: Species) -> str:
+        """生成捕食关系的文本摘要，用于AI提示词
+        
+        返回格式：
+        - 自养生物（无猎物）：返回"自养生物（无需猎物）"
+        - 有猎物：返回猎物列表和偏好
+        """
+        diet_type = species.diet_type or "omnivore"
+        prey_species = species.prey_species or []
+        prey_preferences = species.prey_preferences or {}
+        
+        if diet_type == "autotroph" or not prey_species:
+            diet_labels = {
+                "autotroph": "自养生物（无需猎物）",
+                "herbivore": "草食动物（猎物未指定）",
+                "carnivore": "肉食动物（猎物未指定）",
+                "omnivore": "杂食动物（猎物未指定）",
+                "detritivore": "腐食动物（以有机碎屑为食）",
+            }
+            return diet_labels.get(diet_type, "食性未知")
+        
+        # 构建猎物摘要
+        prey_summary = []
+        all_species = species_repository.list_species()
+        species_map = {sp.lineage_code: sp for sp in all_species}
+        
+        for prey_code in prey_species:
+            pref = prey_preferences.get(prey_code, 1.0 / max(1, len(prey_species)))
+            prey_sp = species_map.get(prey_code)
+            if prey_sp:
+                prey_summary.append(f"{prey_code}({prey_sp.common_name}, {pref*100:.0f}%)")
+            else:
+                prey_summary.append(f"{prey_code}({pref*100:.0f}%)")
+        
+        diet_labels = {
+            "herbivore": "草食动物",
+            "carnivore": "肉食动物",
+            "omnivore": "杂食动物",
+            "detritivore": "腐食动物",
+        }
+        diet_label = diet_labels.get(diet_type, diet_type)
+        
+        return f"{diet_label}，猎物: " + ", ".join(prey_summary)
     
     def _validate_gradual_evolution(
         self, 

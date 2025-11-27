@@ -29,6 +29,12 @@ from ..schemas.responses import (
     TurnReport,
 )
 from ..services.species.adaptation import AdaptationService
+from ..services.species.ai_pressure_response import (
+    AIPressureResponseService, 
+    create_ai_pressure_service,
+    SpeciesStatusEval,
+    SpeciesNarrativeResult,
+)
 from ..services.species.background import BackgroundSpeciesManager
 from ..services.species.gene_activation import GeneActivationService
 from ..services.species.gene_flow import GeneFlowService
@@ -102,10 +108,12 @@ class SimulationEngine:
         self.gene_flow_service = gene_flow_service
         self.gene_activation_service = GeneActivationService()
         self.tile_mortality = TileBasedMortalityEngine()  # 新增：按地块计算死亡率
+        self.ai_pressure_service = create_ai_pressure_service(router)  # 新增：AI压力响应服务
         self.turn_counter = 0
         self.watchlist: set[str] = set()
         self._event_callback = None  # 事件回调函数
         self._use_tile_based_mortality = True  # 是否使用按地块计算的死亡率
+        self._use_ai_pressure_response = True  # 是否使用AI压力响应修正
     
     def _emit_event(self, event_type: str, message: str, category: str = "其他", **extra):
         """发送事件到前端"""
@@ -481,18 +489,60 @@ class SimulationEngine:
                     
                     logger.debug(f"[数据传递] 向迁徙服务传递了 {len(tile_mortality_data)} 个物种的地块死亡率数据")
                 
+                # ========== 【新增】消费者追踪猎物：更新猎物分布缓存 ==========
+                all_habitats = environment_repository.latest_habitats()
+                habitat_manager.update_prey_distribution_cache(species_batch, all_habitats)
+                
+                # 为消费者计算并设置猎物密度数据
+                for sp in species_batch:
+                    if sp.status != "alive" or not sp.id:
+                        continue
+                    trophic_level = getattr(sp, 'trophic_level', 1.0)
+                    if trophic_level >= 2.0:  # 只为消费者计算
+                        prey_tiles = habitat_manager.get_prey_tiles_for_consumer(trophic_level)
+                        # 获取该物种当前栖息地的猎物密度
+                        species_habitats = [h for h in all_habitats if h.species_id == sp.id]
+                        current_prey_density = 0.0
+                        if species_habitats and prey_tiles:
+                            for hab in species_habitats:
+                                tile_prey = prey_tiles.get(hab.tile_id, 0.0)
+                                current_prey_density += tile_prey * hab.suitability
+                            # 归一化
+                            total_suitability = sum(h.suitability for h in species_habitats)
+                            if total_suitability > 0:
+                                current_prey_density /= total_suitability
+                        self.migration_advisor.set_prey_density_data(sp.lineage_code, current_prey_density)
+                
+                logger.debug(f"[猎物追踪] 已更新消费者猎物密度数据")
+                
                 # ========== 【方案B：第二阶段】迁徙执行 ==========
                 # 6. 迁徙建议与执行（基于初步死亡率）
                 logger.info(f"【阶段2】迁徙建议与执行...")
                 self._emit_event("stage", "🦅 【阶段2】迁徙建议与执行", "生态")
+                
+                # 【新增】获取处于迁徙冷却期的物种
+                cooldown_species = {
+                    sp.lineage_code for sp in species_batch 
+                    if sp.status == "alive" and habitat_manager.is_migration_on_cooldown(
+                        sp.lineage_code, self.turn_counter, cooldown_turns=2
+                    )
+                }
+                if cooldown_species:
+                    logger.debug(f"[迁徙冷却] {len(cooldown_species)} 个物种处于冷却期，跳过")
+                
                 migration_events = self.migration_advisor.plan(
-                    preliminary_critical_results + preliminary_focus_results, modifiers, major_events, map_changes
+                    preliminary_critical_results + preliminary_focus_results, 
+                    modifiers, major_events, map_changes,
+                    current_turn=self.turn_counter,
+                    cooldown_species=cooldown_species
                 )
                 
                 migration_count = 0
+                symbiotic_follow_count = 0
                 if migration_events and self.migration_advisor.enable_actual_migration:
                     logger.info(f"[迁徙] 执行 {len(migration_events)} 个迁徙事件...")
                     tiles = environment_repository.list_tiles()
+                    
                     for event in migration_events:
                         migrating_species = next(
                             (sp for sp in species_batch if sp.lineage_code == event.lineage_code),
@@ -506,7 +556,28 @@ class SimulationEngine:
                                 migration_count += 1
                                 logger.info(f"[迁徙成功] {migrating_species.common_name}: {event.origin} → {event.destination}")
                                 self._emit_event("migration", f"🗺️ 迁徙: {migrating_species.common_name} 从 {event.origin} 迁往 {event.destination}", "迁徙")
-                    logger.info(f"【阶段2】迁徙执行完成: {migration_count}/{len(migration_events)} 个物种成功迁徙")
+                                
+                                # 【新增】处理共生物种追随迁徙
+                                followers = habitat_manager.get_symbiotic_followers(migrating_species, species_batch)
+                                if followers:
+                                    # 获取迁徙后的新栖息地
+                                    new_habitats = environment_repository.latest_habitats()
+                                    new_tile_ids = [
+                                        h.tile_id for h in new_habitats 
+                                        if h.species_id == migrating_species.id
+                                    ]
+                                    
+                                    for follower in followers:
+                                        follow_success = habitat_manager.execute_symbiotic_following(
+                                            migrating_species, follower, new_tile_ids, tiles, self.turn_counter
+                                        )
+                                        if follow_success:
+                                            symbiotic_follow_count += 1
+                    
+                    log_msg = f"【阶段2】迁徙执行完成: {migration_count}/{len(migration_events)} 个物种成功迁徙"
+                    if symbiotic_follow_count > 0:
+                        log_msg += f", {symbiotic_follow_count} 个共生物种追随"
+                    logger.info(log_msg)
                     self._emit_event("info", f"{migration_count} 个物种完成迁徙", "生态")
                 else:
                     logger.debug(f"[迁徙] 生成了 {len(migration_events)} 个迁徙建议（未执行或无迁徙）")
@@ -562,6 +633,92 @@ class SimulationEngine:
                     )
                 
                 combined_results = critical_results + focus_results + background_results
+                
+                # ========== 【优化】AI综合状态评估（合并了压力评估+紧急响应） ==========
+                # 使用新的综合评估方法，一次AI调用完成多项评估
+                ai_status_evals = {}  # {lineage_code: SpeciesStatusEval}
+                emergency_responses = []
+                
+                if self._use_ai_pressure_response and self.ai_pressure_service:
+                    logger.info(f"【阶段3.5】AI综合状态评估...")
+                    self._emit_event("stage", "🤖 【阶段3.5】AI综合状态评估", "AI")
+                    
+                    # 清空回合缓存
+                    self.ai_pressure_service.clear_turn_cache()
+                    
+                    # 计算总压力
+                    total_pressure = sum(abs(v) for v in modifiers.values())
+                    
+                    # 只有在高压力情况下才启用AI评估
+                    if total_pressure >= self.ai_pressure_service.HIGH_PRESSURE_THRESHOLD:
+                        # 准备死亡率数据
+                        mortality_data = {r.species.lineage_code: r.death_rate for r in combined_results}
+                        
+                        # 生成压力上下文
+                        pressure_context = "; ".join([
+                            f"{k}: {v:.1f}" for k, v in modifiers.items() if abs(v) > 0.1
+                        ]) or "环境稳定"
+                        
+                        try:
+                            # 【优化】使用新的批量综合评估（合并了压力评估+紧急响应判断）
+                            critical_focus_species = tiered.critical + tiered.focus
+                            ai_status_evals = await self.ai_pressure_service.batch_evaluate_species_status(
+                                critical_focus_species,
+                                mortality_data,
+                                modifiers,
+                                pressure_context,
+                            )
+                            
+                            if ai_status_evals:
+                                logger.info(f"[AI综合评估] 获得 {len(ai_status_evals)} 个物种的状态评估")
+                                self._emit_event("info", f"AI评估了 {len(ai_status_evals)} 个物种的综合状态", "AI")
+                                
+                                # 应用AI修正到死亡率
+                                for result in combined_results:
+                                    code = result.species.lineage_code
+                                    if code in ai_status_evals:
+                                        status_eval = ai_status_evals[code]
+                                        old_rate = result.death_rate
+                                        result.death_rate = status_eval.apply_to_death_rate(old_rate)
+                                        
+                                        # 保存AI评估结果到result（供后续叙事使用）
+                                        result.ai_status_eval = status_eval
+                                        
+                                        if abs(result.death_rate - old_rate) > 0.01:
+                                            logger.debug(
+                                                f"[AI修正] {result.species.common_name}: "
+                                                f"{old_rate:.1%} → {result.death_rate:.1%} "
+                                                f"(策略: {status_eval.response_strategy}, "
+                                                f"状态: {status_eval.emergency_level})"
+                                            )
+                                        
+                                        # 检查是否处于紧急状态（从AI评估结果中获取）
+                                        if status_eval.is_emergency and not result.species.is_background:
+                                            self._emit_event(
+                                                "warning", 
+                                                f"⚠️ {result.species.common_name} 处于{status_eval.emergency_level}状态", 
+                                                "紧急"
+                                            )
+                                            emergency_responses.append({
+                                                "lineage_code": code,
+                                                "common_name": result.species.common_name,
+                                                "emergency_level": status_eval.emergency_level,
+                                                "emergency_action": status_eval.emergency_action,
+                                                "death_rate": result.death_rate,
+                                            })
+                            
+                            # 更新危险追踪（用于下回合判断）
+                            for result in combined_results:
+                                self.ai_pressure_service.update_danger_tracking(
+                                    result.species.lineage_code, result.death_rate
+                                )
+                        
+                        except asyncio.TimeoutError:
+                            logger.warning("[AI综合评估] 超时，跳过AI修正")
+                        except Exception as e:
+                            logger.warning(f"[AI综合评估] 失败: {e}")
+                    else:
+                        logger.debug(f"[AI综合评估] 压力不足 ({total_pressure:.1f}), 跳过AI评估")
                 
                 # ========== 【数据传递】将地块级数据传递给分化服务 ==========
                 if self._use_tile_based_mortality and all_tiles:
@@ -687,20 +844,19 @@ class SimulationEngine:
                     logger.info(f"{promotion_count}个亚种晋升为独立种")
                     self._emit_event("info", f"{promotion_count}个亚种晋升为独立种", "物种")
                 
-                # 9. 【修改】顺序处理所有AI相关任务（避免并发请求过多导致API卡死）
-                # 包括：AI增润、适应性演化、物种分化
-                logger.info(f"开始AI顺序任务 (增润 + 适应 + 分化)...")
-                self._emit_event("stage", "🔄 AI顺序处理", "AI")
+                # 9. 【优化】并行+顺序处理AI任务
+                # 阶段1并行：物种叙事 + 适应性演化（无依赖）
+                # 阶段2顺序：物种分化（依赖适应性演化结果）
+                logger.info(f"开始AI任务 (叙事∥适应 → 分化)...")
+                self._emit_event("stage", "🔄 AI并行处理", "AI")
                 
-                # 定义任务名称
+                # 任务名称（用于日志和进度显示）
                 ai_task_names = [
-                    "Critical增润",
-                    "Focus增润", 
-                    "适应性演化",
-                    "物种分化"
+                    "物种叙事+适应性",   # 并行阶段
+                    "物种分化"           # 顺序阶段
                 ]
                 
-                total_tasks = len(ai_task_names)
+                total_tasks = 2  # 两个阶段
                 
                 # 发送初始进度
                 self._emit_event(
@@ -717,91 +873,132 @@ class SimulationEngine:
                 async def send_heartbeat():
                     """发送心跳信号，让前端知道AI仍在运行"""
                     while True:
-                        await asyncio.sleep(3)  # 每3秒发送一次
+                        await asyncio.sleep(3)
                         heartbeat_count[0] += 1
                         self._emit_event("ai_heartbeat", f"心跳#{heartbeat_count[0]}", "AI")
                         logger.debug(f"[AI心跳] 已发送第 {heartbeat_count[0]} 次心跳")
                 
                 heartbeat_task = asyncio.create_task(send_heartbeat())
                 
-                # 【修改】顺序执行AI任务，避免并发请求过多
                 adaptation_events = []
                 branching = []
+                narrative_results = []
                 completed_count = 0
                 
                 try:
-                    # 任务1: Critical增润
-                    logger.info(f"[AI顺序] 开始 {ai_task_names[0]} (1/{total_tasks})...")
-                    self._emit_event("ai_progress", f"🔄 正在执行: {ai_task_names[0]}", "AI",
+                    # ========== 阶段1：并行执行物种叙事 + 适应性演化 ==========
+                    logger.info(f"[AI并行] 开始阶段1: {ai_task_names[0]} (1/{total_tasks})...")
+                    self._emit_event("ai_progress", f"🔄 并行执行: {ai_task_names[0]}", "AI",
                                     total=total_tasks, completed=completed_count, current_task=ai_task_names[0])
-                    try:
-                        await asyncio.wait_for(
-                            self.critical_analyzer.enhance_async(critical_results),
+                    
+                    # 准备物种数据（包含AI状态评估结果）
+                    species_narrative_data = []
+                    
+                    # Critical物种
+                    for result in critical_results:
+                        events = []
+                        if hasattr(result, 'death_causes') and result.death_causes:
+                            events.append(f"主要压力: {result.death_causes}")
+                        species_narrative_data.append({
+                            "species": result.species,
+                            "tier": "critical",
+                            "death_rate": result.death_rate,
+                            "status_eval": getattr(result, 'ai_status_eval', None),
+                            "events": events,
+                        })
+                    
+                    # Focus物种
+                    for result in focus_results:
+                        events = []
+                        if hasattr(result, 'death_causes') and result.death_causes:
+                            events.append(f"主要压力: {result.death_causes}")
+                        species_narrative_data.append({
+                            "species": result.species,
+                            "tier": "focus",
+                            "death_rate": result.death_rate,
+                            "status_eval": getattr(result, 'ai_status_eval', None),
+                            "events": events,
+                        })
+                    
+                    # 定义并行任务协程
+                    async def run_narrative_task():
+                        """物种叙事任务"""
+                        if not species_narrative_data:
+                            return []
+                        global_env = "; ".join([
+                            f"{k}: {v:.1f}" for k, v in modifiers.items() if abs(v) > 0.1
+                        ]) or "环境稳定"
+                        major_events_str = ", ".join([e.kind for e in major_events]) if major_events else "无"
+                        
+                        return await asyncio.wait_for(
+                            self.ai_pressure_service.generate_species_narratives(
+                                species_narrative_data,
+                                self.turn_counter,
+                                global_env,
+                                major_events_str,
+                            ),
                             timeout=180  # 3分钟超时
                         )
-                        completed_count += 1
-                        logger.info(f"[AI顺序] {ai_task_names[0]} 完成 ({completed_count}/{total_tasks})")
-                        self._emit_event("ai_progress", f"✅ {ai_task_names[0]} 完成", "AI",
-                                        total=total_tasks, completed=completed_count, current_task=ai_task_names[1])
-                    except asyncio.TimeoutError:
-                        logger.error(f"[AI顺序] {ai_task_names[0]} 超时")
-                        completed_count += 1
-                        self._emit_event("ai_progress", f"⏱️ {ai_task_names[0]} 超时", "AI",
-                                        total=total_tasks, completed=completed_count, current_task=ai_task_names[1])
-                    except Exception as e:
-                        logger.error(f"[AI顺序] {ai_task_names[0]} 失败: {e}")
-                        completed_count += 1
                     
-                    # 任务2: Focus增润
-                    logger.info(f"[AI顺序] 开始 {ai_task_names[1]} (2/{total_tasks})...")
-                    self._emit_event("ai_progress", f"🔄 正在执行: {ai_task_names[1]}", "AI",
-                                    total=total_tasks, completed=completed_count, current_task=ai_task_names[1])
-                    try:
-                        await asyncio.wait_for(
-                            self.focus_processor.enhance_async(focus_results),
-                            timeout=180  # 3分钟超时
-                        )
-                        completed_count += 1
-                        logger.info(f"[AI顺序] {ai_task_names[1]} 完成 ({completed_count}/{total_tasks})")
-                        self._emit_event("ai_progress", f"✅ {ai_task_names[1]} 完成", "AI",
-                                        total=total_tasks, completed=completed_count, current_task=ai_task_names[2])
-                    except asyncio.TimeoutError:
-                        logger.error(f"[AI顺序] {ai_task_names[1]} 超时")
-                        completed_count += 1
-                        self._emit_event("ai_progress", f"⏱️ {ai_task_names[1]} 超时", "AI",
-                                        total=total_tasks, completed=completed_count, current_task=ai_task_names[2])
-                    except Exception as e:
-                        logger.error(f"[AI顺序] {ai_task_names[1]} 失败: {e}")
-                        completed_count += 1
-                    
-                    # 任务3: 适应性演化
-                    logger.info(f"[AI顺序] 开始 {ai_task_names[2]} (3/{total_tasks})...")
-                    self._emit_event("ai_progress", f"🔄 正在执行: {ai_task_names[2]}", "AI",
-                                    total=total_tasks, completed=completed_count, current_task=ai_task_names[2])
-                    try:
-                        adaptation_events = await asyncio.wait_for(
+                    async def run_adaptation_task():
+                        """适应性演化任务"""
+                        return await asyncio.wait_for(
                             self.adaptation_service.apply_adaptations_async(
                                 species_batch, modifiers, self.turn_counter, pressures
                             ),
-                            timeout=300  # 5分钟超时（适应性演化可能有多个AI调用）
+                            timeout=300  # 5分钟超时
                         )
-                        completed_count += 1
-                        logger.info(f"[AI顺序] {ai_task_names[2]} 完成 ({completed_count}/{total_tasks})")
-                        self._emit_event("ai_progress", f"✅ {ai_task_names[2]} 完成", "AI",
-                                        total=total_tasks, completed=completed_count, current_task=ai_task_names[3])
-                    except asyncio.TimeoutError:
-                        logger.error(f"[AI顺序] {ai_task_names[2]} 超时")
-                        completed_count += 1
-                        self._emit_event("ai_progress", f"⏱️ {ai_task_names[2]} 超时", "AI",
-                                        total=total_tasks, completed=completed_count, current_task=ai_task_names[3])
-                    except Exception as e:
-                        logger.error(f"[AI顺序] {ai_task_names[2]} 失败: {e}")
-                        completed_count += 1
                     
-                    # 任务4: 物种分化
-                    logger.info(f"[AI顺序] 开始 {ai_task_names[3]} (4/{total_tasks})...")
-                    self._emit_event("ai_progress", f"🔄 正在执行: {ai_task_names[3]}", "AI",
-                                    total=total_tasks, completed=completed_count, current_task=ai_task_names[3])
+                    # 【核心优化】并行执行两个任务
+                    parallel_results = await asyncio.gather(
+                        run_narrative_task(),
+                        run_adaptation_task(),
+                        return_exceptions=True  # 单个任务失败不影响其他任务
+                    )
+                    
+                    # 处理并行结果
+                    narrative_result, adaptation_result = parallel_results
+                    
+                    # 处理叙事结果
+                    if isinstance(narrative_result, Exception):
+                        if isinstance(narrative_result, asyncio.TimeoutError):
+                            logger.error(f"[AI并行] 物种叙事超时")
+                        else:
+                            logger.error(f"[AI并行] 物种叙事失败: {narrative_result}")
+                        narrative_results = []
+                    else:
+                        narrative_results = narrative_result or []
+                        # 将叙事结果应用到物种结果中
+                        narrative_map = {nr.lineage_code: nr for nr in narrative_results}
+                        for result in critical_results + focus_results:
+                            code = result.species.lineage_code
+                            if code in narrative_map:
+                                nr = narrative_map[code]
+                                result.ai_narrative = nr.narrative
+                                result.ai_headline = nr.headline
+                                result.ai_mood = nr.mood
+                        logger.info(f"[AI并行] 物种叙事完成: {len(narrative_results)} 个")
+                    
+                    # 处理适应性结果
+                    if isinstance(adaptation_result, Exception):
+                        if isinstance(adaptation_result, asyncio.TimeoutError):
+                            logger.error(f"[AI并行] 适应性演化超时")
+                        else:
+                            logger.error(f"[AI并行] 适应性演化失败: {adaptation_result}")
+                        adaptation_events = []
+                    else:
+                        adaptation_events = adaptation_result or []
+                        logger.info(f"[AI并行] 适应性演化完成: {len(adaptation_events)} 个")
+                    
+                    completed_count += 1
+                    logger.info(f"[AI并行] 阶段1完成 ({completed_count}/{total_tasks})")
+                    self._emit_event("ai_progress", f"✅ {ai_task_names[0]} 完成", "AI",
+                                    total=total_tasks, completed=completed_count, current_task=ai_task_names[1])
+                    
+                    # ========== 阶段2：顺序执行物种分化 ==========
+                    logger.info(f"[AI并行] 开始阶段2: {ai_task_names[1]} (2/{total_tasks})...")
+                    self._emit_event("ai_progress", f"🔄 正在执行: {ai_task_names[1]}", "AI",
+                                    total=total_tasks, completed=completed_count, current_task=ai_task_names[1])
                     try:
                         branching = await asyncio.wait_for(
                             self.speciation.process_async(
@@ -812,20 +1009,20 @@ class SimulationEngine:
                                 map_changes=map_changes,
                                 major_events=major_events,
                                 pressures=pressures,
-                                trophic_interactions=trophic_interactions,  # 传递营养级互动信息
+                                trophic_interactions=trophic_interactions,
                             ),
-                            timeout=600  # 10分钟超时（物种分化可能有很多AI调用）
+                            timeout=600  # 10分钟超时
                         )
                         completed_count += 1
-                        logger.info(f"[AI顺序] {ai_task_names[3]} 完成 ({completed_count}/{total_tasks})")
+                        logger.info(f"[AI并行] 阶段2完成 ({completed_count}/{total_tasks})")
                     except asyncio.TimeoutError:
-                        logger.error(f"[AI顺序] {ai_task_names[3]} 超时")
+                        logger.error(f"[AI并行] {ai_task_names[1]} 超时")
                         branching = []
                         completed_count += 1
-                        self._emit_event("ai_progress", f"⏱️ {ai_task_names[3]} 超时", "AI",
+                        self._emit_event("ai_progress", f"⏱️ {ai_task_names[1]} 超时", "AI",
                                         total=total_tasks, completed=completed_count, current_task="完成")
                     except Exception as e:
-                        logger.error(f"[AI顺序] {ai_task_names[3]} 失败: {e}")
+                        logger.error(f"[AI并行] {ai_task_names[1]} 失败: {e}")
                         branching = []
                         completed_count += 1
                     
@@ -846,7 +1043,7 @@ class SimulationEngine:
                     current_task="完成"
                 )
                 
-                logger.info(f"[AI顺序] 全部AI任务处理完成")
+                logger.info(f"[AI并行] 全部AI任务处理完成")
                 
                 # 处理适应性演化结果 (更新DB)
                 # 注意：adaptation_service 已经在内部更新了 species 对象的属性，但我们需要在此处确保持久化
@@ -1082,6 +1279,7 @@ class SimulationEngine:
                     trophic_level=item.species.trophic_level,
                     grazing_pressure=item.grazing_pressure,
                     predation_pressure=item.predation_pressure,
+                    ai_narrative=item.ai_narrative if item.ai_narrative else None,  # 【新增】物种叙事
                 )
             )
         

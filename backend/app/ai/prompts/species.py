@@ -74,10 +74,16 @@ SPECIES_PROMPTS = {
 
 用户描述：{user_prompt}
 
+当前生态系统中的物种（用于推断食物关系）：
+{existing_species_context}
+
 返回JSON对象（不要学名和俗名，系统会单独生成）：
 {{
     "description": "生物学描述（100-120字），包含：体型大小、形态特征、运动方式、食性、繁殖方式、栖息环境、生态位角色",
     "habitat_type": "栖息地类型（从下列选择一个）",
+    "diet_type": "食性类型：autotroph(自养)/herbivore(草食)/carnivore(肉食)/omnivore(杂食)/detritivore(腐食)",
+    "prey_species": ["猎物物种代码列表，从现有物种中选择，如A1、B2等，生产者留空[]"],
+    "prey_preferences": {{"物种代码": 偏好比例0-1}},
     "morphology_stats": {{
         "body_length_cm": "体长（厘米，微生物用小数如0.001）",
         "body_weight_g": "体重（克）",
@@ -116,10 +122,27 @@ SPECIES_PROMPTS = {
 - terrestrial: 陆生（陆地，从平原到山地）
 - aerial: 空中（主要在空中活动的飞行生物）
 
-【JSON 示例（One-Shot）】
+【食性类型说明】
+- autotroph: 自养生物（光合作用或化能合成，营养级T1.0-1.5，无需猎物）
+- herbivore: 草食动物（以生产者为食，营养级T2.0-2.5）
+- carnivore: 肉食动物（以其他动物为食，营养级T3.0+）
+- omnivore: 杂食动物（植物和动物都吃，营养级T2.5-3.5）
+- detritivore: 腐食/分解者（以有机碎屑为食，营养级T1.5）
+
+【捕食关系规则】
+- 自养生物(autotroph)的prey_species必须为空[]
+- 草食动物(herbivore)只能捕食营养级<2.0的物种
+- 肉食动物(carnivore)捕食比自己低0.5-1.5营养级的物种
+- 杂食动物(omnivore)可以捕食比自己低0.5-2.0营养级的物种
+- prey_preferences中所有值之和应为1.0
+
+【JSON 示例1：自养生物（生产者）】
 {{
     "description": "一种生活在深海热泉附近的化学合成细菌，体型微小，呈杆状。通过氧化硫化物获取能量，无需光照。具有厚实的细胞壁以抵抗高压和高温。繁殖迅速，常形成菌席。",
     "habitat_type": "deep_sea",
+    "diet_type": "autotroph",
+    "prey_species": [],
+    "prey_preferences": {{}},
     "morphology_stats": {{
         "body_length_cm": 0.0002,
         "body_weight_g": 0.000001,
@@ -148,6 +171,41 @@ SPECIES_PROMPTS = {
     }}
 }}
 
+【JSON 示例2：草食动物】
+{{
+    "description": "一种小型滤食性原生动物，靠纤毛运动在浅海中游动。以浮游藻类和细菌为食，体表透明，卵生繁殖。喜好温暖水域，对温度变化敏感。",
+    "habitat_type": "marine",
+    "diet_type": "herbivore",
+    "prey_species": ["A1", "A2"],
+    "prey_preferences": {{"A1": 0.7, "A2": 0.3}},
+    "morphology_stats": {{
+        "body_length_cm": 0.02,
+        "body_weight_g": 0.00001,
+        "lifespan_days": 14,
+        "generation_time_days": 3,
+        "metabolic_rate": 5.0
+    }},
+    "abstract_traits": {{
+        "耐寒性": 3.0,
+        "耐热性": 6.0,
+        "耐旱性": 1.0,
+        "耐盐性": 7.0,
+        "耐酸碱性": 5.0,
+        "光照需求": 4.0,
+        "氧气需求": 6.0,
+        "繁殖速度": 7.5,
+        "运动能力": 5.0,
+        "社会性": 3.0
+    }},
+    "hidden_traits": {{
+        "gene_diversity": 0.6,
+        "environment_sensitivity": 0.5,
+        "evolution_potential": 0.6,
+        "mutation_rate": 0.4,
+        "adaptation_speed": 0.5
+    }}
+}}
+
 要求：
 - description严格100-120字，精简但包含所有关键生态信息
 - habitat_type必须根据描述选择最合适的类型
@@ -156,7 +214,124 @@ SPECIES_PROMPTS = {
 - 所有数值必须合理且符合生物学规律
 - 只返回JSON，不要使用markdown代码块标记
 """,
-    "speciation": """你是演化生物学家，负责推演物种分化事件。基于父系特征、环境压力和分化类型，生成新物种的详细演化数据。
+    # ==================== 精简版分化Prompt（规则引擎处理约束） ====================
+    "speciation": """你是演化生物学家，为物种分化生成创意性内容。
+
+**必须返回纯JSON格式。**
+
+=== 父系物种 ===
+代码：{parent_lineage}
+学名：{latin_name} ({common_name})
+栖息地：{habitat_type}
+营养级：T{parent_trophic_level:.1f}
+食性类型：{diet_type}
+当前猎物：{prey_species_summary}
+描述：{traits}
+
+【器官系统】
+{current_organs_summary}
+
+=== 环境背景 ===
+压力强度：{environment_pressure:.2f}/10
+压力来源：{pressure_summary}
+幸存者：{survivors:,}
+分化类型：{speciation_type}
+{tile_context}
+
+=== ⚠️ 硬性约束（必须遵守，否则会被系统强制修正）===
+
+【属性权衡预算】
+{trait_budget_summary}
+- ❌ 违规示例：增加总和超过上限、没有减少项、单项变化超过±3.0
+- ✅ 正确示例：{{"耐寒性": "+1.5", "繁殖速度": "-1.0", "运动能力": "-0.5"}} (增+1.5, 减-1.5, 净变化0)
+
+【营养级限制】
+允许范围：{trophic_range}（父代±0.5）
+- ❌ 违规示例：父代T{parent_trophic_level:.1f}，返回T{parent_trophic_level:.1f}+1.0
+- ✅ 必须在范围 {trophic_range} 内选择
+
+【器官演化约束】（current_stage必须与下方父系阶段一致！）
+{organ_constraints_summary}
+规则：
+- current_stage 必须填写上面列出的"当前阶段"值，不可随意编造
+- 每次最多涉及2个器官系统
+- 新器官只能从阶段1(原基)开始（即 current_stage=0, target_stage=1）
+- 已有器官每次最多提升2阶段（target_stage ≤ current_stage + 2）
+
+=== 建议（非强制）===
+- 建议演化方向：{evolution_direction} - {direction_description}
+- 建议增强：{suggested_increases}
+- 建议减弱：{suggested_decreases}
+- 可选栖息地：{habitat_options}
+
+=== 任务 ===
+生成新物种的**创意性内容**：
+1. 拉丁学名（保留属名，种加词用拉丁词根体现特征）
+2. 中文俗名（特征词+类群名）
+3. 120-180字生物学描述（必须包含食性和栖息环境！）
+4. 关键演化创新点
+5. 分化事件摘要和原因
+
+=== 输出格式 ===
+{{
+    "latin_name": "Genus species",
+    "common_name": "中文俗名",
+    "description": "120-180字，含食性、栖息环境、演化变化",
+    "habitat_type": "从可选栖息地中选择",
+    "trophic_level": 必须在{trophic_range}范围内,
+    "diet_type": "继承或调整食性类型",
+    "prey_species": ["继承或调整猎物列表"],
+    "prey_preferences": {{"物种代码": 偏好比例}},
+    "key_innovations": ["1-3个创新点"],
+    "trait_changes": {{"增强属性": "+数值", "减弱属性": "-数值"}},
+    "morphology_changes": {{"body_length_cm": 0.8-1.3倍}},
+    "event_description": "30-50字分化摘要",
+    "speciation_type": "{speciation_type}",
+    "reason": "生态学/地质学解释",
+    "organ_evolution": [
+        {{
+            "category": "locomotion/sensory/metabolic/digestive/defense/reproduction",
+            "action": "enhance/initiate",
+            "current_stage": 与上方父系阶段一致,
+            "target_stage": current_stage+1或+2,
+            "structure_name": "结构名",
+            "description": "变化描述"
+        }}
+    ]
+}}
+
+【捕食关系规则】
+- 通常继承父系的食性类型和猎物，但可以因环境压力调整
+- 如果分化导致营养级变化，需要相应调整猎物范围
+- 新猎物必须是当前生态系统中存在的物种
+- 如果灭绝事件导致原猎物消失，需要寻找替代食物源
+
+=== 示例（父系器官sensory当前阶段=1，草食性，猎物为A1）===
+{{
+    "latin_name": "Protoflagella ocularis",
+    "common_name": "眼点鞭毛虫",
+    "description": "浅海环境促使感光点内陷形成眼凹结构，提高光线方向感知能力。繁殖速度下降以维持复杂感觉结构。主要滤食蓝藻A1，栖息于阳光充足的浅海。",
+    "habitat_type": "marine",
+    "trophic_level": 2.0,
+    "diet_type": "herbivore",
+    "prey_species": ["A1"],
+    "prey_preferences": {{"A1": 1.0}},
+    "key_innovations": ["眼凹结构"],
+    "trait_changes": {{"光照需求": "+1.5", "繁殖速度": "-1.0", "运动能力": "-0.5"}},
+    "morphology_changes": {{"body_length_cm": 1.05}},
+    "event_description": "浅海光照促进感光器官发展",
+    "speciation_type": "生态隔离",
+    "reason": "光感知优势带来生存收益，代价是维护成本增加。",
+    "organ_evolution": [
+        {{"category": "sensory", "action": "enhance", "current_stage": 1, "target_stage": 2, "structure_name": "眼凹", "description": "感光点内陷"}}
+    ]
+}}
+
+只返回JSON。
+""",
+    
+    # ==================== 原版分化Prompt（备份，兼容旧代码） ====================
+    "speciation_legacy": """你是演化生物学家，负责推演物种分化事件。基于父系特征、环境压力和分化类型，生成新物种的详细演化数据。
 
 **关键要求：你必须严格返回JSON格式，不要使用markdown标题或其他格式。**
     
@@ -188,230 +363,47 @@ SPECIES_PROMPTS = {
     死亡率梯度：{mortality_gradient:.1%}
     隔离区域数：{num_isolation_regions}
     地理隔离：{'是' if is_geographic_isolation else '否'}
-    
-    **地块级分化规则**：
-    - 高死亡率区域（>50%）的子代应演化出更强的抗逆性
-    - 低死亡率区域（<30%）的子代可能演化出更强的竞争力
-    - 地理隔离时，不同区域的子代应有明显的性状分歧
-    - 死亡率梯度越大，演化方向应越极端
-    
+
     【食物链状态】
     {food_chain_status}
-    
-    演化方向必须考虑食物链状态！
-    - 如果低营养级食物短缺，高营养级物种应该：降低营养级（杂食化）或特化捕食效率
-    - 如果食物链崩溃风险高，可能需要演化出新的食物来源
-    - 营养级改变必须符合生态学逻辑
 
 === 任务目标 ===
-生成一个新物种（JSON格式），它必须：
-1. **继承**父系的核心特征（如基本体型、代谢模式、栖息地类型）。
-2. **渐进式创新**以适应当前压力（如耐旱、耐寒、器官增强）。
-3. **强制权衡**：属性有增必有减，不存在纯粹的"升级"。
-4. **栖息地演化**：根据环境变化，可能改变栖息地类型。
-
- **子代差异化指令**：
-- 当前子代编号：第 {offspring_index} 个（共 {total_offspring} 个）
-- **关键要求**：每个子代必须有不同的演化方向！
-- 根据子代编号选择不同的演化策略：
-  * 第1个子代：偏向环境适应（耐寒/耐热/耐盐等增强，运动/繁殖减弱）
-  * 第2个子代：偏向活动能力（运动/攻击增强，耐受性减弱）
-  * 第3个子代：偏向繁殖策略（繁殖/社会性增强，其他属性减弱）
-  * 第4个子代：偏向防御策略（防御性增强，攻击/运动减弱）
-  * 第5个子代：偏向极端特化（1-2个属性大幅增强，其他大幅减弱）
-- 这样不同子代会朝不同方向演化，由自然选择决定谁能存活。
-
-=== 渐进式演化核心原则（极其重要）===
-**禁止跳跃式演化！** 所有复杂结构必须通过多代累积逐步形成。
-
-1. **器官演化阶段系统**：
-   复杂器官的形成需要经历多个进化阶段，每代只能推进1-2个阶段：
-   
-   │ 阶段 │ 状态     │ 功能水平 │ 示例（以眼睛为例）              │
-   │ 0    │ 无结构   │ 0%      │ 无感光能力                      │
-   │ 1    │ 原基     │ 20%     │ 感光色素点、光敏细胞            │
-   │ 2    │ 初级     │ 50%     │ 感光凹、眼点                    │
-   │ 3    │ 功能化   │ 80%     │ 眼杯、简单透镜                  │
-   │ 4    │ 完善     │ 100%    │ 复眼或相机眼                    │
-
-2. **单次分化限制**：
-   - 只能对**已有器官**进行1-2个阶段的提升
-   - 可以**开始发展**新器官的原基（阶段0→1）
-   - **禁止**从无到有直接获得完善器官
-   - 每次分化最多涉及2个器官系统的变化
-
-3. **同源结构 vs 类比结构**：
-   - **同源结构**：源自共同祖先的相似结构（如脊椎动物四肢）
-   - **类比结构**：功能相似但起源不同的结构（如昆虫翅 vs 鸟翅）
-   
-    **关键警告**：
-   - 细菌鞭毛 ≠ 真核生物鞭毛（细菌鞭毛是旋转马达，真核鞭毛是微管滑动）
-   - 原核生物不能进化出真核细胞器（如线粒体、叶绿体需内共生获得）
-   - 必须尊重生物类群的基本约束
-
-4. **渐进式演化的核心逻辑**：
-   父系复杂度参考：{biological_domain}
-   
-   **你可以自由发挥任何演化方向**，但必须遵循以下渐进原则：
-   
-   a) **从现有基础发展**：新结构必须从父系已有的结构或细胞特化而来
-      - ✓ 感光细胞 → 眼点 → 眼杯 → 复杂眼睛（逐步特化）
-      - ✓ 表皮细胞 → 刺细胞 → 毒囊（功能特化）
-      - ✓ 运动纤毛 → 取食纤毛 → 滤食器官（功能转变）
-      - ✗ 无中生有直接获得完整眼睛
-   
-   b) **同源vs类比的区分**：
-      - 细菌鞭毛（旋转马达，原核）≠ 真核鞭毛（微管滑动，真核）
-      - 它们功能相似但结构完全不同，不能互相"升级"
-      - 如果物种没有相关前体结构，只能从原基开始发展
-   
-   c) **允许奇特演化**：自然界充满了意想不到的适应
-      - 可以发展任何你认为合理的新结构
-      - 奇怪的形态会被环境压力自然筛选
-      - 关键是要有逻辑上的演化路径，而非凭空出现
-
-=== 栖息地类型说明 ===
-可选择的栖息地类型：
-- marine: 海洋（浅海、中层海域，需要盐水）
-- deep_sea: 深海（深海平原、热液喷口）
-- coastal: 海岸（潮间带、滨海区）
-- freshwater: 淡水（湖泊、河流）
-- amphibious: 两栖（水陆两栖）
-- terrestrial: 陆生（陆地环境）
-- aerial: 空中（飞行生物）
-
-**栖息地演化规则：**
-- 通常继承父系栖息地类型
-- 在强烈环境压力下可发生跨栖息地演化：
-  * 海洋 ↔ 海岸 ↔ 陆生
-  * 淡水 ↔ 两栖 ↔ 陆生
-  * 陆生 → 空中（需发展飞行能力）
-- 跨栖息地演化时，必须在description中详细说明适应性变化
+生成一个新物种（JSON格式），继承父系核心特征，渐进式创新适应压力，属性有增必有减。
 
 === 输出格式规范 ===
 返回标准 JSON 对象：
 {{
-    "latin_name": "拉丁学名（Genus species格式，使用拉丁词根体现特征）",
-    "common_name": "中文俗名（特征词+类群名，可适当发挥）",
-    "description": "120-180字完整生物学描述，强调演化差异。【必须】包含明确的食性描述和栖息环境。",
-    "habitat_type": "栖息地类型（从上述7种选择）",
-    "trophic_level": "【必填】1.0-5.5浮点数，根据description中描述的食性判断",
-    "key_innovations": ["1-3个关键演化创新点（必须是渐进式的）"],
+    "latin_name": "拉丁学名",
+    "common_name": "中文俗名",
+    "description": "120-180字生物学描述，含食性和栖息环境",
+    "habitat_type": "栖息地类型",
+    "trophic_level": 1.0-5.5,
+    "key_innovations": ["演化创新点"],
     "trait_changes": {{"特质名称": "+数值"}}, 
     "morphology_changes": {{"统计名称": 倍数}},
-    "event_description": "30-50字分化事件摘要",
+    "event_description": "30-50字分化摘要",
     "speciation_type": "{speciation_type}",
-    "reason": "详细的生态学/地质学分化机制解释",
+    "reason": "分化机制解释",
     "organ_evolution": [
         {{
             "category": "locomotion/sensory/metabolic/digestive/defense",
             "action": "enhance/initiate",
             "current_stage": 0-4,
             "target_stage": 0-4,
-            "structure_name": "具体结构名称",
-            "description": "本次演化的具体变化（必须是渐进的）"
+            "structure_name": "结构名",
+            "description": "变化描述"
         }}
     ],
     "genetic_discoveries": {{}}
 }}
-
-**【organ_evolution 字段说明】**：
-- action=enhance: 对已有器官进行阶段提升（target_stage - current_stage ≤ 2）
-- action=initiate: 开始发展新器官原基（target_stage 必须为1）
-- current_stage: 从父系继承的当前阶段
-- target_stage: 演化后的目标阶段
-- **禁止**：target_stage 直接跳到3-4（除非 current_stage 已经是2-3）
-
-**【trophic_level 必须根据食性判断】**
-在 description 中必须明确写出食物来源，然后根据食性判断营养级：
-- 吃什么决定你是几级消费者
-- 父代营养级：{parent_trophic_level:.1f}
-- 除非食性发生重大改变，否则子代营养级应与父代相近
 
 === 关键规则 ===
-1. **强制属性权衡 (Trade-offs) - 核心原则**:
-   - **必须有增有减**：每个增加的属性，必须有至少一个减少的属性作为代价。
-   - 属性变化总和限制在 [-3.0, +5.0] 之间。
-   - 增加总量不得超过减少总量的2倍。例如：增加+4.0必须配合-2.0的减少。
-   - 单个属性变化幅度限制在 ±3.0 以内（50万年的渐进演化）。
-   - **禁止全属性提升**：纯粹的"升级"在生物学上不存在，必须体现权衡代价。
-   - **栖息地相关属性**：
-     * 海洋/深海生物：高耐盐性，低耐旱性
-     * 淡水生物：低耐盐性，中等耐旱性
-     * 陆生生物：低耐盐性，高耐旱性
-     * 两栖生物：中等耐盐性和耐旱性
+1. 属性权衡：增加必有减少，总和在[-3.0, +5.0]之间
+2. 形态稳定：体长变化0.8-1.3倍
+3. 器官演化：每次最多提升2阶段，新器官从阶段1开始
+4. 营养级：通常与父代相近(±0.5)
 
-2. **形态稳定性**:
-   - `morphology_changes` 是相对于父系的倍数（如 1.2 表示增大 20%）。
-   - 体长 (`body_length_cm`) 变化应限制在 0.8 - 1.3 倍之间，避免突变成怪物。
-
-3. **营养级判定 (Trophic Level)** - 标准5级食物链:
-   请根据新物种的食性描述，给出合理的营养级数值 (1.0 - 5.5)。
-   
-   │ 营养级 │ 生态角色             │ 典型食物                     │
-   │ 1.0    │ 生产者               │ 光合/化能自养，制造能量      │
-   │ 1.5    │ 分解者/腐食者        │ 有机碎屑、死亡生物           │
-   │ 2.0    │ 初级消费者           │ 植物、藻类（草食/滤食）      │
-   │ 2.5    │ 杂食（偏植物）       │ 植物 + 小型动物              │
-   │ 3.0    │ 次级消费者           │ 草食动物（小型捕食者）       │
-   │ 3.5    │ 杂食（偏肉食）       │ 草食 + 小型捕食者            │
-   │ 4.0    │ 三级消费者           │ 小型捕食者（中型捕食者）     │
-   │ 4.5    │ 高级捕食者           │ 次级 + 三级消费者            │
-   │ 5.0+   │ 顶级捕食者           │ 各级捕食者（食物链终端）     │
-   
-   **重要**: 必须在 `description` 中明确指出其食物来源与食性！
-
-4. **命名规则**:
-   - 拉丁名：保留属名，种加词使用拉丁词根（如 `velox` 快, `robustus` 强, `cryophilus` 耐寒）。
-   - 中文名：提取最显著特征（如"耐寒"、"长鞭"）+ 父系类群名（如"藻"、"虫"）。
-
-=== JSON 示例 (One-Shot) - 渐进式演化！ ===
-假设父系是一种原始真核鞭毛虫（已有 sensory 阶段1的感光点）：
-{{
-    "latin_name": "Protoflagella ocularis",
-    "common_name": "眼点鞭毛虫",
-    "description": "在光照充足的浅海环境中分化出的亚种。感光点逐渐内陷形成眼凹结构，能更精确地感知光线方向，有助于趋光运动和躲避捕食者。为维持更复杂的感觉结构，其繁殖速度下降，且鞭毛运动效率略有降低。主要以耐盐蓝藻为食，栖息在阳光充足的浅海区域。",
-    "habitat_type": "marine",
-    "trophic_level": 2.0,
-    "key_innovations": ["感光点内陷形成眼凹", "光向性运动增强"],
-    "trait_changes": {{
-        "光照需求": "+1.5",
-        "繁殖速度": "-1.0",
-        "运动能力": "-0.5"
-    }},
-    "morphology_changes": {{
-        "body_length_cm": 1.05,
-        "metabolic_rate": 1.1
-    }},
-    "event_description": "浅海光照环境促进感光器官进一步发展",
-    "speciation_type": "生态隔离",
-    "reason": "光照充足的环境下，更精确的光感知带来生存优势。眼凹结构通过自然选择逐步形成，代价是维护成本增加。",
-    "organ_evolution": [
-        {{
-            "category": "sensory",
-            "action": "enhance",
-            "current_stage": 1,
-            "target_stage": 2,
-            "structure_name": "眼凹",
-            "description": "感光点内陷形成凹陷结构，提高方向感知精度"
-        }}
-    ],
-    "genetic_discoveries": {{}}
-}}
-
-**权衡计算验证**：
-- 增加：+1.5 = +1.5
-- 减少：-1.0 - 0.5 = -1.5  
-- 总和：0（完美平衡）✓
-- 器官演化：阶段1→2，渐进式提升 ✓
-
-=== 错误示例（禁止！）===
-❌ 错误：原核细菌直接长出真核鞭毛
-❌ 错误：无感光能力的生物直接获得完整眼睛
-❌ 错误：器官阶段从0直接跳到4
-❌ 错误：单次分化涉及3个以上器官系统的重大变化
-
-    只返回JSON对象，不要返回markdown或其他格式的文本。
+只返回JSON对象。
 """,
     "speciation_batch": """你是演化生物学家，负责批量推演多个物种的分化事件。
 
@@ -426,35 +418,42 @@ SPECIES_PROMPTS = {
 === 待分化物种列表 ===
 {species_list}
 
-=== 任务目标 ===
-为上述每个物种生成一个分化后的新物种。每个新物种必须：
-1. **继承**父系的核心特征（基本体型、代谢模式）
-2. **渐进式创新**以适应当前压力（不能跳跃式进化！）
-3. **强制权衡**：属性有增必有减
-4. **差异化**：不同物种应有不同的演化方向
-5. **地块适应**：根据区域死亡率和压力水平调整演化方向
+=== ⚠️ 硬性约束（必须遵守，违规会被系统强制修正）===
+
+【1. 属性权衡预算】
+- 增加总和上限: +5.0，减少总和下限: -3.0，单项变化上限: ±3.0
+- 必须有增有减！纯增加会被系统强制添加减少项
+- ❌ 违规: {{"耐寒性": "+8.0"}} → 会被缩减
+- ✅ 正确: {{"耐寒性": "+2.0", "繁殖速度": "-1.5"}}
+
+【2. 营养级限制】
+- 只能变化±0.5（父代营养级在每个物种条目中给出）
+- ❌ 违规: 父代T2.0，返回T3.5 → 会被修正为T2.5
+- ✅ 正确: 父代T2.0，返回T2.0~T2.5
+
+【3. 器官演化约束】⚠️ 最常见错误！
+- current_stage 必须与父系实际阶段一致（在每个物种条目的器官约束中给出）
+- 每次最多涉及2个器官系统
+- 新器官从阶段0开始，只能发展到阶段1：current_stage=0, target_stage=1
+- 已有器官每次最多提升2阶段：target_stage ≤ current_stage + 2
+- ❌ 违规: 父系locomotion阶段=0，返回current_stage=4 → 会被修正为0
+- ✅ 正确: 父系locomotion阶段=0，返回current_stage=0, target_stage=1
 
 === 地块级分化规则 ===
-每个物种的分化条目中包含了地块级信息，请据此调整演化方向：
-- **高压区域**（死亡率>50%）：优先演化抗逆性（耐热、耐寒、耐旱等）
-- **低压区域**（死亡率<30%）：可演化竞争性（繁殖速度、运动能力等）
-- **地理隔离**：不同区域的子代应有明显的性状分歧
-- **高梯度**（>30%）：演化方向应更极端，以适应特定小环境
+每个物种条目中包含器官约束信息，请严格按照给出的当前阶段填写：
+- **高压区域**（死亡率>50%）：优先演化抗逆性
+- **低压区域**（死亡率<30%）：可演化竞争性
+- **地理隔离**：不同区域应有性状分歧
 
-=== 渐进式演化核心原则 ===
-**禁止跳跃式演化！** 复杂结构必须通过多代累积形成。
-
-1. **器官进化阶段**：0(无)→1(原基)→2(初级)→3(功能化)→4(完善)
-2. **单次分化限制**：只能提升1-2个阶段，新器官只能从原基(阶段1)开始
-3. **自由演化原则**：可以发展任何结构，但必须从现有基础渐进发展
-4. **唯一硬约束**：原核生物不能发展真核细胞器（需内共生事件，非渐进演化）
-5. **同源vs类比**：细菌鞭毛≠真核鞭毛，不同起源不可混用
+=== 渐进式演化原则 ===
+器官进化阶段：0(无)→1(原基)→2(初级)→3(功能化)→4(完善)
+- 单次分化只能提升1-2个阶段
+- 新器官只能从原基(阶段1)开始，即 current_stage=0 → target_stage=1
 
 === 栖息地类型 ===
-marine(海洋) | deep_sea(深海) | coastal(海岸) | freshwater(淡水) | amphibious(两栖) | terrestrial(陆生) | aerial(空中)
+marine | deep_sea | coastal | freshwater | amphibious | terrestrial | aerial
 
 === 输出格式 ===
-返回JSON对象，包含 results 数组，每个元素对应一个输入物种：
 {{
     "results": [
         {{
@@ -463,18 +462,18 @@ marine(海洋) | deep_sea(深海) | coastal(海岸) | freshwater(淡水) | amphi
             "common_name": "中文俗名",
             "description": "120-180字生物学描述，含食性和栖息环境",
             "habitat_type": "栖息地类型",
-            "trophic_level": 1.0-5.5,
-            "key_innovations": ["关键演化创新（必须渐进式）"],
-            "trait_changes": {{"特质名": "+/-数值"}},
-            "morphology_changes": {{"统计名": 倍数}},
+            "trophic_level": 父代±0.5范围内,
+            "key_innovations": ["关键演化创新"],
+            "trait_changes": {{"增强属性": "+数值", "减弱属性": "-数值"}},
+            "morphology_changes": {{"body_length_cm": 0.8-1.3倍}},
             "event_description": "30-50字分化摘要",
             "reason": "分化机制解释",
             "organ_evolution": [
                 {{
-                    "category": "器官类别",
+                    "category": "locomotion/sensory/metabolic/digestive/defense/reproduction",
                     "action": "enhance/initiate",
-                    "current_stage": 0-4,
-                    "target_stage": 0-4,
+                    "current_stage": 与该物种器官约束中的当前阶段一致,
+                    "target_stage": current_stage+1或+2,
                     "structure_name": "结构名",
                     "description": "渐进式变化描述"
                 }}
@@ -483,18 +482,27 @@ marine(海洋) | deep_sea(深海) | coastal(海岸) | freshwater(淡水) | amphi
     ]
 }}
 
-=== 关键规则 ===
-1. **强制权衡**：增强属性时必须有减少项，变化总和在[-3.0, +5.0]之间
-2. **形态稳定**：体长变化限制在0.8-1.3倍
-3. **营养级**（标准5级食物链）：
-   - T1(1.0): 生产者 - T2(2.0): 初级消费者
-   - T3(3.0): 次级消费者 - T4(4.0): 三级消费者
-   - T5(5.0+): 顶级捕食者
-4. **命名**：拉丁名用词根体现特征，中文名用特征词+类群名
-
-=== 权衡示例 ===
-trait_changes: {{"耐盐性": "+3.0", "耐热性": "+1.0", "繁殖速度": "-2.0", "运动能力": "-1.5"}}
-验证：增加+4.0，减少-3.5，总和+0.5 ✓
+=== 正确示例（父系locomotion阶段=0, sensory阶段=1）===
+{{
+    "results": [
+        {{
+            "request_id": "req_001",
+            "latin_name": "Protoflagella ocularis",
+            "common_name": "眼点鞭毛虫",
+            "description": "浅海环境促使感光点内陷形成眼凹结构。繁殖速度下降以维持复杂感觉结构。主要滤食蓝藻，栖息于阳光充足的浅海。",
+            "habitat_type": "marine",
+            "trophic_level": 2.0,
+            "key_innovations": ["眼凹结构"],
+            "trait_changes": {{"光照需求": "+1.5", "繁殖速度": "-1.0", "运动能力": "-0.5"}},
+            "morphology_changes": {{"body_length_cm": 1.05}},
+            "event_description": "浅海光照促进感光器官发展",
+            "reason": "光感知优势带来生存收益",
+            "organ_evolution": [
+                {{"category": "sensory", "action": "enhance", "current_stage": 1, "target_stage": 2, "structure_name": "眼凹", "description": "感光点内陷"}}
+            ]
+        }}
+    ]
+}}
 
 只返回JSON对象，不要返回markdown。
 """,

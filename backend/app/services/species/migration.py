@@ -12,9 +12,14 @@ if TYPE_CHECKING:
 class MigrationAdvisor:
     """基于规则引擎的迁徙决策系统。
     
-    【核心改进】现在可以利用地块级死亡率差异：
+    【核心改进1】地块级死亡率差异：
     - 从高死亡率地块迁往低死亡率地块
     - 迁徙方向更精确，基于实际环境条件
+    
+    【核心改进2】消费者追踪猎物机制：
+    - T2+ 消费者会主动追踪猎物分布
+    - 当猎物迁移或消失时，消费者会跟随迁徙
+    - 避免高营养级物种困在没有食物的区域
     
     注意：当前版本只生成迁徙建议，不实际执行迁徙。
     实际的栖息地变化需要由 MapStateManager 执行（未来功能）。
@@ -26,6 +31,7 @@ class MigrationAdvisor:
                  overflow_growth_threshold: float = 1.2,     # 降低溢出增长阈值
                  overflow_pressure_threshold: float = 0.7,   # 降低溢出资源压力阈值
                  min_population: int = 500,
+                 prey_scarcity_threshold: float = 0.3,       # 猎物稀缺阈值（触发追踪迁徙）
                  enable_actual_migration: bool = True) -> None:  # P1: 改为默认执行迁徙
         """初始化迁移顾问
         
@@ -33,8 +39,10 @@ class MigrationAdvisor:
         - 压力驱动（逃离）：降低门槛(35%)，更容易触发
         - 资源饱和（扩散）：降低门槛(0.9)，鼓励早期扩散
         - 人口溢出（扩张）：降低门槛(120%)，鼓励种群扩张
+        - 猎物追踪（新增）：消费者追踪猎物分布
         
         Args:
+            prey_scarcity_threshold: 猎物稀缺阈值，当低于此值时触发追踪迁徙
             enable_actual_migration: P1改进 - 是否实际执行迁徙（默认True）
                 True: 生成建议并通过habitat_manager实际修改栖息地分布
                 False: 仅生成建议（兼容旧系统）
@@ -44,10 +52,14 @@ class MigrationAdvisor:
         self.overflow_growth_threshold = overflow_growth_threshold
         self.overflow_pressure_threshold = overflow_pressure_threshold
         self.min_population = min_population
+        self.prey_scarcity_threshold = prey_scarcity_threshold
         self.enable_actual_migration = enable_actual_migration
         
         # 【新增】地块死亡率数据缓存
         self._tile_mortality_cache: dict[str, dict[int, float]] = {}  # {lineage_code: {tile_id: death_rate}}
+        
+        # 【新增】猎物密度数据缓存（用于消费者追踪猎物）
+        self._prey_density_cache: dict[str, float] = {}  # {lineage_code: prey_density}
     
     def set_tile_mortality_data(
         self, 
@@ -64,9 +76,25 @@ class MigrationAdvisor:
         """
         self._tile_mortality_cache[lineage_code] = tile_death_rates
     
+    def set_prey_density_data(
+        self,
+        lineage_code: str,
+        prey_density: float
+    ) -> None:
+        """设置消费者的猎物密度数据
+        
+        用于判断消费者是否需要追踪猎物迁徙
+        
+        Args:
+            lineage_code: 物种谱系编码
+            prey_density: 当前栖息地的猎物密度 (0.0-1.0)
+        """
+        self._prey_density_cache[lineage_code] = prey_density
+    
     def clear_tile_mortality_cache(self) -> None:
         """清空地块死亡率缓存（每回合开始时调用）"""
         self._tile_mortality_cache.clear()
+        self._prey_density_cache.clear()
     
     def _analyze_tile_mortality_gradient(self, lineage_code: str) -> tuple[float, str, str]:
         """分析物种在各地块的死亡率梯度
@@ -104,38 +132,73 @@ class MigrationAdvisor:
         pressures: dict[str, float],
         major_events: Sequence[MajorPressureEvent],
         map_changes: Sequence[MapChange],
+        current_turn: int = 0,
+        cooldown_species: set[str] | None = None,
     ) -> list[MigrationEvent]:
         """基于规则生成迁徙建议。
         
-        【核心改进】现在利用地块级死亡率差异：
-        - 类型0（新增）：地块梯度迁徙 - 从高死亡率地块迁往低死亡率地块
+        【核心改进】消费者追踪猎物 + 地块级死亡率差异 + 迁徙冷却：
+        - 类型-1（最高优先级）：猎物追踪迁徙 - 消费者追踪猎物密集区域
+        - 类型0：地块梯度迁徙 - 从高死亡率地块迁往低死亡率地块
         - 类型1：压力驱动迁徙 - 死亡率高 + 环境压力
         - 类型2：资源饱和扩散 - 资源压力高 + 种群稳定
         - 类型3：人口溢出 - 种群暴涨 + 资源不足
+        
+        Args:
+            species: 物种死亡率计算结果列表
+            pressures: 环境压力字典
+            major_events: 重大事件列表
+            map_changes: 地图变化列表
+            current_turn: 当前回合（用于日志）
+            cooldown_species: 处于冷却期的物种代码集合（跳过这些物种）
         """
         if not species:
             return []
+        
+        if cooldown_species is None:
+            cooldown_species = set()
         
         events: list[MigrationEvent] = []
         has_major_pressure = len(major_events) > 0 or len(pressures) > 0
         
         for result in species:
+            lineage_code = result.species.lineage_code
+            
+            # 【新增】跳过处于迁徙冷却期的物种
+            if lineage_code in cooldown_species:
+                continue
+            
             migration_type = None
             origin = ""
             destination = ""
             rationale = ""
             
-            lineage_code = result.species.lineage_code
+            sp = result.species
+            trophic_level = getattr(sp, 'trophic_level', 1.0)
+            is_consumer = trophic_level >= 2.0  # T2+ 是消费者
+            
+            # 【最高优先级】类型-1：猎物追踪迁徙
+            # 消费者（T2+）当猎物稀缺时，主动追踪猎物密集区域
+            if is_consumer and result.survivors >= self.min_population:
+                prey_density = self._prey_density_cache.get(lineage_code, 1.0)
+                
+                # 当猎物密度低于阈值时，触发追踪迁徙
+                if prey_density < self.prey_scarcity_threshold:
+                    migration_type = "prey_tracking"
+                    origin, destination, rationale = self._determine_prey_tracking_migration(
+                        result, prey_density
+                    )
             
             # 【新增】类型0：地块梯度迁徙
             # 当不同地块的死亡率差异显著时，从高死亡率地块迁往低死亡率地块
-            gradient, high_area, low_area = self._analyze_tile_mortality_gradient(lineage_code)
-            if gradient >= 0.20 and result.survivors >= self.min_population:
-                # 死亡率梯度超过20%，触发地块梯度迁徙
-                migration_type = "tile_gradient"
-                origin = high_area
-                destination = low_area
-                rationale = f"地块间死亡率差异{gradient:.0%}，从高风险区域迁往低风险区域"
+            if not migration_type:
+                gradient, high_area, low_area = self._analyze_tile_mortality_gradient(lineage_code)
+                if gradient >= 0.20 and result.survivors >= self.min_population:
+                    # 死亡率梯度超过20%，触发地块梯度迁徙
+                    migration_type = "tile_gradient"
+                    origin = high_area
+                    destination = low_area
+                    rationale = f"地块间死亡率差异{gradient:.0%}，从高风险区域迁往低风险区域"
             
             # 类型2：资源饱和扩散
             if not migration_type and result.resource_pressure > self.saturation_threshold:
@@ -174,6 +237,42 @@ class MigrationAdvisor:
                 )
         
         return events
+    
+    def _determine_prey_tracking_migration(
+        self,
+        result: MortalityResult,
+        current_prey_density: float
+    ) -> tuple[str, str, str]:
+        """确定消费者追踪猎物的迁徙方向
+        
+        Args:
+            result: 死亡率计算结果
+            current_prey_density: 当前栖息地的猎物密度
+            
+        Returns:
+            (origin, destination, rationale)
+        """
+        species = result.species
+        trophic_level = getattr(species, 'trophic_level', 2.0)
+        
+        # 根据营养级确定猎物类型描述
+        if trophic_level >= 5.0:
+            prey_type = "大型猎物（三级消费者）"
+        elif trophic_level >= 4.0:
+            prey_type = "中型猎物（次级消费者）"
+        elif trophic_level >= 3.0:
+            prey_type = "草食动物（初级消费者）"
+        else:
+            prey_type = "生产者（植物/藻类）"
+        
+        origin = "猎物稀缺的当前栖息地"
+        destination = f"追踪{prey_type}密集区域"
+        rationale = (
+            f"当前猎物密度仅{current_prey_density:.1%}，"
+            f"作为T{trophic_level:.1f}消费者需追踪猎物迁徙以维持食物来源"
+        )
+        
+        return origin, destination, rationale
     
     def _determine_migration(
         self,
