@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 title Clade - 停止服务
 color 0C
 
