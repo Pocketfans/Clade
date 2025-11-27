@@ -133,7 +133,6 @@ interface State {
   testResultEmbedding: TestResult | null;
   saving: boolean;
   saveSuccess: boolean;
-  searchQuery: string;
   showApiKeys: Record<string, boolean>;
   confirmDialog: ConfirmState;
   validationErrors: Record<string, string>;
@@ -154,7 +153,6 @@ type Action =
   | { type: 'SET_EMBEDDING_RESULT'; result: TestResult | null }
   | { type: 'SET_SAVING'; saving: boolean }
   | { type: 'SET_SAVE_SUCCESS'; success: boolean }
-  | { type: 'SET_SEARCH'; query: string }
   | { type: 'TOGGLE_API_KEY_VISIBILITY'; providerId: string }
   | { type: 'SET_CONFIRM_DIALOG'; dialog: ConfirmState }
   | { type: 'CLOSE_CONFIRM' }
@@ -225,8 +223,6 @@ function reducer(state: State, action: Action): State {
       return { ...state, saving: action.saving };
     case 'SET_SAVE_SUCCESS':
       return { ...state, saveSuccess: action.success };
-    case 'SET_SEARCH':
-      return { ...state, searchQuery: action.query };
     case 'TOGGLE_API_KEY_VISIBILITY':
       return {
         ...state,
@@ -342,7 +338,6 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
     testResultEmbedding: null,
     saving: false,
     saveSuccess: false,
-    searchQuery: "",
     showApiKeys: {},
     confirmDialog: { isOpen: false, title: '', message: '', variant: 'warning', onConfirm: () => {} },
     validationErrors: {},
@@ -350,20 +345,11 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
 
   const { form, tab, selectedProviderId, testResults, testingProviderId, 
           testingEmbedding, testResultEmbedding, saving, saveSuccess, 
-          searchQuery, showApiKeys, confirmDialog, validationErrors } = state;
+          showApiKeys, confirmDialog, validationErrors } = state;
 
   const selectedProvider = selectedProviderId ? form.providers[selectedProviderId] : null;
   
-  // 过滤后的服务商列表
-  const providerList = useMemo(() => {
-    const list = Object.values(form.providers);
-    if (!searchQuery.trim()) return list;
-    const query = searchQuery.toLowerCase();
-    return list.filter(p => 
-      p.name.toLowerCase().includes(query) || 
-      p.base_url?.toLowerCase().includes(query)
-    );
-  }, [form.providers, searchQuery]);
+  const providerList = useMemo(() => Object.values(form.providers), [form.providers]);
 
   // 快捷键
   useEffect(() => {
@@ -618,24 +604,6 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
             />
           </div>
           
-          {/* 导入导出 */}
-          <div className="nav-actions">
-            <Tooltip content="导出配置到 JSON 文件">
-              <button onClick={handleExport} className="nav-action-btn" aria-label="导出配置">
-                📤
-              </button>
-            </Tooltip>
-            <Tooltip content="从 JSON 文件导入配置">
-              <button onClick={handleImport} className="nav-action-btn" aria-label="导入配置">
-                📥
-              </button>
-            </Tooltip>
-            <Tooltip content="重置为默认设置">
-              <button onClick={handleReset} className="nav-action-btn danger" aria-label="重置配置">
-                🔄
-              </button>
-            </Tooltip>
-          </div>
         </nav>
 
         {/* 内容区域 */}
@@ -647,32 +615,7 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
               <div className="providers-layout">
                 {/* 左侧：服务商列表 */}
                 <div className="provider-list-panel">
-                  <div className="panel-header">
-                    <h4 className="panel-title">服务商列表</h4>
-                    <span className="provider-count">{providerList.length}</span>
-                  </div>
-                  
-                  {/* 搜索框 */}
-                  <div className="search-box">
-                    <span className="search-icon">🔍</span>
-                    <input
-                      type="text"
-                      placeholder="搜索服务商..."
-                      value={searchQuery}
-                      onChange={(e) => dispatch({ type: 'SET_SEARCH', query: e.target.value })}
-                      className="search-input"
-                      aria-label="搜索服务商"
-                    />
-                    {searchQuery && (
-                      <button 
-                        className="search-clear" 
-                        onClick={() => dispatch({ type: 'SET_SEARCH', query: '' })}
-                        aria-label="清除搜索"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
+                  <h4 className="panel-title">服务商列表</h4>
                   
                   <div className="provider-list">
                     {providerList.map(p => {
@@ -714,11 +657,6 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                       );
                     })}
                     
-                    {providerList.length === 0 && searchQuery && (
-                      <div className="empty-search">
-                        未找到匹配的服务商
-                      </div>
-                    )}
                   </div>
                   
                   <button onClick={addCustomProvider} className="btn-add-provider">
@@ -1103,6 +1041,18 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
           
           {/* 底部操作栏 */}
           <div className="settings-footer">
+            <div className="footer-left">
+              <button onClick={handleExport} className="btn-secondary btn-small">
+                📤 导出
+              </button>
+              <button onClick={handleImport} className="btn-secondary btn-small">
+                📥 导入
+              </button>
+              <button onClick={handleReset} className="btn-secondary btn-small btn-danger-text">
+                🔄 重置
+              </button>
+            </div>
+            
             {saveSuccess && (
               <div className="save-success">✅ 配置已保存</div>
             )}
@@ -1111,11 +1061,12 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                 ⚠️ 部分配置未完成
               </div>
             )}
+            
             <div className="footer-buttons">
-              <span className="shortcut-hint">Ctrl+S 保存</span>
+              <span className="shortcut-hint">Ctrl+S</span>
               <button onClick={onClose} className="btn-secondary">取消</button>
               <button onClick={handleSave} className="btn-primary" disabled={saving}>
-                {saving ? "保存中..." : "💾 保存配置"}
+                {saving ? "保存中..." : "保存配置"}
               </button>
             </div>
           </div>
