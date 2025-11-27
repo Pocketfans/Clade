@@ -1,156 +1,278 @@
-# Clade: 规则约束下的 AI 演化沙盒
+# 🦎 Clade - AI 演化沙盒
 
-**Clade** 是一个基于混合架构（Hybrid Architecture）的生物演化模拟系统。它旨在解决纯 AI 模拟中常见的数值崩坏问题，同时突破传统模拟游戏的创意瓶颈。
+> **在这个游戏里，你是上帝。**
+>
+> 创造生命，释放天灾，然后看着它们努力活下去（或者灭绝）。
 
-> **核心理念**：用硬编码的**生态规则**保证系统的数值平衡与稳定性，用**大语言模型（LLM）**提供无限的生物多样性与涌现式叙事。
-
-## 🌟 核心特性
-
-### 1. 🧠 混合演化引擎 (Hybrid Engine)
-系统将演化过程拆解为两个维度，互为表里：
-- **数值骨架 (The Skeleton - Rules)**：
-  - 基于 **克莱伯定律 (Kleiber's Law)** 计算代谢率与能量消耗。
-  - 严格的 **营养级 (Trophic Levels)** 能量传递与承载力限制。
-  - 动态的 **r/K 选择理论** 决定繁殖策略。
-  - **物种分级 (Tiering)**：智能区分核心物种与背景物种，优化算力分配。
-- **叙事血肉 (The Flesh - AI)**：
-  - LLM 负责物种的 **形态生成、命名、适应性变异**。
-  - 生成地质变迁的 **史诗叙事**。
-  - 创造独特的 **生态位 (Niche)** 描述与种间关系。
-
-### 2. 🗺️ 动态六边形世界
-- **126x40 六边形网格**：模拟真实的大陆板块、洋流与气候带。
-- **板块构造演化**：模拟从“稳定期”到“分裂期”再到“碰撞期”的地质循环，动态生成山脉、海沟与火山。
-- **环境压力**：全球变暖、海平面升降、极端干旱等事件实时重塑地图。
-
-### 3. 🧬 深度谱系追踪
-- **交互式族谱树**：完整记录物种的演化路径，清晰展示 **分化 (Speciation)**、**灭绝 (Extinction)** 与 **杂交 (Hybridization)** 事件。
-- **遗传距离计算**：基于形态与基因特征计算物种间的亲缘关系，决定杂交可育性。
-- **器官系统**：可视化的生物蓝图，展示物种的进化特征（如“光合作用皮层”、“喷气式推进囊”）。
-
-### 4. 📊 生态位分析与数据可视化
-- **全球趋势仪表盘 (Global Trends)**：直观展示气温、海平面、生物量与物种多样性的历史走势（Victoria 3 风格）。
-- **物种总账 (Species Ledger)**：类似财务报表的物种数据管理视图。
-- **向量化对比**：使用 Embedding 技术计算物种间的生态位重叠度。
-- **竞争可视化**：直观展示不同物种在体型、代谢、环境适应性上的竞争关系。
-
-### 5. 🔓 表观遗传与休眠基因
-- **压力激活**：物种体内携带“休眠基因库”。当面临灭绝级压力（如突发冰期）时，特定的性状（如厚皮毛）会被瞬间激活。
-- **非随机演化**：模拟生物对环境的紧急生理反应，补充了常规达尔文演化速度过慢的问题。
-
-## ♻️ 2025 更新重点
-- **行动队列 & 压力编排**：通过 `/queue*` API 预排最多 20 个压力批次，前端即可展示 `queue_preview`，并在 `/turns/run` 空压调用时自动消耗。
-- **多提供商 AI 路由**：`UIConfig` 支持自定义 Provider、并发上限与能力级路由；`SettingsDrawer` 可直接写入 `data/settings.json` 并热更新 ModelRouter。
-- **地图物种叠加**：`/map` 允许携带 `species_code` 与 `limit_habitats`，MapPanel 可以为任何物种生成实时栖息地热力层。
-- **谱系与栖息地快照**：`/lineage`、`map_manager.snapshot_habitats` 与导出管线整合，初始存档会生成第 0 回合报告和人口快照，方便可视化历史。
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11+-blue?logo=python" />
+  <img src="https://img.shields.io/badge/Node.js-18+-green?logo=nodedotjs" />
+  <img src="https://img.shields.io/badge/AI-DeepSeek%20%7C%20GPT%20%7C%20Claude-purple" />
+</p>
 
 ---
 
-## 🚀 快速开始
+## 🎮 这是什么？
 
-本项目采用 Monorepo 结构，包含后端 (FastAPI) 和前端 (React)。
+**Clade** 是一个 AI 驱动的生物演化模拟器。想象一下《孢子》遇上《环世界》，再加上一个会讲故事的 AI —— 就是这个感觉。
 
-### 环境要求
-- Python 3.10+
-- Node.js 18+
-- OpenAI API Key (或兼容的 LLM 服务)
+你可以：
+- 🌍 **创造世界** - 一张由 126×40 个六边形组成的动态地图
+- 🧬 **设计生命** - AI 会帮你生成独特的生物，有名字、有器官、有性格
+- ☄️ **降下天灾** - 火山爆发、冰河期、陨石撞击...看谁能挺过去
+- 📊 **见证演化** - 数百万年的进化在几分钟内上演，族谱树实时更新
 
-### 1. 启动后端
-后端负责核心模拟计算与数据存储。
+每次游戏都是独一无二的故事。你的"三眼喷墨章鱼"可能会统治海洋，也可能被一群"光合作用甲壳蟹"取而代之。
 
-```bash
-# 1. 进入后端目录
-cd backend
+---
 
-# 2. 创建并激活虚拟环境
-  python -m venv .venv
-# Windows (PowerShell):
-.\.venv\Scripts\activate
-# Linux/macOS:
-source .venv/bin/activate
+## 🚀 5 分钟上手
 
-# 3. 安装依赖
-pip install -e ".[dev]"
+### 第一步：安装必备软件
 
-# 4. 配置环境变量
-# 复制示例配置（如果存在）或直接创建 .env
-# 编辑 .env 文件，填入你的 AI_API_KEY 和 AI_BASE_URL
+你需要两样东西（如果已经有了可以跳过）：
 
-# 5. 启动服务
-uvicorn app.main:app --reload --port 8000
+| 软件 | 版本要求 | 下载链接 |
+|------|---------|----------|
+| **Python** | 3.11 或更高 | [👉 点击下载](https://www.python.org/downloads/) |
+| **Node.js** | 18 或更高 | [👉 点击下载](https://nodejs.org/zh-cn) |
+
+<details>
+<summary>📖 安装小贴士（点击展开）</summary>
+
+#### Windows 用户
+
+**安装 Python：**
+1. 点击上面的链接，下载最新版 Python
+2. 运行安装程序时，**一定要勾选 "Add Python to PATH"**（这很重要！）
+3. 点击 "Install Now" 完成安装
+
+**安装 Node.js：**
+1. 点击上面的链接，下载 LTS（长期支持）版本
+2. 一路点击 "Next" 完成安装即可
+
+**验证安装：**
+打开命令提示符（按 `Win+R`，输入 `cmd`，回车），输入：
 ```
-*首次启动会自动初始化 `data/db/egame.db` 并生成初始物种。*
+python --version
+node --version
+```
+如果都显示版本号，说明安装成功！
 
-### 2. 启动前端
-前端提供可视化的上帝视角 HUD。
+#### Mac 用户
+
+推荐使用 Homebrew 安装：
+```bash
+brew install python@3.11 node
+```
+
+#### Linux 用户
 
 ```bash
-# 新开一个终端窗口，进入前端目录
-cd frontend
+# Ubuntu/Debian
+sudo apt update
+sudo apt install python3.11 python3.11-venv nodejs npm
 
-# 安装依赖并启动
+# Fedora
+sudo dnf install python3.11 nodejs
+```
+
+</details>
+
+### 第二步：下载游戏
+
+**方式 A：直接下载（推荐新手）**
+1. 点击页面右上角绿色的 `Code` 按钮
+2. 选择 `Download ZIP`
+3. 解压到你喜欢的位置
+
+**方式 B：使用 Git**
+```bash
+git clone https://github.com/Pocketfans/Clade.git
+cd Clade
+```
+
+### 第三步：启动游戏
+
+#### 🪟 Windows 用户（超简单！）
+
+双击 `start.bat`，完事！
+
+启动器会自动：
+- ✅ 检查 Python 和 Node.js
+- ✅ 安装所有依赖
+- ✅ 启动后端和前端服务
+- ✅ 打开浏览器
+
+#### 🍎 Mac / 🐧 Linux 用户
+
+打开终端，依次运行：
+
+```bash
+# 1. 启动后端
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -e ".[dev]"
+uvicorn app.main:app --reload --port 8000 &
+
+# 2. 启动前端（新开一个终端窗口）
+cd frontend
 npm install
 npm run dev
 ```
-访问 `http://localhost:5173` 开始演化之旅。
 
-### 3. 运行测试与调试
-确保核心逻辑的稳定性。
-
-```bash
-# 运行模拟集成测试 (End-to-End Scenario)
-python tests/api_simulation_test/run_test.py
-```
-
-此外，你可以在前端界面的 **"设置 -> 开发者工具"** 中直接运行系统健康检查或重置世界。
-
-## ⚙️ AI 服务与 UI 配置
-- **配置文件**：默认保存在 `data/settings.json`（`UI_CONFIG_PATH` 可覆盖）。通过 `/api/config/ui` 读取/写入，立即生效。
-- **多 Provider 模式**：`providers` 字典维护 OpenAI/DeepSeek/自建代理等，`capability_routes` 将 `turn_report`、`speciation` 等能力映射到不同模型，`ai_concurrency_limit` 控制 ModelRouter 信号量。
-- **Embedding**：在 `UIConfig` 中指定 `embedding_provider_id` 与 `embedding_model`，或使用 legacy 字段 `embedding_base_url`/`embedding_api_key`。`/api/niche/compare` 需要真实向量支持，否则会返回 503。
-- **连通性测试**：`POST /api/config/test-api` 支持 `type=chat|embedding`，用于 Settings Drawer 检查第三方 API 可用性。
-
-## 🔧 运维与脚本
-- **Admin API**：`/api/admin/health`、`/api/admin/reset` 分别负责健康检查与世界重置。生产环境建议加鉴权。
-- **实用脚本**：
-  - `scripts/health_check.py`：本地 CLI 版健康检查。
-  - `scripts/reset_world.py`：批量清理数据库/存档/导出。
-- **数据目录**：所有导出/存档/日志位于 `data/`；请确保在部署前持久化这些路径。
+然后打开浏览器访问：**http://localhost:5173**
 
 ---
 
-## 📂 项目结构
+## 🔑 配置 AI（必须！）
 
-```text
+游戏需要 AI 服务来生成物种和叙事。别担心，设置很简单：
+
+### 推荐选择（国内用户友好）
+
+| 服务商 | 特点 | 注册链接 |
+|--------|------|----------|
+| **DeepSeek** | 便宜好用，中文优秀 | [👉 注册](https://platform.deepseek.com/) |
+| **硅基流动** | 送额度，模型多 | [👉 注册](https://cloud.siliconflow.cn/) |
+| **火山引擎** | 豆包大模型 | [👉 注册](https://www.volcengine.com/product/doubao) |
+
+### 国际用户
+
+| 服务商 | 特点 | 注册链接 |
+|--------|------|----------|
+| **OpenAI** | GPT-4o 强大但贵 | [👉 注册](https://platform.openai.com/) |
+| **Google AI** | Gemini 免费额度多 | [👉 注册](https://aistudio.google.com/) |
+| **Anthropic** | Claude 思维清晰 | [👉 注册](https://console.anthropic.com/) |
+
+### 配置步骤
+
+1. 游戏启动后，点击右上角的 **⚙️ 设置**
+2. 找到 **"AI 服务"** 部分
+3. 选择你注册的服务商
+4. 填入 API Key
+5. 点击 **"测试连接"** 确认可用
+6. 保存！
+
+> 💡 **小贴士**：DeepSeek 是性价比之王，新用户注册送 10 元额度，够玩很久了！
+
+---
+
+## 🎯 游戏玩法
+
+### 基础操作
+
+| 操作 | 说明 |
+|------|------|
+| **推进回合** | 点击主界面的"下一回合"按钮，时间前进 |
+| **查看物种** | 点击地图上的六边形，查看该地区的物种 |
+| **族谱树** | 在侧边栏查看物种的演化历史 |
+| **释放压力** | 点击"压力"按钮，选择灾难类型释放 |
+
+### 进阶玩法
+
+- **自定义物种**：在设置中创建你自己设计的始祖生物
+- **地质演变**：开启板块漂移，看大陆分分合合
+- **生态分析**：使用向量对比功能分析物种间的竞争关系
+- **导出数据**：将演化历史导出为报告，分享给朋友
+
+---
+
+## ❓ 常见问题
+
+<details>
+<summary><b>Q: 双击 start.bat 没反应？</b></summary>
+
+1. 确保 Python 和 Node.js 已正确安装
+2. 右键 `start.bat`，选择"以管理员身份运行"
+3. 如果还不行，手动运行命令（见上方手动启动说明）
+
+</details>
+
+<details>
+<summary><b>Q: 报错说端口被占用？</b></summary>
+
+可能是上次没有正确关闭。双击 `stop.bat` 关闭所有服务，然后重新启动。
+
+或者修改端口：
+- 后端：在 `start.ps1` 中修改 `--port 8000`
+- 前端：在 `frontend/vite.config.ts` 中修改端口
+
+</details>
+
+<details>
+<summary><b>Q: AI 返回空白/报错？</b></summary>
+
+1. 检查 API Key 是否正确
+2. 检查账户余额是否充足
+3. 尝试切换其他模型或服务商
+
+</details>
+
+<details>
+<summary><b>Q: 如何重置世界？</b></summary>
+
+进入游戏后，点击 **设置 → 开发者工具 → 重置世界**。
+
+或者直接删除 `data/` 文件夹下的所有内容（保留 `settings.example.json`）。
+
+</details>
+
+<details>
+<summary><b>Q: 可以离线玩吗？</b></summary>
+
+游戏本身可以离线运行，但物种生成和叙事需要 AI 服务。没有 AI 的话，演化会使用简化规则，但会少很多乐趣。
+
+</details>
+
+---
+
+## 📁 文件说明
+
+```
 Clade/
-├── backend/            # 核心演化引擎 (FastAPI + SQLModel)
-│   ├── app/simulation/ # 模拟循环主逻辑
-│   ├── app/services/   # 规则服务 (死亡、繁殖、地形、分级)
-│   └── app/ai/         # AI 模型路由与 Prompt
-├── frontend/           # 策略 HUD (React + Vite + D3.js + Recharts)
-├── scripts/            # 运维与测试脚本
-├── data/               # [自动生成] 存档、数据库、日志、导出文件
-└── docs/               # 开发文档
+├── start.bat          # 🚀 Windows 一键启动
+├── stop.bat           # 🛑 关闭所有服务
+├── backend/           # 后端引擎（Python）
+├── frontend/          # 前端界面（React）
+├── data/              # 存档和配置（游戏生成）
+│   └── settings.example.json  # 配置模板
+└── docs/              # 开发文档
 ```
 
-## 📖 文档索引
+---
 
-- **[开发文档 (DEV_DOC.md)](DEV_DOC.md)**：深入了解混合架构的实现原理、核心算法与数据流。
-- **[API 指南 (API_GUIDE.md)](API_GUIDE.md)**：最新接口清单、数据模型速查。
-- **[后端模块蓝图](docs/api-guides/README.md)**：系统分层、服务编排与数据流全景。
-- **模块参考**（`docs/api-guides/modules/*`）：
-  - [Simulation](docs/api-guides/modules/simulation/README.md)：回合执行、压力、行动队列。
-  - [Species](docs/api-guides/modules/species/README.md)：谱系、分化、杂交。
-  - [Environment](docs/api-guides/modules/environment/README.md)：地图、地形、气候。
-  - [Analytics & AI](docs/api-guides/modules/analytics-ai/README.md)：Embedding、AI 路由与生态位分析。
-  - [Saves & Ops](docs/api-guides/modules/saves-ops/README.md)：存档、导出、Admin 操作。
-  - [Config & UI](docs/api-guides/modules/config-ui/README.md)：UIConfig 字段、Settings Drawer。
-  - [Frontend Integration](docs/api-guides/modules/frontend-integration/README.md)：前端服务层封装与错误处理。
+## 🛠️ 开发者信息
 
-## 🤝 贡献
+想深入了解技术细节？查看：
 
-欢迎提交 Pull Request！无论是调整生态参数（让模拟更真实），还是优化 AI Prompt（让叙事更精彩），我们都非常期待。
+- [开发文档](DEV_DOC.md) - 架构设计与核心算法
+- [API 指南](API_GUIDE.md) - 接口文档
+- [模块文档](docs/api-guides/README.md) - 各模块详细说明
 
-## 📄 许可
+### 技术栈
 
-本项目采用MIT开源协议，具体请查看LICENCE文件
+- **后端**：Python 3.11 + FastAPI + SQLModel + NumPy
+- **前端**：React + TypeScript + Vite + D3.js
+- **AI**：支持 OpenAI API 兼容的任何服务
+
+---
+
+## 🤝 参与贡献
+
+欢迎提交 PR！无论是修 bug、优化性能，还是添加新功能，我们都很期待你的参与。
+
+---
+
+## 📄 开源协议
+
+MIT License - 随便用，记得给个 Star ⭐
+
+---
+
+<p align="center">
+  <b>让生命自由演化，让 AI 讲述故事。</b>
+  <br><br>
+  如果觉得好玩，别忘了 ⭐ Star 这个项目！
+</p>
