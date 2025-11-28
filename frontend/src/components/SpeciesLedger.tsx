@@ -18,8 +18,7 @@ const roleConfig: Record<string, { color: string; icon: string; label: string }>
   carnivore: { color: "#f43f5e", icon: "🦁", label: "食肉" },
   omnivore: { color: "#f97316", icon: "🐻", label: "杂食" },
   mixotroph: { color: "#22d3ee", icon: "🔬", label: "混养" },
-  decomposer: { color: "#a78bfa", icon: "🍄", label: "分解" },
-  decomposer: { color: "#a855f7", icon: "🍄", label: "分解者" },
+  decomposer: { color: "#a78bfa", icon: "🍄", label: "分解者" },
   scavenger: { color: "#64748b", icon: "🦅", label: "食腐" },
   unknown: { color: "#3b82f6", icon: "🧬", label: "未知" }
 };
