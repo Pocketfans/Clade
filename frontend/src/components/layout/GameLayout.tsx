@@ -8,6 +8,7 @@ interface Props {
   drawer: ReactNode; // This is now the Right Sidebar
   modals?: ReactNode; // Fullscreen modals like genealogy
   alerts?: ReactNode; // Floating alerts
+  extras?: ReactNode; // Floating panels like hints
   outlinerCollapsed?: boolean; // 新增 prop
 }
 
@@ -19,6 +20,7 @@ export function GameLayout({
   drawer, 
   modals,
   alerts,
+  extras,
   outlinerCollapsed = false
 }: Props) {
   return (
@@ -53,6 +55,9 @@ export function GameLayout({
         {/* 底部透镜栏：视图切换与主要操作 */}
         <div className="hud-bottom">{lensBar}</div>
       </div>
+      
+      {/* 浮动面板层（如提示面板） */}
+      {extras && <div className="extras-layer">{extras}</div>}
       
       {/* 顶层模态窗 */}
       {modals && <div className="modal-layer">{modals}</div>}

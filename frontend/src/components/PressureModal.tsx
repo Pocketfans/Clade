@@ -24,6 +24,25 @@ const MUTUAL_EXCLUSIONS: Record<string, string[]> = {
   orogeny: ["subsidence"],
 };
 
+// 压力类型图标映射
+const PRESSURE_ICONS: Record<string, string> = {
+  glacial_period: "🧊",
+  greenhouse_earth: "🔥",
+  pluvial_period: "🌧️",
+  drought_period: "☀️",
+  resource_abundance: "🌿",
+  productivity_decline: "🍂",
+  oxygen_increase: "💨",
+  anoxic_event: "💀",
+  subsidence: "⬇️",
+  orogeny: "⛰️",
+  volcanic_eruption: "🌋",
+  meteor_impact: "☄️",
+  disease_outbreak: "🦠",
+  predator_surge: "🐺",
+  habitat_fragmentation: "🔀",
+};
+
 export function PressureModal({
   pressures,
   templates,
@@ -35,6 +54,13 @@ export function PressureModal({
   const [selectedKind, setSelectedKind] = useState(templates[0]?.kind ?? "");
   const [intensity, setIntensity] = useState(5);
   const [rounds, setRounds] = useState(1);
+
+  // 能量消耗计算：基础消耗(3) × 强度
+  const PRESSURE_BASE_COST = 3;
+  const currentCost = PRESSURE_BASE_COST * intensity;
+  const totalCost = useMemo(() => {
+    return pressures.reduce((sum, p) => sum + PRESSURE_BASE_COST * p.intensity, 0);
+  }, [pressures]);
 
   const selectedTemplate = useMemo(
     () => templates.find((tpl) => tpl.kind === selectedKind),
@@ -77,175 +103,421 @@ export function PressureModal({
      return pressures.some(p => conflicts.includes(p.kind));
   }
 
-  // Layout Styles
-  const modalStyle: React.CSSProperties = {
-    width: '90vw',
-    maxWidth: '1000px',
-    height: '80vh',
-    maxHeight: '800px',
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-    padding: 0, // Override default padding to manage internal layout
-  };
+  // 获取强度等级描述
+  function getIntensityLabel(val: number): string {
+    if (val <= 2) return "微弱";
+    if (val <= 4) return "温和";
+    if (val <= 6) return "显著";
+    if (val <= 8) return "剧烈";
+    return "灾难性";
+  }
 
-  const contentStyle: React.CSSProperties = {
-    display: 'flex',
-    flex: 1,
-    minHeight: 0, // Critical for nested scrolling
-    overflow: 'hidden',
-  };
-
-  const leftPanelStyle: React.CSSProperties = {
-    flex: '2',
-    display: 'flex',
-    flexDirection: 'column',
-    borderRight: '1px solid var(--border-primary)',
-    padding: 'var(--spacing-lg)',
-    overflowY: 'auto',
-    minWidth: '300px',
-  };
-
-  const rightPanelStyle: React.CSSProperties = {
-    flex: '1',
-    display: 'flex',
-    flexDirection: 'column',
-    backgroundColor: 'var(--bg-tertiary)', 
-    minWidth: '280px',
-  };
+  // 获取强度颜色
+  function getIntensityColor(val: number): string {
+    if (val <= 2) return "rgba(45, 212, 191, 0.8)";
+    if (val <= 4) return "rgba(34, 197, 94, 0.8)";
+    if (val <= 6) return "rgba(245, 158, 11, 0.8)";
+    if (val <= 8) return "rgba(249, 115, 22, 0.8)";
+    return "rgba(239, 68, 68, 0.8)";
+  }
 
   return (
     <div className="drawer-overlay" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div className="drawer-panel pressure-modal" style={modalStyle}>
+      <div 
+        className="drawer-panel pressure-modal" 
+        style={{
+          width: '95vw',
+          maxWidth: '1200px',
+          height: '88vh',
+          maxHeight: '900px',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          padding: 0,
+          borderRadius: '20px',
+        }}
+      >
         
         {/* Header */}
-        <header className="flex justify-between items-center px-lg py-md border-b border-primary-subtle flex-shrink-0">
+        <header className="pressure-modal-header flex-shrink-0">
           <div>
-            <h2 className="text-xl font-bold font-display">环境压力策划</h2>
-            <p className="text-xs text-secondary">配置自然灾害与环境变迁事件</p>
+            <h2 className="pressure-modal-title">环境压力策划</h2>
+            <p className="pressure-modal-subtitle">配置自然灾害与环境变迁事件</p>
           </div>
-          <button onClick={onClose} className="btn-icon" aria-label="关闭">
+          <button onClick={onClose} className="pressure-close-btn" aria-label="关闭">
             ×
           </button>
         </header>
         
-        {/* Main Content Area: Split View */}
-        <div style={contentStyle}>
+        {/* 三栏主内容区 */}
+        <div style={{
+          display: 'flex',
+          flex: 1,
+          minHeight: 0,
+          overflow: 'hidden',
+          position: 'relative',
+          zIndex: 1,
+        }}>
           
-          {/* Left: Template Selection & Configuration */}
-          <div className="custom-scrollbar" style={leftPanelStyle}>
+          {/* 左栏：模板选择 */}
+          <div 
+            className="custom-scrollbar"
+            style={{
+              width: '280px',
+              flexShrink: 0,
+              borderRight: '1px solid rgba(45, 212, 191, 0.1)',
+              overflowY: 'auto',
+              padding: '20px',
+              background: 'rgba(5, 10, 8, 0.5)',
+            }}
+          >
+            <div className="pressure-section-title" style={{ marginBottom: '12px' }}>
+              <span className="title-icon">📋</span>
+              事件模板
+            </div>
             
-            <section className="mb-lg">
-              <h3 className="text-sm font-bold text-tertiary uppercase tracking-wider mb-sm">1. 选择事件模板</h3>
-              <div style={{ 
-                display: 'grid', 
-                gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', 
-                gap: 'var(--spacing-sm)' 
-              }}>
-                {templates.map((item) => {
-                  const disabled = isKindDisabled(item.kind);
-                  const isSelected = selectedKind === item.kind;
-                  return (
-                    <button
-                      key={item.kind}
-                      disabled={disabled}
-                      className={`btn btn-sm ${isSelected ? "btn-primary" : "btn-secondary"}`}
-                      style={{ 
-                        opacity: disabled ? 0.5 : 1,
-                        textDecoration: disabled ? 'line-through' : 'none',
-                        height: 'auto',
-                        padding: 'var(--spacing-sm)',
-                        textAlign: 'center',
-                        justifyContent: 'center',
-                        whiteSpace: 'normal'
-                      }}
-                      onClick={() => setSelectedKind(item.kind)}
-                      title={disabled ? "与已选事件互斥" : item.label}
-                    >
+            <div style={{ 
+              display: 'flex', 
+              flexDirection: 'column',
+              gap: '8px' 
+            }}>
+              {templates.map((item) => {
+                const disabled = isKindDisabled(item.kind);
+                const isSelected = selectedKind === item.kind;
+                const icon = PRESSURE_ICONS[item.kind] || "⚡";
+                return (
+                  <button
+                    key={item.kind}
+                    disabled={disabled}
+                    onClick={() => !disabled && setSelectedKind(item.kind)}
+                    title={disabled ? "与已选事件互斥" : item.description}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '12px 14px',
+                      background: isSelected 
+                        ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(245, 158, 11, 0.08))'
+                        : 'linear-gradient(135deg, rgba(20, 30, 25, 0.6), rgba(15, 22, 18, 0.8))',
+                      border: `1px solid ${isSelected 
+                        ? 'rgba(245, 158, 11, 0.5)' 
+                        : 'rgba(45, 212, 191, 0.1)'}`,
+                      borderRadius: '10px',
+                      cursor: disabled ? 'not-allowed' : 'pointer',
+                      opacity: disabled ? 0.4 : 1,
+                      transition: 'all 0.2s',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <span style={{ 
+                      fontSize: '1.3rem',
+                      width: '32px',
+                      height: '32px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background: isSelected 
+                        ? 'rgba(245, 158, 11, 0.15)' 
+                        : 'rgba(45, 212, 191, 0.08)',
+                      borderRadius: '8px',
+                      flexShrink: 0,
+                    }}>
+                      {icon}
+                    </span>
+                    <span style={{ 
+                      fontSize: '0.85rem', 
+                      fontWeight: 600, 
+                      color: isSelected ? '#f59e0b' : '#f0f4e8',
+                      flex: 1,
+                    }}>
                       {item.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-
-            <section className="flex-1 flex flex-col">
-              <h3 className="text-sm font-bold text-tertiary uppercase tracking-wider mb-sm">2. 配置强度</h3>
-              <div className="p-md rounded-md flex-1 flex flex-col" style={{ background: 'var(--bg-glass)', border: '1px solid var(--border-primary)' }}>
-                <div className="mb-md">
-                   <h4 className="text-lg font-bold text-primary mb-xs">{selectedTemplate?.label || "未选择"}</h4>
-                   <p className="text-sm text-secondary leading-relaxed">
-                     {selectedTemplate?.description || "请在上方选择一个压力模板以开始配置。"}
-                   </p>
-                </div>
-                
-                {selectedTemplate && (
-                  <>
-                    <div className="mt-auto mb-lg">
-                      <div className="flex justify-between items-end mb-sm">
-                        <label className="font-medium">强度等级</label>
-                        <span className="text-xl font-display text-primary">{intensity}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min={1}
-                        max={10}
-                        value={intensity}
-                        onChange={(e) => setIntensity(parseInt(e.target.value, 10))}
-                        className="w-full accent-primary cursor-pointer"
-                        style={{ height: '6px' }}
-                      />
-                      <div className="flex justify-between text-xs text-tertiary mt-xs">
-                        <span>温和变化</span>
-                        <span>极度剧烈</span>
-                      </div>
-                    </div>
-
-                    <button 
-                      type="button" 
-                      className="btn btn-secondary w-full py-md font-bold" 
-                      onClick={addPressure}
-                      disabled={limitReached || !!conflictInfo}
-                    >
-                      {limitReached 
-                        ? "队列已满 (3/3)" 
-                        : conflictInfo 
-                          ? `无法添加 (与 ${conflictInfo} 冲突)` 
-                          : "添加至执行列表 →"}
-                    </button>
-                  </>
-                )}
-              </div>
-            </section>
+                    </span>
+                    {disabled && (
+                      <span style={{ 
+                        fontSize: '0.65rem', 
+                        color: 'rgba(239, 68, 68, 0.8)',
+                        background: 'rgba(239, 68, 68, 0.1)',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                      }}>
+                        冲突
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Right: Staging Area & Execution */}
-          <div style={rightPanelStyle}>
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-md">
-              <div className="flex justify-between items-center mb-md">
-                 <h3 className="text-sm font-bold text-tertiary uppercase tracking-wider">待执行列表</h3>
-                 <span className="text-xs px-xs py-xxs rounded" style={{ background: 'var(--bg-glass-hover)' }}>{pressures.length}/3</span>
+          {/* 中栏：配置区 */}
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '24px 28px',
+            minWidth: 0,
+            overflow: 'hidden',
+          }}>
+            {selectedTemplate ? (
+              <>
+                {/* 模板信息 */}
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'flex-start', 
+                  gap: '16px',
+                  marginBottom: '24px',
+                  padding: '20px',
+                  background: 'linear-gradient(135deg, rgba(20, 28, 24, 0.6), rgba(15, 22, 18, 0.8))',
+                  border: '1px solid rgba(45, 212, 191, 0.1)',
+                  borderRadius: '14px',
+                }}>
+                  <div style={{
+                    width: '56px',
+                    height: '56px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '2rem',
+                    background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(245, 158, 11, 0.08))',
+                    border: '1px solid rgba(245, 158, 11, 0.25)',
+                    borderRadius: '12px',
+                    flexShrink: 0,
+                  }}>
+                    {PRESSURE_ICONS[selectedKind] || "⚡"}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <h3 style={{ 
+                      margin: 0, 
+                      fontSize: '1.25rem', 
+                      fontWeight: 700, 
+                      color: '#f0f4e8',
+                      marginBottom: '8px'
+                    }}>
+                      {selectedTemplate.label}
+                    </h3>
+                    <p style={{ 
+                      margin: 0,
+                      fontSize: '0.9rem', 
+                      color: 'rgba(240, 244, 232, 0.6)', 
+                      lineHeight: 1.6,
+                    }}>
+                      {selectedTemplate.description}
+                    </p>
+                  </div>
+                </div>
+                
+                {/* 强度配置 */}
+                <div style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                  padding: '24px',
+                  background: 'linear-gradient(135deg, rgba(15, 22, 18, 0.5), rgba(10, 16, 12, 0.6))',
+                  border: '1px solid rgba(45, 212, 191, 0.08)',
+                  borderRadius: '14px',
+                }}>
+                  {/* 强度标题和数值 */}
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    alignItems: 'center',
+                    marginBottom: '20px'
+                  }}>
+                    <div>
+                      <div style={{ fontSize: '0.8rem', color: 'rgba(240, 244, 232, 0.5)', marginBottom: '4px' }}>
+                        强度等级
+                      </div>
+                      <div style={{ 
+                        fontSize: '1rem', 
+                        fontWeight: 600,
+                        color: getIntensityColor(intensity)
+                      }}>
+                        {getIntensityLabel(intensity)}
+                      </div>
+                    </div>
+                    
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                      <div className="pressure-intensity-value">{intensity}</div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: '0.7rem', color: 'rgba(240, 244, 232, 0.4)' }}>能量消耗</div>
+                        <div style={{ 
+                          fontSize: '1.2rem', 
+                          fontWeight: 700, 
+                          color: '#f59e0b',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}>
+                          <span>⚡</span> {currentCost}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* 滑块 */}
+                  <input
+                    type="range"
+                    min={1}
+                    max={10}
+                    value={intensity}
+                    onChange={(e) => setIntensity(parseInt(e.target.value, 10))}
+                    className="pressure-intensity-slider"
+                  />
+                  
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    fontSize: '0.75rem',
+                    color: 'rgba(240, 244, 232, 0.35)',
+                    marginTop: '10px'
+                  }}>
+                    <span>微弱变化</span>
+                    <span>灾难性影响</span>
+                  </div>
+                </div>
+
+                {/* 添加按钮 */}
+                <button 
+                  type="button" 
+                  onClick={addPressure}
+                  disabled={limitReached || !!conflictInfo}
+                  style={{
+                    marginTop: '20px',
+                    padding: '16px 24px',
+                    fontWeight: 700,
+                    fontSize: '1rem',
+                    borderRadius: '12px',
+                    background: limitReached || conflictInfo 
+                      ? 'rgba(60, 60, 60, 0.5)' 
+                      : 'linear-gradient(135deg, rgba(45, 212, 191, 0.2), rgba(34, 197, 94, 0.15))',
+                    border: limitReached || conflictInfo 
+                      ? '1px solid rgba(100, 100, 100, 0.3)'
+                      : '1px solid rgba(45, 212, 191, 0.4)',
+                    color: limitReached || conflictInfo 
+                      ? 'rgba(255, 255, 255, 0.3)'
+                      : '#2dd4bf',
+                    cursor: limitReached || conflictInfo ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.3s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                  }}
+                >
+                  {limitReached 
+                    ? "⚠️ 队列已满 (3/3)" 
+                    : conflictInfo 
+                      ? `⛔ 与「${conflictInfo}」冲突` 
+                      : "➕ 添加至执行列表"}
+                </button>
+              </>
+            ) : (
+              <div style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'rgba(240, 244, 232, 0.35)',
+                textAlign: 'center',
+              }}>
+                <div style={{ fontSize: '4rem', marginBottom: '16px', opacity: 0.3 }}>⚡</div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 500 }}>请选择一个压力模板</div>
+                <div style={{ fontSize: '0.9rem', marginTop: '8px', opacity: 0.7 }}>
+                  从左侧列表中选择以开始配置
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 右栏：执行队列 */}
+          <div 
+            className="pressure-right-panel"
+            style={{
+              width: '300px',
+              flexShrink: 0,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            {/* 队列列表 */}
+            <div 
+              className="flex-1 overflow-y-auto custom-scrollbar" 
+              style={{ padding: '20px' }}
+            >
+              <div className="pressure-section-title" style={{ marginBottom: '12px' }}>
+                <span className="title-icon">📦</span>
+                执行队列
+                <span style={{
+                  marginLeft: 'auto',
+                  padding: '3px 8px',
+                  background: pressures.length >= 3 
+                    ? 'rgba(239, 68, 68, 0.15)' 
+                    : 'rgba(45, 212, 191, 0.1)',
+                  border: `1px solid ${pressures.length >= 3 
+                    ? 'rgba(239, 68, 68, 0.3)' 
+                    : 'rgba(45, 212, 191, 0.2)'}`,
+                  borderRadius: '12px',
+                  fontSize: '0.7rem',
+                  fontWeight: 600,
+                  color: pressures.length >= 3 ? '#ef4444' : '#2dd4bf',
+                  letterSpacing: 0
+                }}>
+                  {pressures.length}/3
+                </span>
               </div>
 
               {pressures.length === 0 ? (
-                <div className="h-32 flex items-center justify-center text-muted text-sm text-center border border-dashed border-primary-subtle rounded">
-                  暂无待执行事件<br/>请从左侧添加
+                <div className="pressure-empty-state" style={{ padding: '30px 16px' }}>
+                  <div className="pressure-empty-state-icon" style={{ fontSize: '2.5rem' }}>📭</div>
+                  <div style={{ fontWeight: 500, marginBottom: '4px', fontSize: '0.9rem' }}>暂无事件</div>
+                  <div style={{ fontSize: '0.8rem' }}>从中间配置区添加</div>
                 </div>
               ) : (
-                <ul className="flex flex-col gap-sm">
+                <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {pressures.map((pressure, index) => (
                     <li 
                       key={`${pressure.kind}-${index}`}
-                      className="p-sm rounded border border-primary-subtle flex justify-between items-center fade-in"
-                      style={{ background: 'var(--bg-glass)' }}
+                      className="pressure-queue-item"
+                      style={{ padding: '12px 14px' }}
                     >
-                      <div>
-                        <div className="font-bold text-sm">{pressure.label}</div>
-                        <div className="text-xs text-tertiary">强度: {pressure.intensity}</div>
+                      <div style={{ 
+                        width: '32px', 
+                        height: '32px', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center',
+                        fontSize: '1.1rem',
+                        background: 'rgba(245, 158, 11, 0.1)',
+                        borderRadius: '8px',
+                        flexShrink: 0
+                      }}>
+                        {PRESSURE_ICONS[pressure.kind] || "⚡"}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#f0f4e8' }}>
+                          {pressure.label}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                          <span className="pressure-queue-badge" style={{ padding: '2px 8px', fontSize: '0.7rem' }}>
+                            <span style={{ 
+                              width: '6px', 
+                              height: '6px', 
+                              borderRadius: '50%', 
+                              background: getIntensityColor(pressure.intensity) 
+                            }} />
+                            Lv.{pressure.intensity}
+                          </span>
+                          <span style={{ fontSize: '0.7rem', color: '#f59e0b' }}>
+                            ⚡{PRESSURE_BASE_COST * pressure.intensity}
+                          </span>
+                        </div>
                       </div>
                       <button 
                         onClick={() => remove(index)}
-                        className="btn btn-icon btn-ghost text-muted hover:text-danger"
+                        className="pressure-remove-btn"
+                        style={{ width: '28px', height: '28px', fontSize: '1rem' }}
                         title="移除"
                       >
                         ×
@@ -256,52 +528,101 @@ export function PressureModal({
               )}
             </div>
 
-            {/* Action Footer */}
-            <div className="p-md border-t border-primary-subtle shadow-lg z-10" style={{ background: 'var(--bg-secondary)' }}>
-              <div className="mb-md">
-                <label className="flex flex-col gap-xs">
-                  <span className="text-xs font-medium text-secondary">持续时间 (回合)</span>
-                  <div className="flex items-center gap-sm">
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={rounds}
-                      onChange={(e) => setRounds(parseInt(e.target.value, 10))}
-                      className="field-input flex-1"
-                    />
-                    <span className="text-xs text-tertiary whitespace-nowrap">
-                      {rounds > 1 ? "加入自动队列" : "单回合立即生效"}
-                    </span>
-                  </div>
-                </label>
+            {/* 操作区 */}
+            <div className="pressure-action-footer" style={{ padding: '16px' }}>
+              {/* 持续时间 */}
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '10px',
+                marginBottom: '12px'
+              }}>
+                <span style={{ fontSize: '0.75rem', color: 'rgba(240, 244, 232, 0.5)' }}>
+                  持续
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={rounds}
+                  onChange={(e) => setRounds(parseInt(e.target.value, 10))}
+                  className="pressure-duration-input"
+                  style={{ width: '60px', padding: '8px 10px', fontSize: '0.9rem' }}
+                />
+                <span style={{ fontSize: '0.75rem', color: 'rgba(240, 244, 232, 0.5)', flex: 1 }}>
+                  回合
+                </span>
               </div>
 
-              <div className="flex flex-col gap-sm">
+              {/* 总能量消耗 */}
+              {pressures.length > 0 && (
+                <div className="pressure-cost-display" style={{ marginBottom: '12px', padding: '10px 12px' }}>
+                  <span className="pressure-cost-icon" style={{ fontSize: '1rem' }}>⚡</span>
+                  <span style={{ fontSize: '0.85rem', color: '#f59e0b', fontWeight: 600, position: 'relative', zIndex: 1 }}>
+                    总消耗: <strong>{totalCost}</strong>
+                  </span>
+                </div>
+              )}
+
+              {/* 按钮 */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <button 
                   onClick={() => onExecute(pressures)}
-                  className="btn btn-primary w-full py-sm"
+                  className="pressure-execute-btn"
                   disabled={pressures.length === 0}
+                  style={{ padding: '12px 16px', fontSize: '0.9rem' }}
                 >
-                  {pressures.length === 0 ? "请先配置事件" : "立即推演"}
+                  {pressures.length === 0 ? "请先添加事件" : `🚀 立即推演`}
                 </button>
                 
-                <div className="flex gap-sm">
+                <div style={{ display: 'flex', gap: '8px' }}>
                   <button
                     onClick={() => onQueue(pressures, rounds)}
                     disabled={pressures.length === 0}
-                    className="btn btn-secondary flex-1 text-sm"
-                    title="加入后台队列，按回合自动执行"
+                    style={{
+                      flex: 1,
+                      padding: '10px 12px',
+                      background: pressures.length === 0 
+                        ? 'rgba(60, 60, 60, 0.4)' 
+                        : 'rgba(45, 212, 191, 0.1)',
+                      border: `1px solid ${pressures.length === 0 
+                        ? 'rgba(100, 100, 100, 0.2)' 
+                        : 'rgba(45, 212, 191, 0.2)'}`,
+                      borderRadius: '8px',
+                      color: pressures.length === 0 
+                        ? 'rgba(255, 255, 255, 0.25)' 
+                        : 'rgba(45, 212, 191, 0.9)',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      cursor: pressures.length === 0 ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    title="加入后台队列"
                   >
-                    加入队列
+                    📋 加入队列
                   </button>
                   <button 
-                    className="btn btn-ghost text-muted px-sm" 
+                    style={{
+                      padding: '10px 14px',
+                      background: pressures.length === 0 
+                        ? 'rgba(60, 60, 60, 0.3)' 
+                        : 'rgba(239, 68, 68, 0.08)',
+                      border: `1px solid ${pressures.length === 0 
+                        ? 'rgba(100, 100, 100, 0.15)' 
+                        : 'rgba(239, 68, 68, 0.15)'}`,
+                      borderRadius: '8px',
+                      color: pressures.length === 0 
+                        ? 'rgba(255, 255, 255, 0.2)' 
+                        : 'rgba(239, 68, 68, 0.7)',
+                      fontSize: '0.8rem',
+                      cursor: pressures.length === 0 ? 'not-allowed' : 'pointer',
+                      transition: 'all 0.2s'
+                    }}
                     onClick={() => onChange([])}
                     disabled={pressures.length === 0}
                     title="清空列表"
                   >
-                    清空
+                    🗑️
                   </button>
                 </div>
               </div>

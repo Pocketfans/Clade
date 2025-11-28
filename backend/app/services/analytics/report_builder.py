@@ -25,6 +25,7 @@ class ReportBuilder:
         major_events: Sequence | None = None,
         map_changes: Sequence | None = None,
         migration_events: Sequence | None = None,
+        branching_events: Sequence | None = None,  # 【兼容】V2参数，V1忽略
         stream_callback: Callable[[str], Awaitable[None] | None] | None = None,
     ) -> str:
         """生成结构化、易读的回合叙事 (Async)。"""

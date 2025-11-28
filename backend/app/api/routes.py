@@ -67,10 +67,12 @@ from ..services.geo.map_evolution import MapEvolutionService
 from ..services.geo.map_manager import MapStateManager
 from ..services.species.migration import MigrationAdvisor
 from ..services.species.reproduction import ReproductionService
+from ..services.species.habitat_manager import habitat_manager
 from ..ai.model_router import ModelConfig, ModelRouter
 from ..services.species.niche import NicheAnalyzer
 from ..services.system.pressure import PressureEscalationService
 from ..services.analytics.report_builder import ReportBuilder
+from ..services.analytics.report_builder_v2 import ReportBuilderV2
 from ..services.species.speciation import SpeciationService
 from ..services.species.tiering import SpeciesTieringService, TieringConfig
 from ..services.system.save_manager import SaveManager
@@ -148,7 +150,15 @@ for capability, prompt in PROMPT_TEMPLATES.items():
     except KeyError:
         # Prompt for capabilities not yet registered; skip
         pass
-report_builder = ReportBuilder(model_router)
+# 【优化】使用并行化报告生成器V2，提升大规模物种场景下的性能
+# 可通过环境变量 USE_REPORT_V2=false 回退到旧版本
+_use_report_v2 = settings.use_report_v2 if hasattr(settings, 'use_report_v2') else True
+if _use_report_v2:
+    report_builder = ReportBuilderV2(model_router, batch_size=settings.focus_batch_size)
+    logger.info("[报告生成] 使用并行化报告生成器 V2")
+else:
+    report_builder = ReportBuilder(model_router)
+    logger.info("[报告生成] 使用传统报告生成器 V1")
 export_service = ExportService(settings.reports_dir, settings.exports_dir)
 niche_analyzer = NicheAnalyzer(embedding_service, settings.global_carrying_capacity)
 speciation_service = SpeciationService(model_router)
@@ -176,7 +186,9 @@ pressure_escalation = PressureEscalationService(
 )
 map_evolution = MapEvolutionService(settings.map_width, settings.map_height)
 migration_advisor = MigrationAdvisor(pressure_migration_threshold=0.45, min_population=500)  # 使用默认参数
-map_manager = MapStateManager(settings.map_width, settings.map_height)
+# primordial_mode=True 表示28亿年前的原始地质状态，地表无植被覆盖
+# 植被会随着植物物种的繁衍而动态更新
+map_manager = MapStateManager(settings.map_width, settings.map_height, primordial_mode=True)
 reproduction_service = ReproductionService(
     global_carrying_capacity=settings.global_carrying_capacity,  # 从配置读取
     turn_years=500_000,  # 每回合50万年
@@ -436,7 +448,7 @@ def get_backend_session_id() -> str:
 def initialize_environment() -> None:
     """启动时的环境初始化：确保数据库结构完整，恢复回合计数器"""
     try:
-        print("[环境初始化] 开始检查数据库结构...")
+        logger.info("[环境初始化] 开始检查数据库结构...")
         # 确保数据库列完整
         environment_repository.ensure_map_state_columns()
         environment_repository.ensure_tile_columns()
@@ -444,10 +456,10 @@ def initialize_environment() -> None:
         # 检查地图是否存在（但不自动生成）
         tiles = environment_repository.list_tiles(limit=10)
         if len(tiles) > 0:
-            print(f"[环境初始化] 发现现有地图，地块数量: {len(tiles)}")
-            print(f"[环境初始化] 示例地块: x={tiles[0].x}, y={tiles[0].y}, biome={tiles[0].biome}")
+            logger.info(f"[环境初始化] 发现现有地图，地块数量: {len(tiles)}")
+            logger.debug(f"[环境初始化] 示例地块: x={tiles[0].x}, y={tiles[0].y}, biome={tiles[0].biome}")
         else:
-            print(f"[环境初始化] 未发现地图数据，等待创建存档时生成")
+            logger.info(f"[环境初始化] 未发现地图数据，等待创建存档时生成")
         
         # 【关键修复】恢复回合计数器：优先从 MapState，其次从历史记录
         try:
@@ -455,23 +467,23 @@ def initialize_environment() -> None:
             map_state = environment_repository.get_state()
             if map_state and map_state.turn_index > 0:
                 simulation_engine.turn_counter = map_state.turn_index + 1
-                print(f"[环境初始化] 从 MapState 恢复回合计数器: {simulation_engine.turn_counter}")
+                logger.info(f"[环境初始化] 从 MapState 恢复回合计数器: {simulation_engine.turn_counter}")
             else:
                 # 方法2：从历史记录恢复
                 logs = history_repository.list_turns(limit=1)
                 if logs:
                     last_turn = logs[0].turn_index
                     simulation_engine.turn_counter = last_turn + 1  # 下一个回合
-                    print(f"[环境初始化] 从历史记录恢复回合计数器: {simulation_engine.turn_counter}")
+                    logger.info(f"[环境初始化] 从历史记录恢复回合计数器: {simulation_engine.turn_counter}")
                 else:
-                    print(f"[环境初始化] 未发现历史记录，回合计数器保持为 0")
+                    logger.info(f"[环境初始化] 未发现历史记录，回合计数器保持为 0")
         except Exception as e:
-            print(f"[环境初始化] 恢复回合计数器失败: {e}")
+            logger.warning(f"[环境初始化] 恢复回合计数器失败: {e}")
             
     except Exception as e:
-        print(f"[环境初始化错误] {str(e)}")
+        logger.error(f"[环境初始化错误] {str(e)}")
         import traceback
-        print(traceback.format_exc())
+        logger.error(traceback.format_exc())
 
 
 def push_simulation_event(event_type: str, message: str, category: str = "其他", force: bool = False, **extra):
@@ -499,9 +511,9 @@ def push_simulation_event(event_type: str, message: str, category: str = "其他
             simulation_events.put(event)
             # 对于关键事件，打印日志确认
             if event_type in ("complete", "error", "turn_complete"):
-                print(f"[SSE事件] 已推送 {event_type}: {message}")
+                logger.debug(f"[SSE事件] 已推送 {event_type}: {message}")
         except Exception as e:
-            print(f"[事件推送错误] {str(e)}")
+            logger.warning(f"[事件推送错误] {str(e)}")
 
 
 @router.get("/events/stream")
@@ -532,7 +544,7 @@ async def stream_simulation_events():
                         idle_count = 0
                     await asyncio.sleep(0.1)
             except Exception as e:
-                print(f"[SSE错误] {str(e)}")
+                logger.warning(f"[SSE错误] {str(e)}")
                 break
     
     return StreamingResponse(
@@ -555,7 +567,7 @@ def _perform_autosave(turn_index: int) -> bool:
     global current_save_name, autosave_counter
     
     if not current_save_name:
-        print("[自动保存] 跳过: 没有当前存档")
+        logger.debug("[自动保存] 跳过: 没有当前存档")
         return False
     
     # 读取配置
@@ -568,7 +580,7 @@ def _perform_autosave(turn_index: int) -> bool:
     
     # 检查是否达到保存间隔
     if autosave_counter < config.autosave_interval:
-        print(f"[自动保存] 跳过: 计数 {autosave_counter}/{config.autosave_interval}")
+        logger.debug(f"[自动保存] 跳过: 计数 {autosave_counter}/{config.autosave_interval}")
         return False
     
     # 重置计数器
@@ -580,7 +592,7 @@ def _perform_autosave(turn_index: int) -> bool:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         autosave_name = f"autosave_{current_save_name}_{timestamp}"
         
-        print(f"[自动保存] 开始保存: {autosave_name}, 回合={turn_index}")
+        logger.info(f"[自动保存] 开始保存: {autosave_name}, 回合={turn_index}")
         push_simulation_event("autosave", f"💾 自动保存中...", "系统")
         
         # 创建自动保存
@@ -590,11 +602,11 @@ def _perform_autosave(turn_index: int) -> bool:
         # 清理旧的自动保存（保留最新的N个）
         _cleanup_old_autosaves(current_save_name, config.autosave_max_slots)
         
-        print(f"[自动保存] 完成: {autosave_name}")
+        logger.info(f"[自动保存] 完成: {autosave_name}")
         push_simulation_event("autosave_complete", f"✅ 自动保存完成 (T{turn_index})", "系统")
         return True
     except Exception as e:
-        print(f"[自动保存] 失败: {str(e)}")
+        logger.error(f"[自动保存] 失败: {str(e)}")
         push_simulation_event("autosave_error", f"⚠️ 自动保存失败: {str(e)}", "错误")
         return False
 
@@ -617,10 +629,10 @@ def _cleanup_old_autosaves(base_save_name: str, max_slots: int) -> None:
         for old_save in autosaves[max_slots:]:
             save_name = old_save.get("name")
             if save_name:
-                print(f"[自动保存] 清理旧存档: {save_name}")
+                logger.info(f"[自动保存] 清理旧存档: {save_name}")
                 save_manager.delete_save(save_name)
     except Exception as e:
-        print(f"[自动保存] 清理旧存档失败: {str(e)}")
+        logger.warning(f"[自动保存] 清理旧存档失败: {str(e)}")
 
 
 @router.post("/turns/run", response_model=list[TurnReport])
@@ -632,7 +644,7 @@ async def run_turns(command: TurnCommand) -> list[TurnReport]:
     start_time = time_module.time()
     
     try:
-        print(f"[推演开始] 回合数: {command.rounds}, 压力数: {len(command.pressures)}")
+        logger.info(f"[推演开始] 回合数: {command.rounds}, 压力数: {len(command.pressures)}")
         
         # 清空事件队列
         while not simulation_events.empty():
@@ -649,7 +661,37 @@ async def run_turns(command: TurnCommand) -> list[TurnReport]:
             pressures = pressure_queue.pop(0)
             action_queue["queued_rounds"] = max(action_queue["queued_rounds"] - 1, 0)
         command.pressures = pressures
-        print(f"[推演执行] 应用压力: {[p.kind for p in pressures]}")
+        logger.info(f"[推演执行] 应用压力: {[p.kind for p in pressures]}")
+        
+        # 【能量系统】回合开始前恢复能量
+        current_turn = simulation_engine.turn_counter
+        regen = energy_service.regenerate(current_turn)
+        if regen > 0:
+            push_simulation_event("energy", f"⚡ 神力恢复 +{regen}", "系统")
+        
+        # 【能量系统】检查压力消耗
+        if pressures and energy_service.enabled:
+            pressure_dicts = [{"kind": p.kind, "intensity": p.intensity} for p in pressures]
+            total_cost = energy_service.get_pressure_cost(pressure_dicts)
+            current_energy = energy_service.get_state().current
+            
+            if current_energy < total_cost:
+                action_queue["running"] = False
+                simulation_running = False
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"能量不足！施加压力需要 {total_cost} 能量，当前只有 {current_energy}"
+                )
+            
+            # 消耗能量
+            success, msg = energy_service.spend(
+                "pressure", 
+                current_turn,
+                details=f"压力: {', '.join([p.kind for p in pressures])}",
+                intensity=sum(p.intensity for p in pressures) / len(pressures) if pressures else 0
+            )
+            if success:
+                push_simulation_event("energy", f"⚡ 消耗 {total_cost} 能量（环境压力）", "系统")
         
         push_simulation_event("pressure", f"应用压力: {', '.join([p.kind for p in pressures]) if pressures else '自然演化'}", "环境")
         
@@ -659,9 +701,28 @@ async def run_turns(command: TurnCommand) -> list[TurnReport]:
         reports = await simulation_engine.run_turns_async(command)
         
         elapsed = time_module.time() - start_time
-        print(f"[推演完成] 生成了 {len(reports)} 个报告, 耗时 {elapsed:.1f}秒")
+        logger.info(f"[推演完成] 生成了 {len(reports)} 个报告, 耗时 {elapsed:.1f}秒")
         
-        # 【关键】在设置 simulation_running=False 之前发送完成事件
+        # 【诊断日志】记录响应数据量，帮助排查卡顿问题
+        if reports:
+            total_species = sum(len(r.species) for r in reports)
+            logger.info(f"[响应准备] 返回 {len(reports)} 个报告, 共 {total_species} 个物种快照")
+        
+        # 【优化】先返回响应，再进行自动保存（避免阻塞前端）
+        # 使用 asyncio.create_task 将自动保存放到后台执行
+        latest_turn = reports[-1].turn_index if reports else 0
+        
+        async def background_tasks():
+            """后台任务：自动保存等不阻塞响应的操作"""
+            try:
+                _perform_autosave(latest_turn)
+            except Exception as e:
+                logger.warning(f"[后台任务] 自动保存失败: {e}")
+        
+        # 启动后台任务（不等待完成）
+        asyncio.create_task(background_tasks())
+        
+        # 【关键】在返回响应前发送完成事件
         push_simulation_event("complete", f"推演完成！生成了 {len(reports)} 个报告", "系统")
         # 同时发送 turn_complete 事件（前端同时检查两种事件类型）
         push_simulation_event("turn_complete", f"回合推演完成", "系统")
@@ -670,25 +731,14 @@ async def run_turns(command: TurnCommand) -> list[TurnReport]:
         action_queue["queued_rounds"] = max(action_queue["queued_rounds"] - command.rounds, 0)
         simulation_running = False
         
-        # 【自动保存】每回合结束后检查是否需要自动保存
-        if reports:
-            latest_turn = reports[-1].turn_index
-            _perform_autosave(latest_turn)
-        
-        # 【诊断日志】记录响应数据量，帮助排查卡顿问题
-        if reports:
-            total_species = sum(len(r.species) for r in reports)
-            print(f"[响应准备] 返回 {len(reports)} 个报告, 共 {total_species} 个物种快照")
-        
-        # 【调试】确认即将返回响应
-        print(f"[HTTP响应] 正在序列化并返回响应...")
+        logger.info(f"[HTTP响应] 正在返回响应...")
         
         return reports
         
     except Exception as e:
         elapsed = time_module.time() - start_time
-        print(f"[推演错误] {str(e)}, 耗时 {elapsed:.1f}秒")
-        print(traceback.format_exc())
+        logger.error(f"[推演错误] {str(e)}, 耗时 {elapsed:.1f}秒")
+        logger.error(traceback.format_exc())
         
         # 【关键修复】先发送 error 事件，再设置 simulation_running=False
         # 使用 force=True 确保事件一定能发送
@@ -873,7 +923,7 @@ def get_map_overview(
     species_code: str | None = None,
 ) -> MapOverview:
     try:
-        print(f"[地图查询] 请求地块数: {limit_tiles}, 栖息地数: {limit_habitats}, 视图模式: {view_mode}, 物种: {species_code}")
+        logger.debug(f"[地图查询] 请求地块数: {limit_tiles}, 栖息地数: {limit_habitats}, 视图模式: {view_mode}, 物种: {species_code}")
         
         species_id = None
         if species_code:
@@ -887,12 +937,12 @@ def get_map_overview(
             view_mode=view_mode,  # type: ignore
             species_id=species_id,
         )
-        print(f"[地图查询] 返回地块数: {len(overview.tiles)}, 栖息地数: {len(overview.habitats)}")
+        logger.debug(f"[地图查询] 返回地块数: {len(overview.tiles)}, 栖息地数: {len(overview.habitats)}")
         return overview
     except Exception as e:
-        print(f"[地图查询错误] {str(e)}")
+        logger.error(f"[地图查询错误] {str(e)}")
         import traceback
-        print(traceback.format_exc())
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"地图查询失败: {str(e)}")
 
 
@@ -997,10 +1047,10 @@ def list_saves() -> list[dict]:
     """列出所有存档"""
     try:
         saves = save_manager.list_saves()
-        print(f"[存档API] 查询到 {len(saves)} 个存档")
+        logger.debug(f"[存档API] 查询到 {len(saves)} 个存档")
         return saves
     except Exception as e:
-        print(f"[存档API错误] {str(e)}")
+        logger.error(f"[存档API错误] {str(e)}")
         raise HTTPException(status_code=500, detail=f"列出存档失败: {str(e)}")
 
 
@@ -1009,23 +1059,24 @@ async def create_save(request: CreateSaveRequest) -> dict:
     """创建新存档"""
     global current_save_name, autosave_counter
     try:
-        print(f"[存档API] 创建存档: {request.save_name}, 剧本: {request.scenario}")
+        logger.info(f"[存档API] 创建存档: {request.save_name}, 剧本: {request.scenario}")
         
         # 【关键修复】重置回合计数器
         simulation_engine.turn_counter = 0
-        print(f"[存档API] 回合计数器已重置为 0")
+        logger.debug(f"[存档API] 回合计数器已重置为 0")
         
         # 设置当前存档名称（用于自动保存）
         current_save_name = request.save_name
         autosave_counter = 0
-        print(f"[存档API] 当前存档名称设置为: {current_save_name}")
+        logger.debug(f"[存档API] 当前存档名称设置为: {current_save_name}")
         
         # 1. 清空当前数据库（确保新存档从干净状态开始）
-        print(f"[存档API] 清空当前数据...")
+        logger.info(f"[存档API] 清空当前数据...")
         from ..core.database import session_scope
         from ..models.species import Species
         from ..models.environment import MapTile, MapState, HabitatPopulation
         from ..models.history import TurnLog
+        from ..models.genus import Genus
         
         with session_scope() as session:
             # 删除所有物种
@@ -1041,16 +1092,38 @@ async def create_save(request: CreateSaveRequest) -> dict:
             # 删除历史记录
             for log in session.exec(select(TurnLog)).all():
                 session.delete(log)
+            # 删除所有属数据
+            for genus in session.exec(select(Genus)).all():
+                session.delete(genus)
         
-        print(f"[存档API] 数据清空完成")
+        logger.info(f"[存档API] 数据清空完成")
+        
+        # 1.5 清除服务内部缓存和全局状态（确保数据隔离）
+        logger.debug(f"[存档API] 清除服务缓存和全局状态...")
+        migration_advisor.clear_all_caches()
+        habitat_manager.clear_all_caches()
+        pressure_queue.clear()
+        watchlist.clear()
+        
+        # 【新增】清空AI压力响应服务的缓存（连续危险回合数等）
+        if simulation_engine.ai_pressure_service:
+            simulation_engine.ai_pressure_service.clear_all_caches()
+        
+        # 【新增】清空分化服务的缓存（延迟请求等）
+        simulation_engine.speciation.clear_all_caches()
+        
+        # 【新增】尽早清空 embedding 缓存（在初始化物种之前）
+        embedding_integration.clear_all_caches()
+        
+        logger.debug(f"[存档API] 服务缓存和全局状态已清除")
         
         # 2. 初始化地图
-        print(f"[存档API] 初始化地图，种子: {request.map_seed if request.map_seed else '随机'}")
+        logger.info(f"[存档API] 初始化地图，种子: {request.map_seed if request.map_seed else '随机'}")
         map_manager.ensure_initialized(map_seed=request.map_seed)
         
         # 3. 初始化物种
         if request.scenario == "空白剧本" and request.species_prompts:
-            print(f"[存档API] 空白剧本，生成 {len(request.species_prompts)} 个物种")
+            logger.info(f"[存档API] 空白剧本，生成 {len(request.species_prompts)} 个物种")
             # 动态分配 lineage_code，避免冲突
             base_codes = ["A", "B", "C", "D", "E", "F", "G", "H"]
             existing_species = species_repository.list_species()
@@ -1067,24 +1140,24 @@ async def create_save(request: CreateSaveRequest) -> dict:
                 lineage_code = f"{available_codes[i]}1"
                 species = species_generator.generate_from_prompt(prompt, lineage_code)
                 species_repository.upsert(species)
-                print(f"[存档API] 生成物种: {species.lineage_code} - {species.common_name}")
+                logger.debug(f"[存档API] 生成物种: {species.lineage_code} - {species.common_name}")
         else:
             # 原初大陆：使用默认物种
-            print(f"[存档API] 原初大陆，加载默认物种...")
+            logger.info(f"[存档API] 原初大陆，加载默认物种...")
             from ..core.seed import seed_defaults
             seed_defaults()
         
         # 3.5 初始化物种栖息地分布（关键！）
-        print(f"[存档API] 初始化物种栖息地分布...")
+        logger.info(f"[存档API] 初始化物种栖息地分布...")
         all_species = species_repository.list_species()
         if all_species:
             map_manager.snapshot_habitats(all_species, turn_index=0, force_recalculate=True)
-            print(f"[存档API] 栖息地分布初始化完成，{len(all_species)} 个物种已分布到地图")
+            logger.info(f"[存档API] 栖息地分布初始化完成，{len(all_species)} 个物种已分布到地图")
         else:
-            print(f"[存档API警告] 没有物种需要分布")
+            logger.warning(f"[存档API警告] 没有物种需要分布")
         
         # 3.6 创建初始人口快照（修复bug：系谱树需要这个数据）
-        print(f"[存档API] 创建初始人口快照...")
+        logger.info(f"[存档API] 创建初始人口快照...")
         from ..models.species import PopulationSnapshot
         MAX_SAFE_POPULATION = 9_007_199_254_740_991  # JavaScript安全整数上限
         if all_species:
@@ -1106,10 +1179,10 @@ async def create_save(request: CreateSaveRequest) -> dict:
                     ))
             if snapshots:
                 species_repository.add_population_snapshots(snapshots)
-                print(f"[存档API] 初始人口快照创建完成，{len(snapshots)} 条记录")
+                logger.debug(f"[存档API] 初始人口快照创建完成，{len(snapshots)} 条记录")
         
         # 3.7 创建初始回合报告（修复bug：前端需要显示物种数量）
-        print(f"[存档API] 创建初始回合报告...")
+        logger.info(f"[存档API] 创建初始回合报告...")
         if all_species:
             from ..schemas.responses import SpeciesSnapshot
             initial_species = []
@@ -1178,25 +1251,33 @@ async def create_save(request: CreateSaveRequest) -> dict:
                     record_data=initial_report.model_dump(mode="json")
                 )
             )
-            print(f"[存档API] 初始回合报告创建完成")
+            logger.debug(f"[存档API] 初始回合报告创建完成")
         
         # 4. 创建存档元数据
         metadata = save_manager.create_save(request.save_name, request.scenario)
         
+        # 4.5 【重要】切换到存档专属的向量索引目录
+        save_dir = save_manager.get_save_dir(request.save_name)
+        if save_dir:
+            context_stats = embedding_integration.switch_to_save_context(save_dir)
+            logger.debug(f"[存档API] 已切换到存档向量目录: {context_stats}")
+        else:
+            logger.warning(f"[存档API警告] 未找到存档目录，使用全局向量索引")
+        
         # 5. 立即保存游戏状态到存档文件
-        print(f"[存档API] 保存初始游戏状态到存档文件...")
+        logger.info(f"[存档API] 保存初始游戏状态到存档文件...")
         save_manager.save_game(request.save_name, turn_index=0)
         
         # 6. 更新物种数量
         species_count = len(species_repository.list_species())
         metadata["species_count"] = species_count
-        print(f"[存档API] 存档创建完成，物种数: {species_count}")
+        logger.info(f"[存档API] 存档创建完成，物种数: {species_count}")
         
         return metadata
     except Exception as e:
-        print(f"[存档API错误] {str(e)}")
+        logger.error(f"[存档API错误] {str(e)}")
         import traceback
-        print(traceback.format_exc())
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"创建存档失败: {str(e)}")
 
 
@@ -1217,7 +1298,7 @@ async def save_game(request: SaveGameRequest) -> dict:
             taxonomy_data = integration_data.get("taxonomy")
             event_embeddings = integration_data.get("narrative")
         except Exception as e:
-            print(f"[存档API] 获取Embedding集成数据失败（非致命）: {e}")
+            logger.warning(f"[存档API] 获取Embedding集成数据失败（非致命）: {e}")
         
         save_dir = save_manager.save_game(
             request.save_name, 
@@ -1227,7 +1308,7 @@ async def save_game(request: SaveGameRequest) -> dict:
         )
         return {"success": True, "save_dir": str(save_dir), "turn_index": turn_index}
     except Exception as e:
-        print(f"[存档API错误] {str(e)}")
+        logger.error(f"[存档API错误] {str(e)}")
         raise HTTPException(status_code=500, detail=f"保存游戏失败: {str(e)}")
 
 
@@ -1236,12 +1317,38 @@ async def load_game(request: LoadGameRequest) -> dict:
     """加载游戏存档"""
     global current_save_name, autosave_counter
     try:
+        # 清除服务内部缓存和全局状态（确保数据隔离）
+        logger.info(f"[存档加载] 清除服务缓存和全局状态...")
+        migration_advisor.clear_all_caches()
+        habitat_manager.clear_all_caches()
+        pressure_queue.clear()
+        watchlist.clear()
+        
+        # 【新增】清空AI压力响应服务的缓存（连续危险回合数等）
+        if simulation_engine.ai_pressure_service:
+            simulation_engine.ai_pressure_service.clear_all_caches()
+        
+        # 【新增】清空分化服务的缓存（延迟请求等）
+        simulation_engine.speciation.clear_all_caches()
+        
+        logger.debug(f"[存档加载] 服务缓存和全局状态已清除")
+        
+        # 【重要】切换到存档专属的向量索引目录（同时清空所有缓存）
+        save_dir = save_manager.get_save_dir(request.save_name)
+        if save_dir:
+            context_stats = embedding_integration.switch_to_save_context(save_dir)
+            logger.debug(f"[存档加载] 已切换到存档向量目录: {context_stats}")
+        else:
+            # 存档目录不存在时仍需清空缓存
+            embedding_integration.clear_all_caches()
+            logger.warning(f"[存档加载警告] 未找到存档目录，使用全局向量索引")
+        
         save_data = save_manager.load_game(request.save_name)
         turn_index = save_data.get("turn_index", 0)
         
         # 【关键修复】更新 simulation_engine 的回合计数器
         simulation_engine.turn_counter = turn_index
-        print(f"[存档加载] 已恢复回合计数器: {turn_index}")
+        logger.info(f"[存档加载] 已恢复回合计数器: {turn_index}")
         
         # 【新增】恢复 Embedding 集成数据
         try:
@@ -1252,9 +1359,9 @@ async def load_game(request: LoadGameRequest) -> dict:
                 integration_restore_data["narrative"] = save_data["event_embeddings"]
             if integration_restore_data:
                 embedding_integration.import_from_save(integration_restore_data)
-                print(f"[存档加载] Embedding集成数据已恢复")
+                logger.debug(f"[存档加载] Embedding集成数据已恢复")
         except Exception as e:
-            print(f"[存档加载] 恢复Embedding集成数据失败（非致命）: {e}")
+            logger.warning(f"[存档加载] 恢复Embedding集成数据失败（非致命）: {e}")
         
         # 设置当前存档名称（用于自动保存）
         # 如果加载的是自动保存，提取原始存档名
@@ -1269,13 +1376,13 @@ async def load_game(request: LoadGameRequest) -> dict:
         else:
             current_save_name = request.save_name
         autosave_counter = 0
-        print(f"[存档加载] 当前存档名称设置为: {current_save_name}")
+        logger.info(f"[存档加载] 当前存档名称设置为: {current_save_name}")
         
         return {"success": True, "turn_index": turn_index}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        print(f"[存档API错误] {str(e)}")
+        logger.error(f"[存档API错误] {str(e)}")
         raise HTTPException(status_code=500, detail=f"加载游戏失败: {str(e)}")
 
 
@@ -1288,16 +1395,42 @@ def delete_save(save_name: str) -> dict:
             raise HTTPException(status_code=404, detail="存档不存在")
         return {"success": True}
     except Exception as e:
-        print(f"[存档API错误] {str(e)}")
+        logger.error(f"[存档API错误] {str(e)}")
         raise HTTPException(status_code=500, detail=f"删除存档失败: {str(e)}")
 
 
 @router.post("/species/generate")
 def generate_species(request: GenerateSpeciesRequest) -> dict:
-    """使用AI生成物种"""
+    """使用AI生成物种
+    
+    消耗能量点。
+    """
+    current_turn = simulation_engine.turn_counter
+    
+    # 【能量系统】检查能量
+    can_afford, cost = energy_service.can_afford("create_species")
+    if not can_afford:
+        raise HTTPException(
+            status_code=400,
+            detail=f"能量不足！创造物种需要 {cost} 能量，当前只有 {energy_service.get_state().current}"
+        )
+    
     try:
+        # 先消耗能量
+        success, msg = energy_service.spend(
+            "create_species",
+            current_turn,
+            details=f"创造物种: {request.prompt[:30]}..."
+        )
+        if not success:
+            raise HTTPException(status_code=400, detail=msg)
+        
         species = species_generator.generate_from_prompt(request.prompt, request.lineage_code)
         species_repository.upsert(species)
+        
+        # 记录成就
+        achievement_service.record_species_creation(current_turn)
+        
         return {
             "success": True,
             "species": {
@@ -1305,10 +1438,16 @@ def generate_species(request: GenerateSpeciesRequest) -> dict:
                 "latin_name": species.latin_name,
                 "common_name": species.common_name,
                 "description": species.description,
-            }
+            },
+            "energy_spent": cost,
+            "energy_remaining": energy_service.get_state().current,
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"[物种生成API错误] {str(e)}")
+        # 生成失败，退还能量
+        energy_service.add_energy(cost, "创造物种失败退还")
+        logger.error(f"[物种生成API错误] {str(e)}")
         raise HTTPException(status_code=500, detail=f"生成物种失败: {str(e)}")
 
 
@@ -1338,8 +1477,8 @@ def test_api_connection(request: dict) -> dict:
                 "Content-Type": "application/json"
             }
             
-            print(f"[测试 Embedding] URL: {url}")
-            print(f"[测试 Embedding] Model: {model}")
+            logger.debug(f"[测试 Embedding] URL: {url}")
+            logger.debug(f"[测试 Embedding] Model: {model}")
             
             response = httpx.post(url, json=body, headers=headers, timeout=20)
             response.raise_for_status()
@@ -1381,7 +1520,7 @@ def test_api_connection(request: dict) -> dict:
                 # 例如：https://api.deepseek.com -> https://api.deepseek.com/v1/chat/completions
                 url = f"{base_url}/v1/chat/completions"
 
-            print(f"[测试 Chat] URL: {url} | Model: {model}")
+            logger.debug(f"[测试 Chat] URL: {url} | Model: {model}")
 
             body = {
                 "model": model or "Pro/deepseek-ai/DeepSeek-V3.2-Exp",
@@ -1458,7 +1597,7 @@ def compare_niche(request: NicheCompareRequest) -> NicheCompareResult:
     if not species_b:
         raise HTTPException(status_code=404, detail=f"物种 {request.species_b} 不存在")
     
-    print(f"[生态位对比] 对比物种: {species_a.common_name} vs {species_b.common_name}")
+    logger.debug(f"[生态位对比] 对比物种: {species_a.common_name} vs {species_b.common_name}")
     
     # 获取embedding相似度（用于相似度计算）
     embedding_similarity = None
@@ -1476,9 +1615,9 @@ def compare_niche(request: NicheCompareRequest) -> NicheCompareResult:
         if norm_a > 0 and norm_b > 0:
             embedding_similarity = float(np.dot(vec_a, vec_b) / (norm_a * norm_b))
             embedding_similarity = max(0.0, min(1.0, embedding_similarity))
-            print(f"[生态位对比] 使用embedding向量, 相似度={embedding_similarity:.3f}")
+            logger.debug(f"[生态位对比] 使用embedding向量, 相似度={embedding_similarity:.3f}")
     except (RuntimeError, Exception) as e:
-        print(f"[生态位对比] Embedding服务不可用，使用属性计算: {str(e)}")
+        logger.debug(f"[生态位对比] Embedding服务不可用，使用属性计算: {str(e)}")
     
     # 使用新的向量化生态位计算模块
     niche_result = compute_niche_metrics(
@@ -1490,8 +1629,8 @@ def compare_niche(request: NicheCompareRequest) -> NicheCompareResult:
     overlap = niche_result.overlap
     competition_intensity = niche_result.competition
     
-    print(f"[生态位对比] 结果: 相似度={similarity:.1%}, 重叠度={overlap:.1%}, 竞争强度={competition_intensity:.1%}")
-    print(f"[生态位对比] 重叠度分解: {niche_result.details.get('overlap_breakdown', {})}")
+    logger.debug(f"[生态位对比] 结果: 相似度={similarity:.1%}, 重叠度={overlap:.1%}, 竞争强度={competition_intensity:.1%}")
+    logger.debug(f"[生态位对比] 重叠度分解: {niche_result.details.get('overlap_breakdown', {})}")
     
     # 保留原有变量用于后续逻辑
     pop_a = float(species_a.morphology_stats.get("population", 0) or 0)
@@ -1913,6 +2052,8 @@ def protect_species(request: ProtectSpeciesRequest) -> InterventionResponse:
     保护效果：
     - 死亡率降低50%
     - 持续指定回合数
+    
+    消耗能量点。
     """
     species = species_repository.get_by_lineage(request.lineage_code)
     if not species:
@@ -1921,6 +2062,18 @@ def protect_species(request: ProtectSpeciesRequest) -> InterventionResponse:
     if species.status != "alive":
         raise HTTPException(status_code=400, detail=f"物种 {request.lineage_code} 已灭绝，无法保护")
     
+    # 【能量系统】检查能量
+    current_turn = simulation_engine.turn_counter
+    can_afford, cost = energy_service.can_afford("protect")
+    if not can_afford:
+        raise HTTPException(
+            status_code=400,
+            detail=f"能量不足！保护物种需要 {cost} 能量，当前只有 {energy_service.get_state().current}"
+        )
+    
+    # 消耗能量
+    energy_service.spend("protect", current_turn, details=f"保护 {species.common_name}")
+    
     # 设置保护状态
     species.is_protected = True
     species.protection_turns = request.turns
@@ -1928,7 +2081,7 @@ def protect_species(request: ProtectSpeciesRequest) -> InterventionResponse:
     
     return InterventionResponse(
         success=True,
-        message=f"已对 {species.common_name} ({request.lineage_code}) 实施保护，持续 {request.turns} 回合",
+        message=f"已对 {species.common_name} ({request.lineage_code}) 实施保护，持续 {request.turns} 回合（消耗 {cost} 能量）",
         species_code=request.lineage_code,
         effect_duration=request.turns
     )
@@ -1941,6 +2094,8 @@ def suppress_species(request: SuppressSpeciesRequest) -> InterventionResponse:
     压制效果：
     - 死亡率增加30%
     - 持续指定回合数
+    
+    消耗能量点。
     """
     species = species_repository.get_by_lineage(request.lineage_code)
     if not species:
@@ -1949,6 +2104,18 @@ def suppress_species(request: SuppressSpeciesRequest) -> InterventionResponse:
     if species.status != "alive":
         raise HTTPException(status_code=400, detail=f"物种 {request.lineage_code} 已灭绝，无需压制")
     
+    # 【能量系统】检查能量
+    current_turn = simulation_engine.turn_counter
+    can_afford, cost = energy_service.can_afford("suppress")
+    if not can_afford:
+        raise HTTPException(
+            status_code=400,
+            detail=f"能量不足！压制物种需要 {cost} 能量，当前只有 {energy_service.get_state().current}"
+        )
+    
+    # 消耗能量
+    energy_service.spend("suppress", current_turn, details=f"压制 {species.common_name}")
+    
     # 设置压制状态
     species.is_suppressed = True
     species.suppression_turns = request.turns
@@ -1956,7 +2123,7 @@ def suppress_species(request: SuppressSpeciesRequest) -> InterventionResponse:
     
     return InterventionResponse(
         success=True,
-        message=f"已对 {species.common_name} ({request.lineage_code}) 实施压制，持续 {request.turns} 回合",
+        message=f"已对 {species.common_name} ({request.lineage_code}) 实施压制，持续 {request.turns} 回合（消耗 {cost} 能量）",
         species_code=request.lineage_code,
         effect_duration=request.turns
     )
@@ -2020,8 +2187,7 @@ async def introduce_species(request: IntroduceSpeciesRequest) -> InterventionRes
             target_tile = next((t for t in tiles if t.x == target_x and t.y == target_y), None)
             
             if target_tile:
-                # 分配到目标地块
-                from ..services.species.habitat_manager import habitat_manager
+                # 分配到目标地块（habitat_manager 已在模块级别导入）
                 habitat_manager.assign_initial_habitat(new_species, [target_tile], simulation_engine.turn_counter)
         
         return InterventionResponse(
@@ -2203,3 +2369,422 @@ def get_task_diagnostics() -> dict:
             "success": False,
             "error": str(e)
         }
+
+
+# ================== 成就系统 API ==================
+
+from ..services.analytics.achievements import AchievementService
+from ..services.analytics.game_hints import GameHintsService
+
+# 初始化服务
+achievement_service = AchievementService(settings.data_dir)
+game_hints_service = GameHintsService(max_hints=5)
+
+
+@router.get("/achievements", tags=["achievements"])
+def get_achievements() -> dict:
+    """获取所有成就及其解锁状态
+    
+    返回：
+    - achievements: 成就列表
+    - stats: 统计信息
+    """
+    return {
+        "achievements": achievement_service.get_all_achievements(),
+        "stats": achievement_service.get_stats(),
+    }
+
+
+@router.get("/achievements/unlocked", tags=["achievements"])
+def get_unlocked_achievements() -> dict:
+    """获取已解锁的成就"""
+    return {
+        "achievements": achievement_service.get_unlocked_achievements(),
+    }
+
+
+@router.get("/achievements/pending", tags=["achievements"])
+def get_pending_achievement_unlocks() -> dict:
+    """获取待通知的成就解锁事件（获取后清空）
+    
+    用于前端显示成就解锁弹窗。
+    """
+    events = achievement_service.get_pending_unlocks()
+    return {
+        "events": [
+            {
+                "achievement": {
+                    "id": e.achievement.id,
+                    "name": e.achievement.name,
+                    "description": e.achievement.description,
+                    "icon": e.achievement.icon,
+                    "rarity": e.achievement.rarity.value,
+                    "category": e.achievement.category.value,
+                },
+                "turn_index": e.turn_index,
+                "timestamp": e.timestamp,
+            }
+            for e in events
+        ]
+    }
+
+
+@router.post("/achievements/exploration/{feature}", tags=["achievements"])
+def record_exploration(feature: str) -> dict:
+    """记录玩家探索功能（用于解锁探索者成就）
+    
+    Args:
+        feature: 功能名称 (genealogy, foodweb, niche)
+    """
+    # 获取当前回合
+    current_turn = simulation_engine.turn_counter
+    
+    event = achievement_service.record_exploration(feature, current_turn)
+    if event:
+        return {
+            "success": True,
+            "unlocked": {
+                "id": event.achievement.id,
+                "name": event.achievement.name,
+                "icon": event.achievement.icon,
+            }
+        }
+    return {"success": True, "unlocked": None}
+
+
+@router.post("/achievements/reset", tags=["achievements"])
+def reset_achievements() -> dict:
+    """重置所有成就进度（新存档时调用）"""
+    achievement_service.reset()
+    return {"success": True, "message": "成就进度已重置"}
+
+
+# ================== 智能提示 API ==================
+
+@router.get("/hints", tags=["hints"])
+def get_game_hints() -> dict:
+    """获取当前游戏状态的智能提示
+    
+    返回：
+    - hints: 提示列表（按优先级排序）
+    """
+    all_species = species_repository.list_species()
+    current_turn = simulation_engine.turn_counter
+    
+    # 获取最近的报告
+    logs = history_repository.list_turns(limit=2)
+    recent_report = None
+    previous_report = None
+    
+    if logs:
+        recent_report = TurnReport.model_validate(logs[0].record_data)
+        if len(logs) > 1:
+            previous_report = TurnReport.model_validate(logs[1].record_data)
+    
+    hints = game_hints_service.generate_hints(
+        all_species=all_species,
+        current_turn=current_turn,
+        recent_report=recent_report,
+        previous_report=previous_report,
+    )
+    
+    return {
+        "hints": [h.to_dict() for h in hints],
+        "turn": current_turn,
+    }
+
+
+@router.post("/hints/clear", tags=["hints"])
+def clear_hints_cooldown() -> dict:
+    """清除提示冷却（新存档时调用）"""
+    game_hints_service.clear_cooldown()
+    return {"success": True, "message": "提示冷却已清除"}
+
+
+# 在创建存档时重置成就和提示
+def _reset_game_services():
+    """重置游戏服务状态（创建/加载存档时调用）"""
+    achievement_service.reset()
+    game_hints_service.clear_cooldown()
+    energy_service.reset()
+
+
+# ================== 能量点系统 API ==================
+
+from ..services.system.divine_energy import DivineEnergyService
+
+# 初始化能量服务
+energy_service = DivineEnergyService(settings.data_dir)
+
+
+@router.get("/energy", tags=["energy"])
+def get_energy_status() -> dict:
+    """获取能量状态
+    
+    返回：
+    - enabled: 系统是否启用
+    - current: 当前能量
+    - maximum: 最大能量
+    - regen_per_turn: 每回合回复
+    - percentage: 百分比
+    """
+    return energy_service.get_status()
+
+
+@router.get("/energy/costs", tags=["energy"])
+def get_energy_costs() -> dict:
+    """获取所有操作的能量消耗定义"""
+    return {
+        "costs": energy_service.get_all_costs(),
+    }
+
+
+@router.get("/energy/history", tags=["energy"])
+def get_energy_history(limit: int = 20) -> dict:
+    """获取能量交易历史"""
+    return {
+        "history": energy_service.get_history(limit),
+    }
+
+
+@router.post("/energy/calculate", tags=["energy"])
+def calculate_energy_cost(request: dict) -> dict:
+    """计算操作的能量消耗
+    
+    Body:
+    - action: 操作类型
+    - pressures: 压力列表（可选，用于压力消耗计算）
+    - intensity: 强度（可选）
+    """
+    action = request.get("action", "")
+    
+    if action == "pressure" and "pressures" in request:
+        cost = energy_service.get_pressure_cost(request["pressures"])
+    else:
+        cost = energy_service.get_cost(action, **request)
+    
+    can_afford, _ = energy_service.can_afford(action, **request)
+    
+    return {
+        "action": action,
+        "cost": cost,
+        "can_afford": can_afford,
+        "current_energy": energy_service.get_state().current,
+    }
+
+
+@router.post("/energy/toggle", tags=["energy"])
+def toggle_energy_system(request: dict) -> dict:
+    """启用/禁用能量系统
+    
+    Body:
+    - enabled: bool
+    """
+    energy_service.enabled = request.get("enabled", True)
+    return {
+        "success": True,
+        "enabled": energy_service.enabled,
+    }
+
+
+@router.post("/energy/set", tags=["energy"])
+def set_energy(request: dict) -> dict:
+    """设置能量参数（GM模式）
+    
+    Body:
+    - current: 当前能量（可选）
+    - maximum: 最大能量（可选）
+    - regen: 每回合回复（可选）
+    """
+    energy_service.set_energy(
+        current=request.get("current"),
+        maximum=request.get("maximum"),
+        regen=request.get("regen"),
+    )
+    return energy_service.get_status()
+
+
+# ================== 杂交控制 API ==================
+
+@router.get("/hybridization/candidates", tags=["hybridization"])
+def get_hybridization_candidates() -> dict:
+    """获取可杂交的物种对
+    
+    返回所有满足杂交条件的物种组合。
+    """
+    all_species = species_repository.list_species()
+    alive_species = [sp for sp in all_species if sp.status == "alive"]
+    
+    candidates = []
+    checked_pairs = set()
+    
+    for sp1 in alive_species:
+        for sp2 in alive_species:
+            if sp1.lineage_code >= sp2.lineage_code:
+                continue
+            
+            pair_key = f"{sp1.lineage_code}-{sp2.lineage_code}"
+            if pair_key in checked_pairs:
+                continue
+            checked_pairs.add(pair_key)
+            
+            can_hybrid, fertility = hybridization_service.can_hybridize(sp1, sp2)
+            if can_hybrid:
+                candidates.append({
+                    "species_a": {
+                        "lineage_code": sp1.lineage_code,
+                        "common_name": sp1.common_name,
+                        "latin_name": sp1.latin_name,
+                        "genus_code": sp1.genus_code,
+                    },
+                    "species_b": {
+                        "lineage_code": sp2.lineage_code,
+                        "common_name": sp2.common_name,
+                        "latin_name": sp2.latin_name,
+                        "genus_code": sp2.genus_code,
+                    },
+                    "fertility": round(fertility, 3),
+                    "genus": sp1.genus_code,
+                })
+    
+    return {
+        "candidates": candidates,
+        "total": len(candidates),
+    }
+
+
+@router.post("/hybridization/execute", tags=["hybridization"])
+def execute_hybridization(request: dict) -> dict:
+    """执行杂交
+    
+    Body:
+    - species_a: 物种A的lineage_code
+    - species_b: 物种B的lineage_code
+    
+    消耗能量点。
+    """
+    code_a = request.get("species_a", "")
+    code_b = request.get("species_b", "")
+    
+    if not code_a or not code_b:
+        raise HTTPException(status_code=400, detail="请提供两个物种代码")
+    
+    # 获取物种
+    species_a = species_repository.get_by_lineage(code_a)
+    species_b = species_repository.get_by_lineage(code_b)
+    
+    if not species_a:
+        raise HTTPException(status_code=404, detail=f"物种 {code_a} 不存在")
+    if not species_b:
+        raise HTTPException(status_code=404, detail=f"物种 {code_b} 不存在")
+    
+    if species_a.status != "alive":
+        raise HTTPException(status_code=400, detail=f"物种 {code_a} 已灭绝")
+    if species_b.status != "alive":
+        raise HTTPException(status_code=400, detail=f"物种 {code_b} 已灭绝")
+    
+    # 检查杂交可行性
+    can_hybrid, fertility = hybridization_service.can_hybridize(species_a, species_b)
+    if not can_hybrid:
+        raise HTTPException(status_code=400, detail="这两个物种无法杂交")
+    
+    # 检查能量
+    current_turn = simulation_engine.turn_counter
+    can_afford, cost = energy_service.can_afford("hybridize")
+    if not can_afford:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"能量不足！杂交需要 {cost} 能量，当前只有 {energy_service.get_state().current}"
+        )
+    
+    # 消耗能量
+    success, msg = energy_service.spend(
+        "hybridize", 
+        current_turn,
+        details=f"杂交 {species_a.common_name} × {species_b.common_name}"
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail=msg)
+    
+    # 执行杂交
+    hybrid = hybridization_service.create_hybrid(species_a, species_b, current_turn)
+    if not hybrid:
+        # 退还能量（杂交失败）
+        energy_service.add_energy(cost, "杂交失败退还")
+        raise HTTPException(status_code=500, detail="杂交失败")
+    
+    # 保存杂交种
+    species_repository.upsert(hybrid)
+    
+    # 记录成就
+    achievement_service._unlock("hybrid_creator", current_turn)
+    
+    return {
+        "success": True,
+        "hybrid": {
+            "lineage_code": hybrid.lineage_code,
+            "latin_name": hybrid.latin_name,
+            "common_name": hybrid.common_name,
+            "description": hybrid.description,
+            "fertility": hybrid.hybrid_fertility,
+            "parent_codes": hybrid.hybrid_parent_codes,
+        },
+        "energy_spent": cost,
+        "energy_remaining": energy_service.get_state().current,
+    }
+
+
+@router.get("/hybridization/preview", tags=["hybridization"])
+def preview_hybridization(species_a: str, species_b: str) -> dict:
+    """预览杂交结果
+    
+    不消耗能量，只显示预期结果。
+    """
+    sp_a = species_repository.get_by_lineage(species_a)
+    sp_b = species_repository.get_by_lineage(species_b)
+    
+    if not sp_a:
+        raise HTTPException(status_code=404, detail=f"物种 {species_a} 不存在")
+    if not sp_b:
+        raise HTTPException(status_code=404, detail=f"物种 {species_b} 不存在")
+    
+    can_hybrid, fertility = hybridization_service.can_hybridize(sp_a, sp_b)
+    
+    if not can_hybrid:
+        # 分析为什么不能杂交
+        if sp_a.genus_code != sp_b.genus_code:
+            reason = "不同属的物种无法杂交"
+        elif sp_a.lineage_code == sp_b.lineage_code:
+            reason = "同一物种无法杂交"
+        else:
+            distance = genetic_distance_calculator.calculate_distance(sp_a, sp_b)
+            reason = f"遗传距离过大 ({distance:.2f} >= 0.5)"
+        
+        return {
+            "can_hybridize": False,
+            "reason": reason,
+            "fertility": 0,
+            "energy_cost": energy_service.get_cost("hybridize"),
+        }
+    
+    # 预览杂交结果
+    hybrid_code = f"{sp_a.lineage_code}×{sp_b.lineage_code}"
+    hybrid_name = f"{sp_a.common_name}×{sp_b.common_name}杂交种"
+    
+    # 预测特征
+    predicted_trophic = max(sp_a.trophic_level, sp_b.trophic_level)
+    combined_capabilities = list(set(sp_a.capabilities + sp_b.capabilities))
+    
+    return {
+        "can_hybridize": True,
+        "fertility": round(fertility, 3),
+        "energy_cost": energy_service.get_cost("hybridize"),
+        "can_afford": energy_service.can_afford("hybridize")[0],
+        "preview": {
+            "lineage_code": hybrid_code,
+            "common_name": hybrid_name,
+            "predicted_trophic_level": predicted_trophic,
+            "combined_capabilities": combined_capabilities,
+            "parent_traits_merged": True,
+        },
+    }

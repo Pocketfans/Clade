@@ -6,28 +6,42 @@ from pydantic import BaseModel, Field
 
 
 PressureType = Literal[
-    # 气候相关
-    "glacial_period",           # 冰河时期
-    "greenhouse_earth",         # 温室地球
-    "pluvial_period",          # 洪积期
-    "drought_period",          # 干旱期
-    "monsoon_shift",           # 季风变动
-    "fog_period",              # 浓雾时期
-    # 地质相关
-    "volcanic_eruption",       # 火山喷发期
-    "orogeny",                 # 造山期
-    "subsidence",              # 陆架沉降
-    "land_degradation",        # 土地退化
-    "ocean_current_shift",     # 洋流变迁
-    # 生态相关
-    "resource_abundance",      # 资源繁盛期
-    "productivity_decline",    # 生产力衰退
-    "predator_rise",          # 捕食者兴起
-    "species_invasion",       # 物种入侵
-    # 化学相关
-    "ocean_acidification",    # 海洋酸化
-    "oxygen_increase",        # 氧气增多
-    "anoxic_event",          # 缺氧事件
+    # ========== 气候相关 ==========
+    "glacial_period",           # 冰河时期：全球降温，冰川扩张
+    "greenhouse_earth",         # 温室地球：全球升温，极端高温
+    "pluvial_period",          # 洪积期：降水增加，洪水频发
+    "drought_period",          # 干旱期：持续缺水
+    "monsoon_shift",           # 季风变动：降水模式改变
+    "fog_period",              # 浓雾时期：光照减少，湿度增加
+    "extreme_weather",         # 极端天气：风暴/飓风频发
+    
+    # ========== 地质相关 ==========
+    "volcanic_eruption",       # 火山喷发期：火山灰、有毒气体、火山冬天
+    "orogeny",                 # 造山期：山脉隆起，地形变化
+    "subsidence",              # 陆架沉降：低地淹没
+    "land_degradation",        # 土地退化：土壤贫瘠化
+    "ocean_current_shift",     # 洋流变迁：温度/营养盐分布改变
+    "sea_level_rise",          # 海平面上升：沿海栖息地淹没
+    "sea_level_fall",          # 海平面下降：大陆架暴露
+    "earthquake_period",       # 地震活跃期：地形破碎，栖息地分割
+    
+    # ========== 生态相关 ==========
+    "resource_abundance",      # 资源繁盛期：食物充足，竞争降低
+    "productivity_decline",    # 生产力衰退：初级生产力下降
+    "predator_rise",          # 捕食者兴起：顶级捕食者数量激增
+    "species_invasion",       # 物种入侵：外来竞争者入侵
+    "disease_outbreak",        # 疾病爆发：传染病流行
+    "wildfire_period",         # 野火肆虐期：火灾频发
+    "algal_bloom",             # 藻华爆发：水体富营养化
+    
+    # ========== 化学/大气相关 ==========
+    "ocean_acidification",    # 海洋酸化：碳酸钙壳体溶解
+    "oxygen_increase",        # 氧气增多：有利于需氧生物
+    "anoxic_event",           # 缺氧事件：大规模窒息
+    "sulfide_event",          # 硫化事件：硫化氢毒害
+    "uv_radiation_increase",  # 紫外辐射增强：臭氧层变薄
+    "salinity_change",        # 盐度变化：淡咸水变化
+    "methane_release",        # 甲烷释放：温室效应+缺氧
 ]
 
 

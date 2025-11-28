@@ -396,6 +396,22 @@ class SpeciationRules:
                 fixes_made.append(f"营养级{new_trophic:.1f}变化过大，调整为{clamped:.1f}")
                 fixed["trophic_level"] = clamped
         
+        # 6. 验证捕食关系
+        new_trophic = float(fixed.get("trophic_level", parent_species.trophic_level))
+        new_diet = fixed.get("diet_type", parent_species.diet_type)
+        prey_result, prey_fixes = self._validate_prey_relationships(
+            prey_species=fixed.get("prey_species"),
+            prey_preferences=fixed.get("prey_preferences"),
+            new_trophic_level=new_trophic,
+            diet_type=new_diet,
+            parent_species=parent_species,
+        )
+        if prey_result is not None:
+            fixed["prey_species"] = prey_result["prey_species"]
+            fixed["prey_preferences"] = prey_result["prey_preferences"]
+            fixed["diet_type"] = prey_result["diet_type"]
+        fixes_made.extend(prey_fixes)
+        
         if fixes_made:
             logger.info(f"[规则引擎] 修正了 {len(fixes_made)} 处违规: {fixes_made}")
         
@@ -555,6 +571,145 @@ class SpeciationRules:
                 fixed[key] = value
         
         return fixed, fixes
+    
+    def _validate_prey_relationships(
+        self,
+        prey_species: list | None,
+        prey_preferences: dict | None,
+        new_trophic_level: float,
+        diet_type: str | None,
+        parent_species,
+    ) -> tuple[dict | None, list[str]]:
+        """验证并修正捕食关系
+        
+        规则：
+        1. 自养生物(trophic < 2.0)不能有猎物
+        2. 猎物必须是存在的物种（在当前生态系统中）
+        3. 捕食者营养级应比猎物高 0.5-2.5 级
+        4. 猎物偏好总和应为 1.0（允许±0.1误差）
+        5. 食性类型与营养级/猎物列表一致
+        
+        Args:
+            prey_species: AI返回的猎物列表
+            prey_preferences: AI返回的猎物偏好
+            new_trophic_level: 新物种的营养级
+            diet_type: 新物种的食性类型
+            parent_species: 父系物种（用于回退）
+            
+        Returns:
+            (修正后的结果字典, 修正说明列表)
+            如果无需修正返回 (None, [])
+        """
+        fixes = []
+        
+        # 默认继承父系
+        result_prey = list(parent_species.prey_species) if parent_species.prey_species else []
+        result_prefs = dict(parent_species.prey_preferences) if parent_species.prey_preferences else {}
+        result_diet = diet_type or parent_species.diet_type or "omnivore"
+        
+        # 处理AI返回的猎物列表
+        if prey_species is not None and isinstance(prey_species, list):
+            result_prey = prey_species
+        if prey_preferences is not None and isinstance(prey_preferences, dict):
+            result_prefs = prey_preferences
+        
+        # 规则1：自养生物不能有猎物
+        if new_trophic_level < 2.0:
+            if result_prey:
+                fixes.append(f"营养级<2.0(生产者)不能有猎物，清空猎物列表")
+                result_prey = []
+                result_prefs = {}
+            result_diet = "autotroph"
+        
+        # 规则2 & 3：验证猎物存在性和营养级关系
+        # 需要获取当前生态系统中的物种列表
+        if result_prey and new_trophic_level >= 2.0:
+            try:
+                from ...repositories.species_repository import species_repository
+                all_species = species_repository.list_species()
+                species_map = {sp.lineage_code: sp for sp in all_species}
+                
+                valid_prey = []
+                invalid_prey = []
+                
+                for prey_code in result_prey:
+                    prey_sp = species_map.get(prey_code)
+                    
+                    if prey_sp is None:
+                        invalid_prey.append(f"{prey_code}(不存在)")
+                        continue
+                    
+                    # 检查营养级关系：捕食者应比猎物高 0.5-2.5 级
+                    trophic_diff = new_trophic_level - prey_sp.trophic_level
+                    if trophic_diff < 0.3:
+                        invalid_prey.append(f"{prey_code}(营养级差{trophic_diff:.1f}<0.3)")
+                        continue
+                    if trophic_diff > 3.0:
+                        invalid_prey.append(f"{prey_code}(营养级差{trophic_diff:.1f}>3.0)")
+                        continue
+                    
+                    valid_prey.append(prey_code)
+                
+                if invalid_prey:
+                    fixes.append(f"移除无效猎物: {', '.join(invalid_prey)}")
+                
+                # 如果所有猎物都无效，回退到父系
+                if not valid_prey and result_prey:
+                    parent_prey = list(parent_species.prey_species) if parent_species.prey_species else []
+                    # 过滤父系猎物中已灭绝的
+                    valid_parent_prey = [p for p in parent_prey if p in species_map]
+                    if valid_parent_prey:
+                        fixes.append(f"猎物全部无效，回退到父系猎物")
+                        valid_prey = valid_parent_prey
+                
+                result_prey = valid_prey
+                
+            except Exception as e:
+                logger.warning(f"[规则引擎] 验证猎物关系时出错: {e}")
+        
+        # 规则4：修正猎物偏好
+        if result_prey:
+            # 只保留存在于猎物列表中的偏好
+            filtered_prefs = {k: v for k, v in result_prefs.items() if k in result_prey}
+            
+            # 计算总和并归一化
+            total_pref = sum(filtered_prefs.values()) if filtered_prefs else 0
+            
+            if abs(total_pref - 1.0) > 0.1 and total_pref > 0:
+                # 归一化
+                normalized_prefs = {k: v / total_pref for k, v in filtered_prefs.items()}
+                if filtered_prefs != normalized_prefs:
+                    fixes.append(f"猎物偏好总和{total_pref:.2f}，已归一化")
+                result_prefs = normalized_prefs
+            elif not filtered_prefs and result_prey:
+                # 没有偏好数据，均匀分配
+                equal_pref = 1.0 / len(result_prey)
+                result_prefs = {prey: equal_pref for prey in result_prey}
+                fixes.append(f"猎物无偏好数据，均匀分配")
+            else:
+                result_prefs = filtered_prefs
+        else:
+            result_prefs = {}
+        
+        # 规则5：确保食性类型与营养级/猎物一致
+        if new_trophic_level < 2.0:
+            result_diet = "autotroph"
+        elif not result_prey:
+            # 没有猎物的消费者，设为腐食者或回退
+            if new_trophic_level < 2.5:
+                result_diet = "detritivore"
+            else:
+                # 高营养级没有猎物，保留原食性但记录警告
+                fixes.append(f"营养级{new_trophic_level:.1f}但无有效猎物，需关注")
+        
+        if fixes:
+            return {
+                "prey_species": result_prey,
+                "prey_preferences": result_prefs,
+                "diet_type": result_diet,
+            }, fixes
+        
+        return None, []
 
 
 # 单例实例

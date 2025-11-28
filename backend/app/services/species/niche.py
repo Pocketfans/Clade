@@ -162,37 +162,63 @@ class NicheAnalyzer:
         return adjusted
 
     def _ensure_vectors(self, species_list: Sequence[Species]) -> np.ndarray:
-        """使用 embedding 服务统一计算所有物种的生态位向量。
+        """获取物种的生态位向量
         
-        注意：不再使用 species.ecological_vector 字段，而是始终基于 description 计算 embedding。
-        这确保了向量维度的一致性，并且能够捕捉物种描述中的所有生态位信息。
-        
-        关键改进：
-        1. 不要求真实embedding（require_real=False），允许使用fake向量
-        2. 完善的向量验证和降级逻辑
-        3. 确保维度一致性
+        【优化】优先从已有索引获取向量，只对未索引的物种调用embed：
+        1. 首先尝试从 EmbeddingService 的物种索引获取已存在的向量
+        2. 对于未索引的物种，使用统一的描述文本构建方法生成 embedding
+        3. 完善的后备逻辑确保总是返回有效向量
         """
+        species_list = list(species_list)
+        n = len(species_list)
+        
+        if n == 0:
+            return np.array([])
+        
         try:
-            # 收集所有物种的描述
-            descriptions = [species.description for species in species_list]
+            # 【优化】先尝试从索引批量获取已存在的向量
+            lineage_codes = [sp.lineage_code for sp in species_list]
+            indexed_vectors, indexed_codes = self.embeddings.get_species_vectors(lineage_codes)
             
-            # 批量计算 embedding (不要求真实向量，允许降级)
-            vectors = self.embeddings.embed(descriptions, require_real=False)
+            # 构建代码到向量的映射
+            code_to_vector = dict(zip(indexed_codes, indexed_vectors))
+            
+            # 收集需要新生成向量的物种
+            vectors = []
+            missing_species = []
+            missing_indices = []
+            
+            for i, sp in enumerate(species_list):
+                if sp.lineage_code in code_to_vector:
+                    vectors.append(code_to_vector[sp.lineage_code])
+                else:
+                    vectors.append(None)
+                    missing_species.append(sp)
+                    missing_indices.append(i)
+            
+            # 对未索引的物种生成向量
+            if missing_species:
+                # 使用统一的描述文本构建方法
+                from ..system.embedding import EmbeddingService
+                descriptions = [
+                    EmbeddingService.build_species_text(sp, include_traits=True, include_names=True)
+                    for sp in missing_species
+                ]
+                
+                new_vectors = self.embeddings.embed(descriptions, require_real=False)
+                
+                for i, idx in enumerate(missing_indices):
+                    vectors[idx] = new_vectors[i]
             
             # 验证向量并确保维度一致
-            if not vectors or len(vectors) != len(species_list):
-                print(f"[生态位向量] Embedding返回向量数量不匹配，使用默认向量")
+            if not vectors or any(v is None for v in vectors):
+                print(f"[生态位向量] 部分向量无效，使用默认向量")
                 return self._generate_fallback_vectors(species_list)
             
-            # 检查所有向量是否有效且维度一致
-            valid_dim = None
+            # 检查维度一致性
+            valid_dim = len(vectors[0]) if vectors else 0
             for i, vector in enumerate(vectors):
-                if not vector or len(vector) == 0:
-                    print(f"[生态位向量] 物种 {species_list[i].common_name} 的向量无效")
-                    return self._generate_fallback_vectors(species_list)
-                if valid_dim is None:
-                    valid_dim = len(vector)
-                elif len(vector) != valid_dim:
+                if len(vector) != valid_dim:
                     print(f"[生态位向量] 维度不一致：期望{valid_dim}，得到{len(vector)}")
                     return self._generate_fallback_vectors(species_list)
             

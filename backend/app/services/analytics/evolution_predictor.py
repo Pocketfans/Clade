@@ -11,6 +11,11 @@
 - 热适应向量 = 热带物种embedding - 极地物种embedding
 - 防御压力向量 = 高防御物种embedding - 低防御物种embedding
 
+【v2.0 优化】
+- 使用 EmbeddingService 的压力向量存储
+- 利用向量索引进行物种搜索
+- 批量处理支持
+
 【用途】
 1. 预测物种未来可能的演化方向
 2. 为 LLM 生成提供参考特征
@@ -25,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 import numpy as np
 
 from ...ai.prompts.embedding import EMBEDDING_PROMPTS
+from ..system.species_cache import get_species_cache
 
 if TYPE_CHECKING:
     from ...models.species import Species
@@ -75,7 +81,11 @@ class EvolutionPredictionResult:
 class PressureVectorLibrary:
     """压力向量库 - 存储和管理演化压力向量
     
-    压力向量通过对比不同适应状态的物种 embedding 差值计算得到
+    压力向量通过对比不同适应状态的物种 embedding 差值计算得到。
+    
+    【v2.0 优化】
+    - 使用 EmbeddingService 的压力向量存储
+    - 向量持久化，避免重复计算
     """
     
     # 压力参考描述对（源状态 → 目标状态）
@@ -183,72 +193,125 @@ class PressureVectorLibrary:
 
     def __init__(self, embedding_service: 'EmbeddingService'):
         self.embeddings = embedding_service
-        self._vectors: dict[str, PressureVector] = {}
+        self._pressure_info: dict[str, dict] = {}  # 存储压力元信息
         self._initialized = False
 
     def initialize(self) -> None:
-        """初始化所有压力向量（懒加载）"""
+        """初始化所有压力向量（懒加载，使用向量存储）
+        
+        【优化】批量检查和创建压力向量，减少逐个API调用
+        """
         if self._initialized:
             return
         
         logger.info("初始化压力向量库...")
         
-        for pressure_name, config in self.PRESSURE_REFERENCES.items():
+        # 1. 批量检查已存在的压力向量
+        existing_names = set()
+        for pressure_name in self.PRESSURE_REFERENCES:
+            if self.embeddings.get_pressure_vector(pressure_name) is not None:
+                existing_names.add(pressure_name)
+                self._pressure_info[pressure_name] = self.PRESSURE_REFERENCES[pressure_name]
+        
+        # 2. 收集需要新创建的压力
+        missing_pressures = [
+            (name, config) for name, config in self.PRESSURE_REFERENCES.items()
+            if name not in existing_names
+        ]
+        
+        if missing_pressures:
             try:
-                # 获取源和目标描述的 embedding
-                source_vec = np.array(self.embeddings.embed_single(config["source"]))
-                target_vec = np.array(self.embeddings.embed_single(config["target"]))
+                # 3. 批量生成源和目标的embedding
+                source_texts = [config["source"] for _, config in missing_pressures]
+                target_texts = [config["target"] for _, config in missing_pressures]
                 
-                # 计算压力向量（目标 - 源）
-                pressure_vec = target_vec - source_vec
+                # 一次性获取所有embedding
+                all_texts = source_texts + target_texts
+                all_embeddings = self.embeddings.embed(all_texts, require_real=False)
                 
-                # 归一化
-                norm = np.linalg.norm(pressure_vec)
-                if norm > 0:
-                    pressure_vec = pressure_vec / norm
+                source_embeddings = all_embeddings[:len(missing_pressures)]
+                target_embeddings = all_embeddings[len(missing_pressures):]
                 
-                self._vectors[pressure_name] = PressureVector(
-                    name=pressure_name,
-                    name_cn=config["name_cn"],
-                    vector=pressure_vec,
-                    description=config["description"],
-                    source_desc=config["source"],
-                    target_desc=config["target"]
-                )
+                # 4. 计算并存储压力向量
+                for i, (name, config) in enumerate(missing_pressures):
+                    source_vec = np.array(source_embeddings[i])
+                    target_vec = np.array(target_embeddings[i])
+                    
+                    pressure_vec = target_vec - source_vec
+                    norm = np.linalg.norm(pressure_vec)
+                    if norm > 0:
+                        pressure_vec = pressure_vec / norm
+                    
+                    # 直接存储到向量存储（已归一化）
+                    store = self.embeddings._vector_stores.get_store("pressures")
+                    store.add(name, pressure_vec.tolist(), {
+                        "source_desc": config["source"][:100],
+                        "target_desc": config["target"][:100],
+                    })
+                    self._pressure_info[name] = config
+                    
+                logger.info(f"批量创建 {len(missing_pressures)} 个压力向量")
                 
             except Exception as e:
-                logger.error(f"计算压力向量 {pressure_name} 失败: {e}")
+                logger.error(f"批量初始化压力向量失败: {e}")
+                # 降级为逐个创建
+                for name, config in missing_pressures:
+                    try:
+                        self.embeddings.store_pressure_vector(name, config["source"], config["target"])
+                        self._pressure_info[name] = config
+                    except Exception as e2:
+                        logger.error(f"计算压力向量 {name} 失败: {e2}")
         
         self._initialized = True
-        logger.info(f"压力向量库初始化完成: {len(self._vectors)} 个向量")
+        logger.info(f"压力向量库初始化完成: {len(self._pressure_info)} 个向量（{len(existing_names)} 个已存在）")
 
     def get_pressure(self, name: str) -> PressureVector | None:
         """获取压力向量"""
         self.initialize()
-        return self._vectors.get(name)
+        
+        if name not in self._pressure_info:
+            return None
+        
+        vec = self.embeddings.get_pressure_vector(name)
+        if vec is None:
+            return None
+        
+        config = self._pressure_info[name]
+        return PressureVector(
+            name=name,
+            name_cn=config["name_cn"],
+            vector=vec,
+            description=config["description"],
+            source_desc=config["source"],
+            target_desc=config["target"]
+        )
 
     def list_pressures(self) -> list[dict[str, str]]:
         """列出所有可用压力"""
         self.initialize()
         return [
             {
-                "name": p.name,
-                "name_cn": p.name_cn,
-                "description": p.description
+                "name": name,
+                "name_cn": config["name_cn"],
+                "description": config["description"]
             }
-            for p in self._vectors.values()
+            for name, config in self._pressure_info.items()
         ]
 
     def get_vector(self, name: str) -> np.ndarray | None:
         """获取压力向量数组"""
-        pressure = self.get_pressure(name)
-        return pressure.vector if pressure else None
+        self.initialize()
+        return self.embeddings.get_pressure_vector(name)
 
 
 class EvolutionPredictor:
     """向量演化预测器
     
-    使用向量运算预测物种的演化方向
+    使用向量运算预测物种的演化方向。
+    
+    【v2.0 优化】
+    - 使用 EmbeddingService 的物种索引
+    - 共享向量存储，避免重复
     """
 
     def __init__(
@@ -260,21 +323,33 @@ class EvolutionPredictor:
         self.embeddings = embedding_service
         self.pressures = pressure_library or PressureVectorLibrary(embedding_service)
         self.router = router
+    
+    @property
+    def _species_data(self):
+        """使用全局物种缓存（避免维护冗余缓存）"""
+        return get_species_cache()
+
+    def update_species_cache(self, species_list: Sequence['Species']) -> None:
+        """通知本服务物种列表已更新
         
-        # 物种向量缓存
-        self._species_vectors: dict[str, np.ndarray] = {}
-        self._species_data: dict[str, 'Species'] = {}
+        【优化】物种数据由全局 SpeciesCacheManager 统一管理，
+        此方法保留作为接口兼容，无需执行任何操作。
+        """
+        pass
 
     def build_species_index(self, species_list: Sequence['Species']) -> None:
-        """构建物种向量索引"""
-        descriptions = [sp.description for sp in species_list]
-        vectors = self.embeddings.embed(descriptions)
+        """构建物种向量索引（完整版本，包含索引更新）
         
-        for sp, vec in zip(species_list, vectors):
-            self._species_vectors[sp.lineage_code] = np.array(vec)
-            self._species_data[sp.lineage_code] = sp
+        注意：如果通过 EmbeddingIntegrationService 调用，
+        应该使用 update_species_cache 方法以避免重复索引。
+        """
+        # 更新物种数据缓存
+        self.update_species_cache(species_list)
         
-        logger.info(f"物种向量索引构建完成: {len(self._species_vectors)} 个物种")
+        # 使用 EmbeddingService 的索引功能
+        count = self.embeddings.index_species(species_list)
+        if count > 0:
+            logger.info(f"[EvolutionPredictor] 物种索引更新: {count} 个")
 
     def predict_evolution(
         self,
@@ -358,14 +433,20 @@ class EvolutionPredictor:
         )
 
     def _get_species_vector(self, species: 'Species') -> np.ndarray:
-        """获取物种的 embedding 向量"""
-        if species.lineage_code in self._species_vectors:
-            return self._species_vectors[species.lineage_code]
+        """获取物种的 embedding 向量
         
-        vec = np.array(self.embeddings.embed_single(species.description))
-        self._species_vectors[species.lineage_code] = vec
-        self._species_data[species.lineage_code] = species
-        return vec
+        【优化】优先从索引获取向量，避免重复embed调用
+        """
+        # 优先从索引获取
+        vec = self.embeddings.get_species_vector(species.lineage_code)
+        if vec is not None:
+            return vec
+        
+        # 索引中没有，使用统一的描述文本构建方法生成
+        from ..system.embedding import EmbeddingService
+        text = EmbeddingService.build_species_text(species, include_traits=True, include_names=True)
+        vec = self.embeddings.embed_single(text)
+        return np.array(vec)
 
     def _find_nearest_species(
         self, 
@@ -374,27 +455,25 @@ class EvolutionPredictor:
         top_k: int = 5
     ) -> list[tuple[str, str, float]]:
         """在物种库中找到最接近目标向量的物种"""
-        if not self._species_vectors:
+        # 构建查询文本（使用目标向量对应的描述不太适用，所以这里用直接搜索）
+        # 注意：这里我们传入向量而不是文本，需要使用向量存储的 search 接口
+        from ..system.vector_store import VectorStore
+        
+        store = self.embeddings._vector_stores.get_store("species", create=False)
+        if store is None or store.size == 0:
             return []
         
-        # 归一化目标向量
-        target_norm = target_vec / (np.linalg.norm(target_vec) + 1e-8)
+        exclude_set = {exclude} if exclude else None
+        results = store.search(target_vec.tolist(), top_k, threshold=0.0, exclude_ids=exclude_set)
         
-        results = []
-        for code, vec in self._species_vectors.items():
-            if code == exclude:
-                continue
-            
-            vec_norm = vec / (np.linalg.norm(vec) + 1e-8)
-            similarity = float(np.dot(target_norm, vec_norm))
-            
-            species = self._species_data.get(code)
-            name = species.common_name if species else code
-            
-            results.append((code, name, similarity))
-        
-        results.sort(key=lambda x: x[2], reverse=True)
-        return results[:top_k]
+        return [
+            (
+                r.id, 
+                r.metadata.get("common_name", r.id),
+                r.score
+            )
+            for r in results
+        ]
 
     def _predict_trait_changes(
         self,
@@ -502,34 +581,29 @@ class EvolutionPredictor:
             return ""
 
     def export_for_save(self) -> dict[str, Any]:
-        """导出压力向量数据用于存档"""
+        """导出数据用于存档
+        
+        注意：向量数据已由 EmbeddingService 管理，这里只导出元信息
+        物种数据由全局 SpeciesCacheManager 管理，不需要在此导出
+        """
         self.pressures.initialize()
         
         return {
-            "version": "1.0",
-            "pressure_vectors": {
-                name: {
-                    "name_cn": p.name_cn,
-                    "vector": p.vector.tolist(),
-                    "description": p.description
-                }
-                for name, p in self.pressures._vectors.items()
-            },
-            "species_vectors": {
-                code: vec.tolist()
-                for code, vec in self._species_vectors.items()
-            }
+            "version": "2.0",
+            "pressure_names": list(self.pressures._pressure_info.keys()),
         }
 
     def import_from_save(self, data: dict[str, Any]) -> None:
-        """从存档导入数据"""
+        """从存档导入数据
+        
+        注意：向量数据由 EmbeddingService 自动从磁盘加载
+        """
         if not data:
             return
         
-        # 导入物种向量
-        if "species_vectors" in data:
-            for code, vec_list in data["species_vectors"].items():
-                self._species_vectors[code] = np.array(vec_list)
+        # 重新初始化压力向量（向量存储会自动加载）
+        self.pressures._initialized = False
+        self.pressures.initialize()
         
-        logger.info(f"从存档导入 {len(self._species_vectors)} 个物种向量")
+        logger.info(f"[EvolutionPredictor] 从存档恢复完成")
 

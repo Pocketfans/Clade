@@ -7,6 +7,11 @@
 4. 时代划分 - 通过事件聚类识别演化"时代"
 5. 物种传记 - 生成物种的完整演化历程叙事
 
+【v2.0 优化】
+- 使用批量 embedding 接口
+- 利用 EmbeddingService 的事件索引
+- 批量记录事件，减少 API 调用
+
 【用途】
 - 生成回合报告的叙事部分
 - 创建演化史时间线
@@ -98,6 +103,9 @@ class NarrativeEngine:
         # 事件历史（按回合索引）
         self._events: list[EventRecord] = []
         self._event_counter = 0
+        
+        # 待索引的事件（批量处理）
+        self._pending_events: list[EventRecord] = []
 
     def record_event(
         self,
@@ -109,7 +117,7 @@ class NarrativeEngine:
         severity: float = 0.5,
         payload: dict | None = None
     ) -> EventRecord:
-        """记录一个事件并计算其 embedding"""
+        """记录一个事件（延迟计算 embedding）"""
         self._event_counter += 1
         
         # 生成事件描述（如果没有提供）
@@ -120,34 +128,70 @@ class NarrativeEngine:
         if not title:
             title = f"第{turn_index}回合: {event_type}"
         
-        # 计算 embedding
-        full_text = f"{title}. {description}"
-        try:
-            embedding = np.array(self.embeddings.embed_single(full_text))
-        except Exception as e:
-            logger.warning(f"计算事件 embedding 失败: {e}")
-            embedding = None
-        
         event = EventRecord(
             id=self._event_counter,
             event_type=event_type,
             turn_index=turn_index,
             title=title,
             description=description,
-            embedding=embedding,
+            embedding=None,  # 延迟计算
             related_species=related_species or [],
             severity=severity,
             payload=payload or {}
         )
         
-        # 计算新颖度
-        event.novelty_score = self._compute_novelty(event)
-        
         self._events.append(event)
+        self._pending_events.append(event)
+        
         return event
+    
+    def flush_pending_events(self) -> int:
+        """批量处理待索引的事件（在回合结束时调用）
+        
+        【优化】使用批量新颖度计算，提高效率
+        """
+        if not self._pending_events:
+            return 0
+        
+        # 批量生成 embedding
+        texts = [f"{e.title}. {e.description}" for e in self._pending_events]
+        try:
+            embeddings = self.embeddings.embed(texts)
+            
+            # 更新事件的 embedding
+            for event, emb in zip(self._pending_events, embeddings):
+                event.embedding = np.array(emb)
+            
+            # 【优化】批量计算新颖度
+            novelty_scores = self._compute_novelty_batch(self._pending_events)
+            for event, score in zip(self._pending_events, novelty_scores):
+                event.novelty_score = score
+            
+            # 批量索引事件
+            events_to_index = [
+                {
+                    "id": e.id,
+                    "title": e.title,
+                    "description": e.description,
+                    "metadata": {
+                        "turn_index": e.turn_index,
+                        "event_type": e.event_type,
+                        "severity": e.severity,
+                    }
+                }
+                for e in self._pending_events
+            ]
+            self.embeddings.index_events_batch(events_to_index)
+            
+        except Exception as e:
+            logger.warning(f"[NarrativeEngine] 批量处理事件失败: {e}")
+        
+        count = len(self._pending_events)
+        self._pending_events.clear()
+        return count
 
     def _compute_novelty(self, event: EventRecord) -> float:
-        """计算事件的新颖度（与历史事件的差异）"""
+        """计算单个事件的新颖度（与历史事件的差异）"""
         if event.embedding is None or not self._events:
             return 1.0
         
@@ -171,6 +215,97 @@ class NarrativeEngine:
         
         # 新颖度 = 1 - 最大相似度
         return 1.0 - max_similarity
+    
+    def _compute_novelty_batch(self, events: list[EventRecord]) -> list[float]:
+        """【优化】批量计算事件新颖度
+        
+        使用向量化计算，比逐个计算更高效。
+        
+        Args:
+            events: 要计算新颖度的事件列表
+            
+        Returns:
+            新颖度分数列表
+        """
+        if not events:
+            return []
+        
+        # 筛选有embedding的事件
+        valid_events = [(i, e) for i, e in enumerate(events) if e.embedding is not None]
+        if not valid_events:
+            return [1.0] * len(events)
+        
+        # 按事件类型分组历史事件
+        type_to_history: dict[str, list[np.ndarray]] = {}
+        for e in self._events[-100:]:  # 只看最近100个事件
+            if e.embedding is not None:
+                if e.event_type not in type_to_history:
+                    type_to_history[e.event_type] = []
+                type_to_history[e.event_type].append(e.embedding)
+        
+        # 计算新颖度
+        novelty_scores = [1.0] * len(events)
+        
+        for idx, event in valid_events:
+            hist_embeddings = type_to_history.get(event.event_type, [])
+            
+            if not hist_embeddings:
+                novelty_scores[idx] = 1.0
+                continue
+            
+            # 使用最近20个同类事件
+            hist_embeddings = hist_embeddings[-20:]
+            
+            # 向量化计算相似度
+            event_norm = event.embedding / (np.linalg.norm(event.embedding) + 1e-8)
+            hist_matrix = np.array(hist_embeddings)
+            hist_norms = np.linalg.norm(hist_matrix, axis=1, keepdims=True)
+            hist_norms[hist_norms == 0] = 1.0
+            hist_normalized = hist_matrix / hist_norms
+            
+            similarities = hist_normalized @ event_norm
+            max_similarity = float(np.max(similarities))
+            
+            novelty_scores[idx] = 1.0 - max(0.0, min(1.0, max_similarity))
+        
+        return novelty_scores
+    
+    def _reindex_events_to_store(self) -> int:
+        """重新索引事件到EmbeddingService的向量存储
+        
+        在从存档加载后调用，确保事件搜索功能正常工作。
+        
+        Returns:
+            索引的事件数量
+        """
+        events_with_embedding = [
+            e for e in self._events if e.embedding is not None
+        ]
+        
+        if not events_with_embedding:
+            return 0
+        
+        events_to_index = [
+            {
+                "id": e.id,
+                "title": e.title,
+                "description": e.description,
+                "metadata": {
+                    "turn_index": e.turn_index,
+                    "event_type": e.event_type,
+                    "severity": e.severity,
+                }
+            }
+            for e in events_with_embedding
+        ]
+        
+        try:
+            count = self.embeddings.index_events_batch(events_to_index)
+            logger.info(f"[NarrativeEngine] 重新索引 {count} 个事件")
+            return count
+        except Exception as e:
+            logger.warning(f"[NarrativeEngine] 重新索引事件失败: {e}")
+            return 0
 
     def find_similar_events(
         self,
@@ -190,35 +325,39 @@ class NarrativeEngine:
         Returns:
             [(事件, 相似度), ...]
         """
-        # 获取查询向量
+        # 获取查询文本
         if isinstance(query, EventRecord):
-            if query.embedding is None:
-                return []
-            query_vec = query.embedding
+            query_text = f"{query.title}. {query.description}"
             current_turn = query.turn_index
         else:
-            query_vec = np.array(self.embeddings.embed_single(query))
+            query_text = query
             current_turn = max((e.turn_index for e in self._events), default=0)
         
-        query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-8)
+        # 使用向量索引搜索
+        search_results = self.embeddings.search_events(query_text, top_k * 2, threshold=0.0)
+        
+        # 构建事件 ID 到对象的映射
+        event_map = {e.id: e for e in self._events}
         
         results = []
-        for event in self._events:
-            # 过滤条件
-            if event.embedding is None:
+        for r in search_results:
+            event_id = int(r.id) if isinstance(r.id, str) else r.id
+            event = event_map.get(event_id)
+            if event is None:
                 continue
+            
+            # 过滤条件
             if exclude_recent and event.turn_index > current_turn - exclude_recent:
                 continue
             if event_type and event.event_type != event_type:
                 continue
             
-            # 计算相似度
-            event_norm = event.embedding / (np.linalg.norm(event.embedding) + 1e-8)
-            similarity = float(np.dot(query_norm, event_norm))
-            results.append((event, similarity))
+            results.append((event, r.score))
+            
+            if len(results) >= top_k:
+                break
         
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[:top_k]
+        return results
 
     async def generate_turn_narrative(
         self,
@@ -465,7 +604,11 @@ class NarrativeEngine:
         }
 
     def import_from_save(self, data: dict[str, Any]) -> None:
-        """从存档导入事件数据"""
+        """从存档导入事件数据
+        
+        【优化】除了恢复事件数据，还要重新索引到EmbeddingService，
+        确保搜索功能正常工作。
+        """
         if not data or "events" not in data:
             return
         
@@ -489,6 +632,9 @@ class NarrativeEngine:
             self._events.append(event)
         
         logger.info(f"从存档导入 {len(self._events)} 个事件记录")
+        
+        # 【优化】重新索引事件到EmbeddingService
+        self._reindex_events_to_store()
 
     def get_event_stats(self) -> dict[str, Any]:
         """获取事件统计"""

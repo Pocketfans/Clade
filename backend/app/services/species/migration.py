@@ -26,26 +26,31 @@ class MigrationAdvisor:
     """
 
     def __init__(self, 
-                 pressure_migration_threshold: float = 0.35,  # 降低压力驱动阈值
-                 saturation_threshold: float = 0.9,          # 降低资源饱和阈值
-                 overflow_growth_threshold: float = 1.2,     # 降低溢出增长阈值
-                 overflow_pressure_threshold: float = 0.7,   # 降低溢出资源压力阈值
-                 min_population: int = 500,
-                 prey_scarcity_threshold: float = 0.3,       # 猎物稀缺阈值（触发追踪迁徙）
-                 enable_actual_migration: bool = True) -> None:  # P1: 改为默认执行迁徙
+                 pressure_migration_threshold: float = 0.25,  # 【修复】从0.35降到0.25，更容易触发
+                 saturation_threshold: float = 0.85,          # 【修复】从0.9降到0.85
+                 overflow_growth_threshold: float = 1.15,     # 【修复】从1.2降到1.15
+                 overflow_pressure_threshold: float = 0.6,    # 【修复】从0.7降到0.6
+                 min_population: int = 100,                   # 【修复】从500降到100，微生物更容易迁徙
+                 prey_scarcity_threshold: float = 0.3,        # 猎物稀缺阈值（触发追踪迁徙）
+                 chronic_decline_threshold: float = 0.15,     # 【新增】慢性衰退阈值
+                 chronic_decline_turns: int = 2,              # 【新增】触发慢性衰退迁徙的连续回合数
+                 enable_actual_migration: bool = True) -> None:
         """初始化迁移顾问
         
+        【平衡修复】降低所有迁徙阈值，增加慢性衰退迁徙机制
+        
         调整后的逻辑：
-        - 压力驱动（逃离）：降低门槛(35%)，更容易触发
-        - 资源饱和（扩散）：降低门槛(0.9)，鼓励早期扩散
-        - 人口溢出（扩张）：降低门槛(120%)，鼓励种群扩张
-        - 猎物追踪（新增）：消费者追踪猎物分布
+        - 压力驱动（逃离）：门槛25%，物种开始死亡就考虑迁徙
+        - 资源饱和（扩散）：门槛0.85，鼓励早期扩散
+        - 人口溢出（扩张）：门槛115%，轻微增长就扩张
+        - 猎物追踪：消费者追踪猎物分布
+        - 【新增】慢性衰退迁徙：连续多回合死亡率>繁殖率时触发
         
         Args:
             prey_scarcity_threshold: 猎物稀缺阈值，当低于此值时触发追踪迁徙
-            enable_actual_migration: P1改进 - 是否实际执行迁徙（默认True）
-                True: 生成建议并通过habitat_manager实际修改栖息地分布
-                False: 仅生成建议（兼容旧系统）
+            chronic_decline_threshold: 慢性衰退阈值（死亡率），超过此值开始计数
+            chronic_decline_turns: 连续多少回合慢性衰退触发生存迁徙
+            enable_actual_migration: 是否实际执行迁徙
         """
         self.pressure_migration_threshold = pressure_migration_threshold
         self.saturation_threshold = saturation_threshold
@@ -53,13 +58,18 @@ class MigrationAdvisor:
         self.overflow_pressure_threshold = overflow_pressure_threshold
         self.min_population = min_population
         self.prey_scarcity_threshold = prey_scarcity_threshold
+        self.chronic_decline_threshold = chronic_decline_threshold
+        self.chronic_decline_turns = chronic_decline_turns
         self.enable_actual_migration = enable_actual_migration
         
-        # 【新增】地块死亡率数据缓存
+        # 地块死亡率数据缓存
         self._tile_mortality_cache: dict[str, dict[int, float]] = {}  # {lineage_code: {tile_id: death_rate}}
         
-        # 【新增】猎物密度数据缓存（用于消费者追踪猎物）
+        # 猎物密度数据缓存（用于消费者追踪猎物）
         self._prey_density_cache: dict[str, float] = {}  # {lineage_code: prey_density}
+        
+        # 【新增】慢性衰退追踪（连续死亡率记录）
+        self._decline_streak: dict[str, int] = {}  # {lineage_code: consecutive_decline_turns}
     
     def set_tile_mortality_data(
         self, 
@@ -95,6 +105,39 @@ class MigrationAdvisor:
         """清空地块死亡率缓存（每回合开始时调用）"""
         self._tile_mortality_cache.clear()
         self._prey_density_cache.clear()
+        # 注意：不清空 _decline_streak，需要跨回合追踪
+    
+    def clear_all_caches(self) -> None:
+        """清空所有缓存（存档切换时调用，确保数据隔离）"""
+        self._tile_mortality_cache.clear()
+        self._prey_density_cache.clear()
+        self._decline_streak.clear()
+    
+    def update_decline_streak(self, lineage_code: str, death_rate: float, growth_rate: float) -> None:
+        """更新物种的慢性衰退计数
+        
+        当死亡率超过阈值且大于繁殖恢复率时，计数+1
+        否则计数归零
+        
+        Args:
+            lineage_code: 物种谱系编码
+            death_rate: 本回合死亡率
+            growth_rate: 本回合繁殖增长率（存活后的增长倍数）
+        """
+        # 判断是否处于衰退：死亡率 > 阈值 且 死亡 > 繁殖恢复
+        is_declining = (
+            death_rate >= self.chronic_decline_threshold and 
+            (1.0 - death_rate) * growth_rate < 1.0  # 净增长 < 1 意味着在衰退
+        )
+        
+        if is_declining:
+            self._decline_streak[lineage_code] = self._decline_streak.get(lineage_code, 0) + 1
+        else:
+            self._decline_streak[lineage_code] = 0
+    
+    def get_decline_streak(self, lineage_code: str) -> int:
+        """获取物种的连续衰退回合数"""
+        return self._decline_streak.get(lineage_code, 0)
     
     def _analyze_tile_mortality_gradient(self, lineage_code: str) -> tuple[float, str, str]:
         """分析物种在各地块的死亡率梯度
@@ -137,10 +180,11 @@ class MigrationAdvisor:
     ) -> list[MigrationEvent]:
         """基于规则生成迁徙建议。
         
-        【核心改进】消费者追踪猎物 + 地块级死亡率差异 + 迁徙冷却：
+        【平衡修复】放宽迁徙条件，增加慢性衰退迁徙：
         - 类型-1（最高优先级）：猎物追踪迁徙 - 消费者追踪猎物密集区域
+        - 类型-0.5（新增）：慢性衰退迁徙 - 连续多回合衰退时触发生存迁徙
         - 类型0：地块梯度迁徙 - 从高死亡率地块迁往低死亡率地块
-        - 类型1：压力驱动迁徙 - 死亡率高 + 环境压力
+        - 类型1：压力驱动迁徙 - 死亡率达阈值（无需major_events）
         - 类型2：资源饱和扩散 - 资源压力高 + 种群稳定
         - 类型3：人口溢出 - 种群暴涨 + 资源不足
         
@@ -159,12 +203,13 @@ class MigrationAdvisor:
             cooldown_species = set()
         
         events: list[MigrationEvent] = []
-        has_major_pressure = len(major_events) > 0 or len(pressures) > 0
+        # 【修复】不再强制要求major_events，任何压力都可以触发迁徙
+        # has_major_pressure = len(major_events) > 0 or len(pressures) > 0
         
         for result in species:
             lineage_code = result.species.lineage_code
             
-            # 【新增】跳过处于迁徙冷却期的物种
+            # 跳过处于迁徙冷却期的物种
             if lineage_code in cooldown_species:
                 continue
             
@@ -177,9 +222,17 @@ class MigrationAdvisor:
             trophic_level = getattr(sp, 'trophic_level', 1.0)
             is_consumer = trophic_level >= 2.0  # T2+ 是消费者
             
+            # 【体型自适应】微生物的最小种群要求更低
+            body_length = sp.morphology_stats.get("body_length_cm", 1.0)
+            effective_min_pop = self.min_population
+            if body_length < 0.1:  # 微生物
+                effective_min_pop = max(10, self.min_population // 10)
+            elif body_length < 1.0:  # 小型生物
+                effective_min_pop = max(50, self.min_population // 5)
+            
             # 【最高优先级】类型-1：猎物追踪迁徙
             # 消费者（T2+）当猎物稀缺时，主动追踪猎物密集区域
-            if is_consumer and result.survivors >= self.min_population:
+            if is_consumer and result.survivors >= effective_min_pop:
                 prey_density = self._prey_density_cache.get(lineage_code, 1.0)
                 
                 # 当猎物密度低于阈值时，触发追踪迁徙
@@ -189,12 +242,25 @@ class MigrationAdvisor:
                         result, prey_density
                     )
             
-            # 【新增】类型0：地块梯度迁徙
+            # 【新增】类型-0.5：慢性衰退迁徙（生存本能）
+            # 当物种连续多回合处于衰退状态时，触发生存迁徙
+            if not migration_type:
+                decline_streak = self.get_decline_streak(lineage_code)
+                if decline_streak >= self.chronic_decline_turns and result.survivors >= effective_min_pop:
+                    migration_type = "survival_migration"
+                    origin = "当前衰退栖息地"
+                    destination = "寻找新的生存空间"
+                    rationale = (
+                        f"种群已连续{decline_streak}回合衰退（死亡率{result.death_rate:.1%}），"
+                        f"触发生存迁徙以寻找更适宜的栖息地"
+                    )
+            
+            # 类型0：地块梯度迁徙
             # 当不同地块的死亡率差异显著时，从高死亡率地块迁往低死亡率地块
             if not migration_type:
                 gradient, high_area, low_area = self._analyze_tile_mortality_gradient(lineage_code)
-                if gradient >= 0.20 and result.survivors >= self.min_population:
-                    # 死亡率梯度超过20%，触发地块梯度迁徙
+                # 【修复】降低梯度阈值从0.20到0.15
+                if gradient >= 0.15 and result.survivors >= effective_min_pop:
                     migration_type = "tile_gradient"
                     origin = high_area
                     destination = low_area
@@ -202,7 +268,7 @@ class MigrationAdvisor:
             
             # 类型2：资源饱和扩散
             if not migration_type and result.resource_pressure > self.saturation_threshold:
-                if result.survivors >= self.min_population:
+                if result.survivors >= effective_min_pop:
                     migration_type = "saturation_dispersal"
                     origin, destination, rationale = self._determine_migration(
                         result, pressures, major_events, migration_type
@@ -212,15 +278,16 @@ class MigrationAdvisor:
             if not migration_type and result.initial_population > 0:
                 growth_rate = result.survivors / result.initial_population
                 if growth_rate > self.overflow_growth_threshold and result.resource_pressure > self.overflow_pressure_threshold:
-                    if result.survivors >= self.min_population:
+                    if result.survivors >= effective_min_pop:
                         migration_type = "population_overflow"
                         origin, destination, rationale = self._determine_migration(
                             result, pressures, major_events, migration_type
                         )
             
             # 类型1：压力驱动迁徙
+            # 【修复】移除 has_major_pressure 的硬性要求，只要死亡率达标就触发
             if not migration_type and result.death_rate >= self.pressure_migration_threshold:
-                if result.survivors >= self.min_population and has_major_pressure:
+                if result.survivors >= effective_min_pop:
                     migration_type = "pressure_driven"
                     origin, destination, rationale = self._determine_migration(
                         result, pressures, major_events, migration_type

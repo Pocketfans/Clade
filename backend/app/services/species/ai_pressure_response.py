@@ -168,6 +168,153 @@ class AIPressureResponseService:
         """清空回合缓存（每回合开始时调用）"""
         self._processed_this_turn.clear()
     
+    def clear_all_caches(self) -> None:
+        """清空所有缓存（存档切换时调用）
+        
+        【重要】切换存档时必须调用此方法，否则旧存档的
+        连续危险回合数会影响新存档的物种状态判断。
+        """
+        self._consecutive_danger.clear()
+        self._processed_this_turn.clear()
+    
+    def _generate_rule_based_fallback(
+        self,
+        species: 'Species',
+        base_death_rate: float,
+        environment_pressure: dict[str, float],
+    ) -> SpeciesStatusEval:
+        """【优化】AI调用失败时，基于规则生成合理的评估结果
+        
+        这个智能fallback确保即使AI失败，物种也能获得合理的评估，
+        而不是直接使用未修正的规则引擎结果。
+        
+        Args:
+            species: 目标物种
+            base_death_rate: 规则引擎计算的基础死亡率
+            environment_pressure: 环境压力字典
+            
+        Returns:
+            基于规则生成的评估结果
+        """
+        traits = species.abstract_traits or {}
+        consecutive = self._consecutive_danger.get(species.lineage_code, 0)
+        
+        # ========== 1. 计算智能修正系数 ==========
+        # 基于物种特质与环境压力的匹配度
+        modifier = 1.0
+        key_factors = []
+        
+        # 温度适应性
+        temp_pressure = environment_pressure.get("temperature", 0)
+        if temp_pressure < -2:  # 寒冷
+            cold_resist = traits.get("耐寒性", 5) / 15.0
+            if cold_resist > 0.6:
+                modifier *= 0.85
+                key_factors.append(f"耐寒能力强({traits.get('耐寒性', 5):.0f})")
+            elif cold_resist < 0.3:
+                modifier *= 1.15
+                key_factors.append("对寒冷敏感")
+        elif temp_pressure > 2:  # 炎热
+            heat_resist = traits.get("耐热性", 5) / 15.0
+            if heat_resist > 0.6:
+                modifier *= 0.85
+                key_factors.append(f"耐热能力强({traits.get('耐热性', 5):.0f})")
+            elif heat_resist < 0.3:
+                modifier *= 1.15
+                key_factors.append("对高温敏感")
+        
+        # 干旱/湿度适应性
+        drought_pressure = environment_pressure.get("drought", 0)
+        if drought_pressure > 2:
+            drought_resist = traits.get("耐旱性", 5) / 15.0
+            if drought_resist > 0.6:
+                modifier *= 0.90
+                key_factors.append("抗旱能力强")
+            elif drought_resist < 0.3:
+                modifier *= 1.20
+                key_factors.append("对干旱敏感")
+        
+        # 运动能力影响逃避能力
+        mobility = traits.get("运动能力", 5) / 15.0
+        if mobility > 0.7 and base_death_rate > 0.3:
+            modifier *= 0.95
+            key_factors.append("高机动性有助于逃避")
+        
+        # 繁殖速度提供恢复潜力
+        repro_speed = traits.get("繁殖速度", 5) / 15.0
+        if repro_speed > 0.7:
+            modifier *= 0.95
+            key_factors.append("快速繁殖有助于恢复")
+        
+        # 限制修正系数范围
+        modifier = max(0.5, min(1.5, modifier))
+        
+        # ========== 2. 判断紧急状态 ==========
+        if base_death_rate > 0.70 or consecutive >= 4:
+            is_emergency = True
+            emergency_level = "critical"
+        elif base_death_rate > 0.50 or consecutive >= 2:
+            is_emergency = True
+            emergency_level = "warning"
+        else:
+            is_emergency = False
+            emergency_level = "stable"
+        
+        # ========== 3. 确定应对策略 ==========
+        if base_death_rate > 0.60:
+            if mobility > 0.5:
+                strategy = "逃避"
+            elif repro_speed > 0.6:
+                strategy = "忍耐"
+            else:
+                strategy = "衰退"
+        elif base_death_rate > 0.30:
+            strategy = "适应"
+        else:
+            strategy = "对抗" if mobility > 0.5 else "适应"
+        
+        # ========== 4. 判断是否需要迁徙 ==========
+        should_migrate = base_death_rate > 0.50 and mobility > 0.4
+        migration_urgency = "none"
+        if should_migrate:
+            if base_death_rate > 0.70:
+                migration_urgency = "immediate"
+            elif base_death_rate > 0.50:
+                migration_urgency = "next_turn"
+            else:
+                migration_urgency = "optional"
+        
+        # ========== 5. 生成简短叙事 ==========
+        if is_emergency:
+            narrative = f"{species.common_name}正面临{emergency_level}级生存危机，采取{strategy}策略应对。"
+        elif base_death_rate > 0.30:
+            narrative = f"{species.common_name}在当前环境压力下表现出{strategy}倾向。"
+        else:
+            narrative = f"{species.common_name}种群状态相对稳定。"
+        
+        logger.info(
+            f"[规则Fallback] {species.common_name}: "
+            f"modifier={modifier:.2f}, strategy={strategy}, emergency={emergency_level}"
+        )
+        
+        return SpeciesStatusEval(
+            lineage_code=species.lineage_code,
+            survival_modifier=modifier,
+            response_strategy=strategy,
+            key_factors=key_factors[:3],  # 最多3个关键因素
+            population_behavior="迁徙准备" if should_migrate else "normal",
+            is_emergency=is_emergency,
+            emergency_level=emergency_level,
+            emergency_action={
+                "primary_strategy": "migration" if should_migrate else "behavior_change",
+                "action_detail": f"基于规则评估的{strategy}策略",
+                "expected_benefit": 0.1 if is_emergency else 0.0,
+            },
+            should_migrate=should_migrate,
+            migration_urgency=migration_urgency,
+            narrative=narrative,
+        )
+    
     # ==================== 【新】综合状态评估 ====================
     
     async def evaluate_species_status(
@@ -245,8 +392,13 @@ class AIPressureResponseService:
             return result
             
         except Exception as e:
-            logger.warning(f"[综合评估] {species.common_name} 评估失败: {e}")
-            return None
+            logger.warning(f"[综合评估] {species.common_name} AI评估失败: {e}，使用规则fallback")
+            # 【优化】AI失败时使用智能规则fallback，确保物种仍能获得评估
+            fallback_result = self._generate_rule_based_fallback(
+                species, base_death_rate, environment_pressure
+            )
+            self._processed_this_turn.add(species.lineage_code)
+            return fallback_result
     
     async def batch_evaluate_species_status(
         self,
@@ -346,12 +498,30 @@ class AIPressureResponseService:
             for code in results:
                 self._processed_this_turn.add(code)
             
+            # 【优化】检查是否有遗漏的物种，为它们生成fallback
+            missing_species = [sp for sp in species_to_eval if sp.lineage_code not in results]
+            if missing_species:
+                logger.info(f"[综合评估] AI返回遗漏 {len(missing_species)} 个物种，生成规则fallback")
+                for sp in missing_species:
+                    base_dr = mortality_results.get(sp.lineage_code, 0.0)
+                    fallback = self._generate_rule_based_fallback(sp, base_dr, environment_pressure)
+                    results[sp.lineage_code] = fallback
+                    self._processed_this_turn.add(sp.lineage_code)
+            
             logger.info(f"[综合评估] 批量评估完成: {len(results)} 个物种")
             return results
             
         except Exception as e:
-            logger.warning(f"[综合评估] 批量评估失败: {e}")
-            return {}
+            logger.warning(f"[综合评估] 批量AI评估失败: {e}，为所有物种生成规则fallback")
+            # 【优化】批量失败时，为所有物种生成规则fallback
+            results = {}
+            for sp in species_to_eval:
+                base_dr = mortality_results.get(sp.lineage_code, 0.0)
+                fallback = self._generate_rule_based_fallback(sp, base_dr, environment_pressure)
+                results[sp.lineage_code] = fallback
+                self._processed_this_turn.add(sp.lineage_code)
+            logger.info(f"[综合评估] 规则fallback生成完成: {len(results)} 个物种")
+            return results
     
     def _prepare_status_eval_params(
         self,
@@ -592,15 +762,74 @@ class AIPressureResponseService:
         
         # 合并结果
         all_results = []
+        failed_batches_data = []
         for i, result in enumerate(batch_results):
             if isinstance(result, Exception):
                 logger.warning(f"[物种叙事] 批次{i+1}失败: {result}")
+                failed_batches_data.extend(batches[i])  # 收集失败批次的数据
                 continue
             if result:
                 all_results.extend(result)
         
+        # 【优化】为失败批次的物种生成规则fallback叙事
+        if failed_batches_data:
+            fallback_narratives = self._generate_rule_based_narratives(failed_batches_data)
+            all_results.extend(fallback_narratives)
+            logger.info(f"[物种叙事] 为 {len(fallback_narratives)} 个物种生成规则fallback叙事")
+        
         logger.info(f"[物种叙事] 分批并行完成: {len(all_results)} 个叙事 ({len(batches)} 批次)")
         return all_results
+    
+    def _generate_rule_based_narratives(
+        self,
+        species_data: list[dict],
+    ) -> list[SpeciesNarrativeResult]:
+        """【优化】为AI失败的物种生成规则基础叙事
+        
+        确保即使AI不可用，重要物种仍能获得叙事描述。
+        """
+        results = []
+        
+        for item in species_data:
+            sp = item["species"]
+            tier = item.get("tier", "focus")
+            dr = item.get("death_rate", 0.0)
+            status_eval = item.get("status_eval")
+            
+            # 根据死亡率确定情绪
+            if dr > 0.70:
+                mood = "critical"
+                headline = "危在旦夕"
+            elif dr > 0.50:
+                mood = "declining"
+                headline = "艰难求存"
+            elif dr > 0.30:
+                mood = "struggling"
+                headline = "应对压力"
+            elif dr < 0.10:
+                mood = "thriving"
+                headline = "繁荣发展"
+            else:
+                mood = "adapting"
+                headline = "稳步适应"
+            
+            # 生成基本叙事
+            if status_eval:
+                strategy = status_eval.response_strategy
+                narrative = f"{sp.common_name}正采取{strategy}策略应对当前环境。本回合死亡率{dr:.1%}。"
+            else:
+                narrative = f"{sp.common_name}在当前回合死亡率为{dr:.1%}，种群状态{mood}。"
+            
+            results.append(SpeciesNarrativeResult(
+                lineage_code=sp.lineage_code,
+                tier=tier,
+                headline=headline,
+                narrative=narrative,
+                mood=mood,
+                highlight_event="",
+            ))
+        
+        return results
     
     async def _generate_narrative_batch(
         self,

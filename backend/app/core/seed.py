@@ -16,6 +16,11 @@ A_SCENARIO = [
         "genus_code": "A",
         "habitat_type": "marine",  # 海洋生物
         "trophic_level": 1.0,  # T1: 生产者
+        "diet_type": "autotroph",  # 自养
+        # 【新增】植物演化系统字段
+        "life_form_stage": 1,  # 单细胞真核藻类
+        "growth_form": "aquatic",  # 水生
+        "achieved_milestones": ["first_eukaryote"],  # 已达成：真核化
         "description": (
             "单细胞光合生物，球形，体长8微米。细胞壁透明，内含叶绿体进行光合作用。"
             "漂浮于浅海上层水域，通过二分裂快速繁殖。自养型，固定二氧化碳生产有机物。"
@@ -34,24 +39,34 @@ A_SCENARIO = [
             "metabolic_rate": 5.0,
         },
         "abstract_traits": {
+            # 共享特质
             "耐寒性": 1.0,
             "耐热性": 6.0,
             "耐旱性": 1.0,
             "耐盐性": 4.0,
-            "耐酸碱性": 1.0,
             "光照需求": 5.0,
-            "氧气需求": 4.0,
             "繁殖速度": 8.0,  # 提高繁殖速度，支撑食物链
-            "运动能力": 1.0,
-            "社会性": 1.0,
+            # 植物专属特质
+            "光合效率": 5.0,
+            "固碳能力": 5.0,
+            "多细胞程度": 1.0,  # 单细胞
+            "保水能力": 1.0,  # 水生不需要保水
+            "散布能力": 3.0,
         },
         "organs": {
-            "metabolic": {
+            "photosynthetic": {
                 "type": "叶绿体",
                 "parameters": {
-                    "count": 1,
                     "efficiency": 1.0,
-                    "photosynthetic_rate": 1.0
+                },
+                "acquired_turn": 0,
+                "is_active": True
+            },
+            "protection": {
+                "type": "粘液层",
+                "parameters": {
+                    "uv_resist": 0.5,
+                    "drought_resist": 0.3
                 },
                 "acquired_turn": 0,
                 "is_active": True
@@ -73,6 +88,10 @@ A_SCENARIO = [
         "genus_code": "B",
         "habitat_type": "marine",  # 海洋生物
         "trophic_level": 2.0,  # T2: 初级消费者（吃微藻的浮游动物）
+        "diet_type": "herbivore",  # 【新增】草食性
+        # 【关键修复】建立食物链关系
+        "prey_species": ["A1"],  # 捕食微藻
+        "prey_preferences": {"A1": 1.0},  # 100%依赖微藻
         "description": (
             "单细胞异养生物，梨形，体长15微米。前端1-2根鞭毛用于游动和捕食。"
             "主动捕食微藻和有机碎屑，通过鞭毛将食物送入胞口。纵向二分裂繁殖。"
@@ -94,12 +113,10 @@ A_SCENARIO = [
             "耐热性": 4.0,
             "耐旱性": 1.0,
             "耐盐性": 4.0,
-            "耐酸碱性": 3.0,
-            "光照需求": 2.0,
-            "氧气需求": 4.0,
+            "光照需求": 2.0,  # 需要光照来追踪微藻
             "繁殖速度": 5.0,  # 中等繁殖速度
             "运动能力": 4.0,
-            "社会性": 1.0,
+            "攻击性": 3.0,  # 捕食能力
         },
         "organs": {
             "locomotion": {
@@ -138,6 +155,11 @@ A_SCENARIO = [
         "genus_code": "C",
         "habitat_type": "deep_sea",  # 深海生物
         "trophic_level": 1.0,  # T1: 生产者（化能自养，深海食物链基础）
+        "diet_type": "autotroph",  # 自养
+        # 【新增】植物演化系统字段（原核生物，尚未真核化）
+        "life_form_stage": 0,  # 原核光合/化能生物
+        "growth_form": "aquatic",  # 水生
+        "achieved_milestones": [],  # 无里程碑（原核阶段）
         "description": (
             "单细胞化能合成细菌，杆状或球状，体长5微米。细胞壁坚固，抵抗极端环境。"
             "氧化硫化氢获取能量，合成有机物。二分裂繁殖，生长慢但生命力强。"
@@ -155,30 +177,39 @@ A_SCENARIO = [
             "metabolic_rate": 1.5,
         },
         "abstract_traits": {
+            # 共享特质
             "耐寒性": 5.0,
             "耐热性": 5.0,
             "耐旱性": 4.0,
             "耐盐性": 4.0,
-            "耐酸碱性": 5.0,
-            "光照需求": 0.0,  # 不需要光照
-            "氧气需求": 1.0,
-            "繁殖速度": 4.0,  # 提高繁殖速度
-            "运动能力": 1.0,
-            "社会性": 1.0
+            "光照需求": 0.0,  # 不需要光照（化能合成）
+            "繁殖速度": 4.0,
+            # 植物专属特质（化能合成版本）
+            "光合效率": 0.0,  # 化能合成，无光合
+            "固碳能力": 4.0,  # 仍可固碳
+            "多细胞程度": 0.5,  # 原核单细胞
+            "保水能力": 2.0,
         },
         "organs": {
-            "metabolic": {
-                "type": "化能合成系统",
+            "photosynthetic": {
+                "type": "原始色素体",
                 "parameters": {
-                    "efficiency": 1.0,
-                    "substrate": "H2S",
-                    "energy_yield": 0.8
+                    "efficiency": 0.0,  # 化能合成不用光
+                },
+                "acquired_turn": 0,
+                "is_active": False  # 未激活
+            },
+            "protection": {
+                "type": "细胞壁加厚",
+                "parameters": {
+                    "uv_resist": 0.8,
+                    "drought_resist": 0.5
                 },
                 "acquired_turn": 0,
                 "is_active": True
             }
         },
-        "capabilities": ["化能合成", "嗜极生物"],
+        "capabilities": ["化能合成", "嗜极生物", "自养"],
         "hidden_traits": {
             "gene_diversity": 0.65,
             "environment_sensitivity": 0.3,

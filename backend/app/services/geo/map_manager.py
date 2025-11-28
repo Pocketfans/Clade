@@ -27,10 +27,20 @@ from .map_coloring import ViewMode, map_coloring_service
 class MapStateManager:
     """负责初始化网格地图并记录物种在格子中的分布。"""
 
-    def __init__(self, width: int, height: int) -> None:
+    def __init__(self, width: int, height: int, primordial_mode: bool = True) -> None:
+        """初始化地图状态管理器
+        
+        Args:
+            width: 地图宽度（格子数）
+            height: 地图高度（格子数）
+            primordial_mode: 是否使用原始地质模式（28亿年前无植物）
+                - True: 陆地覆盖物为裸地/沙漠/冰川，无任何植被
+                - False: 根据气候生成正常植被覆盖
+        """
         self.width = width
         self.height = height
         self.repo = environment_repository
+        self.primordial_mode = primordial_mode  # 原始地质模式
 
     def ensure_initialized(self, map_seed: int | None = None) -> None:
         logger.debug(f"[地图管理器] 确保地图列已存在...")
@@ -117,7 +127,13 @@ class MapStateManager:
                 # 这样在相同种子下会得到相同结果
                 coord_hash = (tile.x * 73856093) ^ (tile.y * 19349663)
                 pseudo_rand = (coord_hash % 1000) / 1000.0
-                tile.cover = self._infer_cover(new_biome, pseudo_rand)
+                # 传入气候参数以正确处理极地冰盖
+                tile.cover = self._infer_cover(
+                    new_biome, pseudo_rand,
+                    temperature=tile.temperature,
+                    humidity=tile.humidity,
+                    elevation=tile.elevation
+                )
                 updated_tiles.append(tile)
         
         if updated_tiles:
@@ -165,10 +181,14 @@ class MapStateManager:
             # 只处理存活的物种，跳过灭绝物种
             if getattr(species, 'status', 'alive') != 'alive':
                 continue
-                
+            
+            # 【修复】即使 population 为 0 或未设置，也应该初始化栖息地分布
+            # 这样后续回合能正确识别该物种
             total = int(species.morphology_stats.get("population", 0) or 0)
             if total <= 0:
-                continue
+                # 使用最小种群值以便创建栖息地记录
+                total = 1000
+                logger.warning(f"[地图管理器] {species.common_name} 种群为0，使用默认值1000初始化栖息地")
             
             # 强制重算模式：为所有物种计算栖息地分布
             logger.debug(f"[地图管理器] 初始化 {species.common_name} 的栖息地分布")
@@ -365,8 +385,9 @@ class MapStateManager:
             biome = tile.biome.lower()
             
             if habitat_type == "marine":
-                # 海洋生物：浅海和中层海域
-                if "浅海" in biome or "中层" in biome:
+                # 海洋生物：浅海、深海和海岸（不包括湖泊）
+                # 【修复】添加更多海洋 biome 类型的匹配
+                if any(t in biome for t in ["浅海", "深海", "海岸", "中层"]) and not getattr(tile, 'is_lake', False):
                     filtered.append(tile)
             
             elif habitat_type == "deep_sea":
@@ -707,13 +728,20 @@ class MapStateManager:
                 # 4. 将排名映射为具体海拔 (米)
                 elevation = self._rank_to_elevation(rank, SEA_LEVEL_THRESHOLD)
                 
-                # 5. 基于新海拔计算环境参数
-                temperature = self._temperature(latitude, elevation)
-                humidity = self._humidity(latitude, longitude)
+                # 5. 基于新海拔计算环境参数（使用改进的气候模型）
+                temperature = self._temperature(latitude, elevation, longitude)
+                humidity = self._humidity(latitude, longitude, elevation)
                 # 资源计算需要考虑温度、海拔和湿度
                 resources = self._resources(temperature, elevation, humidity, latitude)
                 biome = self._infer_biome(temperature, humidity, elevation)
-                cover = self._infer_cover(biome, v_noise)
+                # 原始地质模式下，陆地覆盖物为裸地/沙漠/冰川/冰原
+                cover = self._infer_cover(
+                    biome, v_noise, 
+                    primordial=self.primordial_mode,
+                    temperature=temperature,
+                    humidity=humidity,
+                    elevation=elevation
+                )
                 offset = x - (y - (y & 1)) // 2
                 tiles.append(
                     MapTile(
@@ -732,7 +760,10 @@ class MapStateManager:
                     )
                 )
         
-        # 生成随机岛屿
+        # 生成内海、海湾和半岛
+        self._generate_coastal_features(tiles)
+        
+        # 生成随机岛屿（包括岛链、群岛等）
         self._generate_random_islands(tiles)
         
         # 优化海岸附近浅海区深度
@@ -750,141 +781,467 @@ class MapStateManager:
         
         return tiles
 
-    def _smooth_noise(self, noise_grid: np.ndarray) -> np.ndarray:
-        """简单的3x3均值滤波，使噪声稍微连续一些，形成自然的斑块。处理X轴循环。"""
-        h, w = noise_grid.shape
-        new_grid = np.zeros_like(noise_grid)
+    # ========================================================================
+    # 柏林噪声实现 (Perlin Noise)
+    # ========================================================================
+    
+    def _init_perlin_gradients(self, seed: int) -> np.ndarray:
+        """初始化柏林噪声的梯度向量表"""
+        np.random.seed(seed)
+        # 256个随机梯度向量
+        angles = np.random.uniform(0, 2 * math.pi, 256)
+        gradients = np.column_stack([np.cos(angles), np.sin(angles)])
+        return gradients
+    
+    def _perlin_noise_2d(self, x: np.ndarray, y: np.ndarray, 
+                         gradients: np.ndarray, wrap_x: bool = True) -> np.ndarray:
+        """
+        2D柏林噪声实现
         
-        # 1. X轴使用 wrap 模式填充 (处理左右循环)
-        x_padded = np.pad(noise_grid, ((0, 0), (1, 1)), mode='wrap')
+        Args:
+            x, y: 坐标网格 (已归一化到噪声空间)
+            gradients: 梯度向量表
+            wrap_x: X轴是否循环（地球是圆的）
         
-        # 2. Y轴使用 edge 模式填充 (处理上下边界)
-        padded = np.pad(x_padded, ((1, 1), (0, 0)), mode='edge')
+        Returns:
+            噪声值矩阵 (-1 到 1)
+        """
+        # 获取整数坐标
+        xi = x.astype(int)
+        yi = y.astype(int)
         
-        for y in range(h):
-            for x in range(w):
-                # 取周围 3x3 区域
-                # padded 的 (1,1) 对应原图 (0,0)
-                # 所以原图 (y, x) 对应 padded (y+1, x+1)
-                # 3x3 区域是 padded[y:y+3, x:x+3]
-                new_grid[y, x] = np.mean(padded[y:y+3, x:x+3])
-                
-        # 归一化回 0-1，因为均值会趋向于0.5
-        min_val, max_val = new_grid.min(), new_grid.max()
-        if max_val > min_val:
-            new_grid = (new_grid - min_val) / (max_val - min_val)
+        # 获取小数部分
+        xf = x - xi
+        yf = y - yi
+        
+        # 平滑插值函数 (6t^5 - 15t^4 + 10t^3)
+        def fade(t):
+            return t * t * t * (t * (t * 6 - 15) + 10)
+        
+        u = fade(xf)
+        v = fade(yf)
+        
+        # 获取四个角的梯度索引
+        def get_gradient_idx(ix, iy):
+            if wrap_x:
+                ix = ix % 256
+            else:
+                ix = np.clip(ix, 0, 255)
+            iy = np.clip(iy, 0, 255)
+            return (ix + iy * 17) % 256
+        
+        # 四个角的梯度
+        g00_idx = get_gradient_idx(xi, yi)
+        g10_idx = get_gradient_idx(xi + 1, yi)
+        g01_idx = get_gradient_idx(xi, yi + 1)
+        g11_idx = get_gradient_idx(xi + 1, yi + 1)
+        
+        # 计算点积
+        def dot_grid_gradient(grad_idx, dx, dy):
+            g = gradients[grad_idx]
+            return g[:, 0] * dx.flatten() + g[:, 1] * dy.flatten()
+        
+        n00 = dot_grid_gradient(g00_idx.flatten(), xf.flatten(), yf.flatten())
+        n10 = dot_grid_gradient(g10_idx.flatten(), (xf - 1).flatten(), yf.flatten())
+        n01 = dot_grid_gradient(g01_idx.flatten(), xf.flatten(), (yf - 1).flatten())
+        n11 = dot_grid_gradient(g11_idx.flatten(), (xf - 1).flatten(), (yf - 1).flatten())
+        
+        # 双线性插值
+        u_flat = u.flatten()
+        v_flat = v.flatten()
+        
+        nx0 = n00 * (1 - u_flat) + n10 * u_flat
+        nx1 = n01 * (1 - u_flat) + n11 * u_flat
+        result = nx0 * (1 - v_flat) + nx1 * v_flat
+        
+        return result.reshape(x.shape)
+    
+    def _fractal_noise(self, width: int, height: int, 
+                       octaves: int = 6, 
+                       persistence: float = 0.5,
+                       lacunarity: float = 2.0,
+                       base_scale: float = 4.0,
+                       seed: int = 0) -> np.ndarray:
+        """
+        分形噪声（多层柏林噪声叠加）
+        
+        Args:
+            width, height: 输出尺寸
+            octaves: 噪声层数（越多细节越丰富）
+            persistence: 每层振幅衰减系数
+            lacunarity: 每层频率放大系数
+            base_scale: 基础缩放
+            seed: 随机种子
+        
+        Returns:
+            噪声矩阵 (0 到 1)
+        """
+        gradients = self._init_perlin_gradients(seed)
+        
+        # 创建坐标网格
+        y_coords, x_coords = np.mgrid[0:height, 0:width].astype(float)
+        
+        result = np.zeros((height, width))
+        amplitude = 1.0
+        frequency = base_scale
+        max_value = 0.0
+        
+        for _ in range(octaves):
+            # 缩放坐标
+            scaled_x = x_coords * frequency / width
+            scaled_y = y_coords * frequency / height
             
-        return new_grid
+            # 生成噪声层
+            noise_layer = self._perlin_noise_2d(scaled_x, scaled_y, gradients, wrap_x=True)
+            
+            result += noise_layer * amplitude
+            max_value += amplitude
+            
+            amplitude *= persistence
+            frequency *= lacunarity
+        
+        # 归一化到 0-1
+        result = (result / max_value + 1) / 2
+        return np.clip(result, 0, 1)
+    
+    def _ridge_noise(self, width: int, height: int, 
+                     octaves: int = 4,
+                     base_scale: float = 3.0,
+                     seed: int = 0) -> np.ndarray:
+        """
+        脊线噪声 - 用于生成山脉
+        通过取柏林噪声的绝对值并反转，产生尖锐的脊线
+        """
+        gradients = self._init_perlin_gradients(seed)
+        y_coords, x_coords = np.mgrid[0:height, 0:width].astype(float)
+        
+        result = np.zeros((height, width))
+        amplitude = 1.0
+        frequency = base_scale
+        max_value = 0.0
+        
+        for i in range(octaves):
+            scaled_x = x_coords * frequency / width
+            scaled_y = y_coords * frequency / height
+            
+            noise_layer = self._perlin_noise_2d(scaled_x, scaled_y, gradients, wrap_x=True)
+            
+            # 脊线变换: 1 - |noise|
+            ridge_layer = 1.0 - np.abs(noise_layer)
+            # 锐化脊线
+            ridge_layer = ridge_layer ** 2
+            
+            result += ridge_layer * amplitude
+            max_value += amplitude
+            
+            amplitude *= 0.5
+            frequency *= 2.0
+        
+        return result / max_value
+    
+    def _smooth_noise(self, noise_grid: np.ndarray, iterations: int = 1) -> np.ndarray:
+        """高斯模糊平滑噪声，处理X轴循环"""
+        result = noise_grid.copy()
+        
+        for _ in range(iterations):
+            # X轴循环填充
+            padded = np.pad(result, ((1, 1), (1, 1)), mode='wrap')
+            padded[:, 0] = padded[:, -2]
+            padded[:, -1] = padded[:, 1]
+            # Y轴边缘填充
+            padded[0, :] = padded[1, :]
+            padded[-1, :] = padded[-2, :]
+            
+            # 3x3 高斯核
+            kernel = np.array([[1, 2, 1], [2, 4, 2], [1, 2, 1]]) / 16.0
+            
+            new_result = np.zeros_like(result)
+            h, w = result.shape
+            for y in range(h):
+                for x in range(w):
+                    region = padded[y:y+3, x:x+3]
+                    new_result[y, x] = np.sum(region * kernel)
+            
+            result = new_result
+        
+        # 归一化
+        min_val, max_val = result.min(), result.max()
+        if max_val > min_val:
+            result = (result - min_val) / (max_val - min_val)
+        
+        return result
 
+    # ========================================================================
+    # 拟真地图生成
+    # ========================================================================
+    
     def _generate_earth_like_height_map(self) -> np.ndarray:
         """
-        使用高斯核模拟大陆板块，叠加噪声，并转化为全局百分位排名。
-        改进版：
-        1. 使用坐标扭曲 (Domain Warping) 让大陆形状更不规则
-        2. 增加脊线噪声 (Ridge Noise) 制造分散的山脉
-        3. 增加高频噪声让海岸线更破碎
+        生成拟真的地球高度图
+        
+        基于真实地球地理特征：
+        1. 构造板块模拟 - 大陆不是简单的圆形，而是复杂的多边形
+        2. 山脉沿板块边界分布 - 碰撞带形成山脉
+        3. 大陆架和大陆坡 - 海岸线向海洋的自然过渡
+        4. 岛弧和海沟 - 俯冲带特征
+        5. 洋中脊 - 海底山脉
         """
         width, height = self.width, self.height
-        # 初始化网格
-        grid = np.zeros((height, width), dtype=float)
         
-        # 0. 坐标扭曲 (Domain Warping)
-        # 让规则的坐标网格产生流动感，打破圆形的高斯分布
-        y_grid, x_grid = np.ogrid[:height, :width]
+        # 地图尺寸比例
+        # 128x40 ≈ 地球展开，每格约2.8°经度 × 4.5°纬度
         
-        # 扭曲参数
-        # 修正：warp_freq 必须是偶数，以保证 X 轴 wrap 时 cos 值的连续性
-        # cos(0) = 1, cos(2*pi) = 1. 如果 freq=2.5, cos(2.5*pi)=0 -> 断裂
-        warp_freq = 4.0 
-        warp_amp_x = width * 0.12
-        warp_amp_y = height * 0.12
+        # ================================================================
+        # 第一层：基础大陆轮廓（使用分形噪声）
+        # ================================================================
+        base_seed = random.randint(0, 99999)
         
-        # X轴偏移受Y影响，Y轴偏移受X影响（旋涡状）
-        warp_offset_x = np.sin(y_grid / height * warp_freq * math.pi) * warp_amp_x
-        warp_offset_y = np.cos(x_grid / width * warp_freq * math.pi) * warp_amp_y
+        # 低频噪声决定大陆位置
+        continental_noise = self._fractal_noise(
+            width, height,
+            octaves=4,
+            persistence=0.6,
+            lacunarity=2.0,
+            base_scale=3.0,  # 低频 = 大结构
+            seed=base_seed
+        )
         
-        # A. 随机放置 5-8 个“大陆核心”
-        num_continents = random.randint(5, 8)
-        for _ in range(num_continents):
+        # 中频噪声增加海岸线细节
+        coastal_detail = self._fractal_noise(
+            width, height,
+            octaves=5,
+            persistence=0.5,
+            lacunarity=2.2,
+            base_scale=8.0,  # 中频
+            seed=base_seed + 1
+        )
+        
+        # 高频噪声增加海岸线破碎
+        fine_detail = self._fractal_noise(
+            width, height,
+            octaves=4,
+            persistence=0.4,
+            lacunarity=2.5,
+            base_scale=20.0,  # 高频
+            seed=base_seed + 2
+        )
+        
+        # ================================================================
+        # 第二层：纬度权重（赤道附近更多陆地，极地较少）
+        # ================================================================
+        y_coords = np.arange(height)
+        # 纬度: 0=北极, height-1=南极, 中间=赤道
+        latitude_normalized = np.abs(y_coords / (height - 1) - 0.5) * 2  # 0=赤道, 1=极地
+        
+        # 陆地分布权重（赤道附近陆地更多）
+        # 真实地球：北半球陆地多于南半球，赤道附近有很多大陆
+        land_weight = np.zeros((height, width))
+        for y in range(height):
+            lat = latitude_normalized[y]
+            # 基础权重：赤道0.6，极地0.2
+            base_weight = 0.6 - lat * 0.4
+            # 北半球权重略高（模拟真实地球）
+            if y < height // 2:
+                base_weight += 0.1
+            land_weight[y, :] = base_weight
+        
+        # ================================================================
+        # 第三层：大陆核心（使用Voronoi思想）
+        # ================================================================
+        # 放置若干大陆种子点，形成大陆核心
+        num_major_continents = random.randint(5, 7)  # 主要大陆
+        num_minor_landmasses = random.randint(8, 12)  # 次要陆块
+        
+        continent_grid = np.zeros((height, width))
+        
+        # 主要大陆
+        for i in range(num_major_continents):
+            # 大陆中心位置
             cx = random.uniform(0, width)
+            # 避开极地
             cy = random.uniform(height * 0.15, height * 0.85)
             
-            # 半径随机性增大，长宽比更夸张
-            radius_x = random.uniform(width * 0.08, width * 0.25)
-            radius_y = random.uniform(height * 0.08, height * 0.25)
-            strength = random.uniform(1.2, 2.5)
+            # 大陆大小（较大）
+            size_x = random.uniform(width * 0.12, width * 0.25)
+            size_y = random.uniform(height * 0.15, height * 0.35)
+            strength = random.uniform(1.5, 2.5)
             
-            # 计算扭曲后的距离
-            # 注意：这里实际上是把高斯分布的输入坐标扭曲了
-            # 处理 x 轴的循环边界
-            
-            # 1. 计算原始距离差
-            raw_dx_diff = (x_grid + warp_offset_x) - cx
-            # 2. 取模，映射到 [0, width)
-            dx_mod = np.abs(raw_dx_diff) % width
-            # 3. 取最短路径 (环形距离)
-            dx = np.minimum(dx_mod, width - dx_mod)
-            
-            dy = np.abs((y_grid + warp_offset_y) - cy)
-            
-            # 高斯叠加
-            blob = strength * np.exp(-((dx**2)/(2*radius_x**2) + (dy**2)/(2*radius_y**2)))
-            grid += blob
-
-        # B. 叠加多层噪声 (Fractal Noise)
-        # 使用更复杂的噪声组合来模拟侵蚀和细节
+            # 添加形状扭曲
+            self._add_warped_continent(
+                continent_grid, cx, cy, size_x, size_y, strength,
+                warp_seed=base_seed + 100 + i
+            )
         
-        noise_strength = 0.7  # 提高噪声权重
-        
-        # (频率, 振幅, 类型)
-        layers = [
-            (3, 1.0, "base"),       # 基础起伏
-            (7, 0.6, "base"),       # 中等细节
-            (15, 0.3, "detail"),    # 海岸线破碎细节
-            (30, 0.15, "detail"),   # 微观噪点
-            (5, 0.5, "ridge"),      # 大山脉 (脊线)
-            (12, 0.3, "ridge"),     # 小山脉
-        ]
-        
-        for freq, amp_weight, kind in layers:
-            phase_x = random.uniform(0, 2*math.pi)
-            phase_y = random.uniform(0, 2*math.pi)
+        # 次要陆块（岛屿群、半岛等）
+        for i in range(num_minor_landmasses):
+            cx = random.uniform(0, width)
+            cy = random.uniform(height * 0.1, height * 0.9)
             
-            # 添加频率微扰，防止完美的谐波叠加
-            # 修正：X轴频率必须是整数，以保证左右连续性
-            fx = max(1, round(freq * random.uniform(0.9, 1.1)))
-            fy = freq * random.uniform(0.9, 1.1)
+            size_x = random.uniform(width * 0.04, width * 0.12)
+            size_y = random.uniform(height * 0.05, height * 0.15)
+            strength = random.uniform(0.8, 1.5)
             
-            if kind == "base":
-                # 正弦波叠加: sin(x) + cos(y)
-                noise = np.sin(x_grid / width * fx * 2 * math.pi + phase_x) + \
-                        np.cos(y_grid / height * fy * 2 * math.pi + phase_y)
-                # 归一化到 -1~1
-                noise *= 0.5
-                
-            elif kind == "detail":
-                # 细节层使用更高频的乘法，制造断裂感
-                noise = np.sin(x_grid / width * fx * 2 * math.pi + phase_x) * \
-                        np.cos(y_grid / height * fy * 2 * math.pi + phase_y)
-                        
-            elif kind == "ridge":
-                # 脊线噪声: 1 - abs(sin)
-                # 这种噪声会产生尖锐的山脊线
-                raw = np.sin(x_grid / width * fx * 2 * math.pi + phase_x) + \
-                      np.cos(y_grid / height * fy * 2 * math.pi + phase_y)
-                # 变换为脊线
-                noise = 1.0 - np.abs(raw * 0.5)
-                # 锐化，只保留尖端
-                noise = np.power(noise, 2)
-                
-            grid += noise * (noise_strength * amp_weight)
-
-        # C. 转化为百分位排名 (0.0 - 1.0)
+            self._add_warped_continent(
+                continent_grid, cx, cy, size_x, size_y, strength,
+                warp_seed=base_seed + 200 + i
+            )
+        
+        # ================================================================
+        # 第四层：山脉系统
+        # ================================================================
+        mountain_noise = self._ridge_noise(
+            width, height,
+            octaves=4,
+            base_scale=4.0,
+            seed=base_seed + 300
+        )
+        
+        # 山脉主要出现在大陆边缘和大陆内部
+        # 边缘山脉（碰撞带）
+        edge_mountains = self._generate_edge_mountains(continent_grid)
+        
+        # ================================================================
+        # 第五层：海底地形（洋中脊、海沟）
+        # ================================================================
+        ocean_floor = self._fractal_noise(
+            width, height,
+            octaves=3,
+            persistence=0.4,
+            base_scale=5.0,
+            seed=base_seed + 400
+        )
+        
+        # 洋中脊（海底山脉）
+        mid_ocean_ridge = self._generate_mid_ocean_ridges(width, height, base_seed + 500)
+        
+        # ================================================================
+        # 组合所有层
+        # ================================================================
+        grid = np.zeros((height, width))
+        
+        # 大陆基础
+        grid += continent_grid * 1.0
+        
+        # 纬度权重调制
+        grid *= (land_weight * 0.5 + 0.5)
+        
+        # 叠加分形噪声
+        grid += continental_noise * 0.4
+        grid += coastal_detail * 0.15
+        grid += fine_detail * 0.05
+        
+        # 添加山脉（仅在陆地区域）
+        land_mask = grid > 0.5
+        grid += (mountain_noise * 0.3 + edge_mountains * 0.4) * land_mask
+        
+        # 海底地形（仅在海洋区域）
+        ocean_mask = ~land_mask
+        grid += (ocean_floor * 0.15 + mid_ocean_ridge * 0.1) * ocean_mask
+        
+        # ================================================================
+        # 转换为百分位排名（控制海陆比例）
+        # ================================================================
         flat = grid.flatten()
         ranks = np.argsort(np.argsort(flat))
         rank_grid = (ranks / len(flat)).reshape(height, width)
         
         return rank_grid
+    
+    def _add_warped_continent(self, grid: np.ndarray, 
+                              cx: float, cy: float,
+                              size_x: float, size_y: float,
+                              strength: float,
+                              warp_seed: int) -> None:
+        """
+        添加一个形状扭曲的大陆块
+        使用域扭曲让大陆形状不规则
+        """
+        height, width = grid.shape
+        y_coords, x_coords = np.mgrid[0:height, 0:width].astype(float)
+        
+        # 域扭曲噪声
+        warp_noise_x = self._fractal_noise(width, height, octaves=3, base_scale=4.0, seed=warp_seed)
+        warp_noise_y = self._fractal_noise(width, height, octaves=3, base_scale=4.0, seed=warp_seed + 1)
+        
+        # 扭曲幅度
+        warp_amp = min(size_x, size_y) * 0.5
+        
+        # 扭曲后的坐标
+        warped_x = x_coords + (warp_noise_x - 0.5) * warp_amp
+        warped_y = y_coords + (warp_noise_y - 0.5) * warp_amp
+        
+        # 计算到大陆中心的距离（处理X轴循环）
+        dx = warped_x - cx
+        # X轴环形距离
+        dx = np.where(np.abs(dx) > width / 2, dx - np.sign(dx) * width, dx)
+        dy = warped_y - cy
+        
+        # 椭圆形衰减
+        dist_sq = (dx / size_x) ** 2 + (dy / size_y) ** 2
+        
+        # 高斯衰减
+        continent_blob = strength * np.exp(-dist_sq * 2)
+        
+        grid += continent_blob
+    
+    def _generate_edge_mountains(self, continent_grid: np.ndarray) -> np.ndarray:
+        """
+        在大陆边缘生成山脉（模拟板块碰撞）
+        """
+        height, width = continent_grid.shape
+        
+        # 计算梯度（边缘检测）
+        # X方向梯度（处理循环）
+        padded = np.pad(continent_grid, ((0, 0), (1, 1)), mode='wrap')
+        grad_x = padded[:, 2:] - padded[:, :-2]
+        
+        # Y方向梯度
+        padded_y = np.pad(continent_grid, ((1, 1), (0, 0)), mode='edge')
+        grad_y = padded_y[2:, :] - padded_y[:-2, :]
+        
+        # 梯度幅值
+        edge_strength = np.sqrt(grad_x ** 2 + grad_y ** 2)
+        
+        # 只保留强边缘
+        edge_strength = np.clip(edge_strength * 3, 0, 1)
+        
+        # 添加一些随机性
+        noise = np.random.rand(height, width) * 0.3
+        edge_strength = edge_strength * (0.7 + noise)
+        
+        return edge_strength
+    
+    def _generate_mid_ocean_ridges(self, width: int, height: int, seed: int) -> np.ndarray:
+        """
+        生成洋中脊（海底山脉）
+        洋中脊通常呈南北走向，蜿蜒穿过大洋
+        """
+        np.random.seed(seed)
+        ridges = np.zeros((height, width))
+        
+        # 生成2-3条洋中脊
+        num_ridges = random.randint(2, 3)
+        
+        for _ in range(num_ridges):
+            # 起始位置
+            x = random.uniform(0, width)
+            
+            # 沿Y轴蜿蜒
+            for y in range(height):
+                # 添加水平摆动
+                x += random.uniform(-1.5, 1.5)
+                x = x % width  # 循环
+                
+                # 在脊线附近添加凸起
+                for dx in range(-3, 4):
+                    px = int(x + dx) % width
+                    dist = abs(dx)
+                    ridges[y, px] += max(0, 1 - dist * 0.3)
+        
+        # 平滑
+        ridges = self._smooth_noise(ridges, iterations=1)
+        
+        return ridges
 
     def _rank_to_elevation(self, rank: float, sea_threshold: float) -> float:
         """
@@ -934,72 +1291,542 @@ class MapStateManager:
     
     def _generate_random_islands(self, tiles: list[MapTile]) -> None:
         """
-        在海洋中生成5-10个随机岛屿，增加地形随机性
-        每个岛屿包含3-15个地块
-        """
-        # 注意：不要在这里重新设置seed，使用主种子的随机序列
+        在海洋中生成丰富的岛屿系统
         
-        # 构建坐标到地块的映射
+        包括：
+        1. 岛链/岛弧 - 火山岛弧（如日本、菲律宾）
+        2. 群岛 - 分散的岛群（如印尼、加勒比）
+        3. 大陆架岛屿 - 靠近大陆的岛（如英国、台湾）
+        4. 海山岛屿 - 孤立的海底火山（如夏威夷）
+        5. 环礁 - 低矮的珊瑚岛
+        """
         tile_map = {(tile.x, tile.y): tile for tile in tiles}
         
-        # 找出所有深海区域（作为岛屿候选位置）
-        ocean_tiles = [tile for tile in tiles if tile.elevation < -1000]
+        # 分类海洋区域
+        deep_ocean = [t for t in tiles if t.elevation < -2000]  # 深海
+        mid_ocean = [t for t in tiles if -2000 <= t.elevation < -500]  # 中层海
+        shallow_ocean = [t for t in tiles if -500 <= t.elevation < -50]  # 浅海/大陆架
         
-        if len(ocean_tiles) < 10:
+        if len(deep_ocean) < 10 and len(mid_ocean) < 10:
             logger.debug("[地图管理器] 海洋地块不足，跳过岛屿生成")
             return
         
-        # 随机选择5-10个岛屿中心
-        num_islands = random.randint(5, 10)
-        island_centers = random.sample(ocean_tiles, min(num_islands, len(ocean_tiles)))
+        total_islands = 0
         
-        logger.debug(f"[地图管理器] 生成 {len(island_centers)} 个随机岛屿")
+        # ================================================================
+        # 1. 岛链/岛弧（模拟太平洋火山弧）
+        # ================================================================
+        num_arcs = random.randint(2, 4)
+        for _ in range(num_arcs):
+            if len(mid_ocean) < 20:
+                continue
+            
+            # 选择弧的起点（中层海域）
+            start_tile = random.choice(mid_ocean)
+            arc_length = random.randint(6, 15)  # 弧长度
+            arc_direction = random.uniform(0, 2 * math.pi)  # 弧方向
+            arc_curvature = random.uniform(-0.15, 0.15)  # 弯曲度
+            
+            # 沿弧生成岛屿
+            current_x = float(start_tile.x)
+            current_y = float(start_tile.y)
+            
+            for i in range(arc_length):
+                # 每隔1-3格放置一个岛
+                step = random.uniform(1.5, 3.0)
+                arc_direction += arc_curvature  # 逐渐弯曲
+                
+                current_x += math.cos(arc_direction) * step
+                current_y += math.sin(arc_direction) * step
+                
+                # 处理X循环
+                current_x = current_x % self.width
+                
+                # 检查Y边界
+                if current_y < 2 or current_y >= self.height - 2:
+                    break
+                
+                # 在该位置创建火山岛
+                island_size = random.randint(1, 4)
+                island_height = random.uniform(200, 1500)  # 火山岛较高
+                self._create_island_at(
+                    tile_map, int(current_x), int(current_y),
+                    island_size, island_height, is_volcanic=True
+                )
+                total_islands += 1
         
-        for center in island_centers:
-            # 每个岛屿3-15个地块
-            island_size = random.randint(3, 15)
+        # ================================================================
+        # 2. 群岛（大片散落的岛群）
+        # ================================================================
+        num_archipelagos = random.randint(2, 4)
+        for _ in range(num_archipelagos):
+            ocean_pool = mid_ocean if len(mid_ocean) > 30 else deep_ocean
+            if len(ocean_pool) < 30:
+                continue
             
-            # 岛屿海拔：100-800m（小岛到大岛）
-            island_base_elevation = random.uniform(100, 800)
+            # 群岛中心
+            center_tile = random.choice(ocean_pool)
+            archipelago_radius = random.randint(8, 15)
+            num_islands_in_group = random.randint(5, 12)
             
-            # BFS扩展岛屿
-            island_tiles = [(center.x, center.y)]
-            visited = {(center.x, center.y)}
-            queue = [(center.x, center.y, 0)]  # (x, y, distance_from_center)
-            
-            while queue and len(island_tiles) < island_size:
-                x, y, dist = queue.pop(0)
+            for _ in range(num_islands_in_group):
+                # 在中心周围随机位置
+                angle = random.uniform(0, 2 * math.pi)
+                distance = random.uniform(2, archipelago_radius)
                 
-                # 设置当前地块为岛屿（海拔随距离递减）
-                tile = tile_map.get((x, y))
-                if tile:
-                    elevation_decay = 1.0 - (dist / island_size) * 0.7  # 中心高，边缘低
-                    tile.elevation = island_base_elevation * elevation_decay
-                    # 重新计算温度（海拔变化会影响温度）
-                    latitude = 1 - (tile.y / (self.height - 1)) if self.height > 1 else 0.5
-                    tile.temperature = self._temperature(latitude, tile.elevation)
-                    # 重新计算资源（海拔和温度变化会影响资源）
-                    tile.resources = self._resources(tile.temperature, tile.elevation, tile.humidity, latitude)
-                    # 重新推断生物群系
-                    tile.biome = self._infer_biome(tile.temperature, tile.humidity, tile.elevation)
-                    # 岛屿上植被稍显茂盛，noise 给稍高一点的均值随机
-                    tile_noise = random.uniform(0.3, 0.8)
-                    tile.cover = self._infer_cover(tile.biome, tile_noise)
+                island_x = int(center_tile.x + math.cos(angle) * distance) % self.width
+                island_y = int(center_tile.y + math.sin(angle) * distance)
                 
-                # 随机扩展到相邻地块
-                if len(island_tiles) < island_size:
+                if 2 <= island_y < self.height - 2:
+                    island_size = random.randint(1, 5)
+                    island_height = random.uniform(50, 600)
+                    self._create_island_at(
+                        tile_map, island_x, island_y,
+                        island_size, island_height
+                    )
+                    total_islands += 1
+        
+        # ================================================================
+        # 3. 大陆架岛屿（靠近陆地）
+        # ================================================================
+        if shallow_ocean:
+            num_shelf_islands = random.randint(8, 15)
+            shelf_candidates = random.sample(
+                shallow_ocean, 
+                min(num_shelf_islands * 2, len(shallow_ocean))
+            )
+            
+            for tile in shelf_candidates[:num_shelf_islands]:
+                # 检查是否靠近陆地
+                has_nearby_land = False
+                for dx, dy in self._get_neighbor_offsets(tile.x, tile.y):
+                    neighbor = tile_map.get((dx, dy))
+                    if neighbor and neighbor.elevation >= 0:
+                        has_nearby_land = True
+                        break
+                
+                if has_nearby_land or random.random() < 0.3:
+                    island_size = random.randint(2, 8)
+                    island_height = random.uniform(20, 300)
+                    self._create_island_at(
+                        tile_map, tile.x, tile.y,
+                        island_size, island_height
+                    )
+                    total_islands += 1
+        
+        # ================================================================
+        # 4. 海山岛屿（孤立的深海火山，如夏威夷）
+        # ================================================================
+        if deep_ocean:
+            num_seamounts = random.randint(3, 8)
+            seamount_candidates = random.sample(
+                deep_ocean,
+                min(num_seamounts * 2, len(deep_ocean))
+            )
+            
+            for tile in seamount_candidates[:num_seamounts]:
+                island_size = random.randint(1, 3)
+                island_height = random.uniform(500, 2000)  # 高大的火山
+                self._create_island_at(
+                    tile_map, tile.x, tile.y,
+                    island_size, island_height, is_volcanic=True
+                )
+                total_islands += 1
+        
+        # ================================================================
+        # 5. 环礁/低矮珊瑚岛（热带浅海）
+        # ================================================================
+        # 只在热带区域（纬度0.35-0.65）
+        tropical_shallow = [
+            t for t in shallow_ocean 
+            if 0.35 < (1 - t.y / (self.height - 1)) < 0.65
+        ]
+        
+        if tropical_shallow:
+            num_atolls = random.randint(5, 10)
+            atoll_candidates = random.sample(
+                tropical_shallow,
+                min(num_atolls * 2, len(tropical_shallow))
+            )
+            
+            for tile in atoll_candidates[:num_atolls]:
+                # 环礁很低（几米高）
+                island_size = random.randint(1, 2)
+                island_height = random.uniform(2, 10)
+                self._create_island_at(
+                    tile_map, tile.x, tile.y,
+                    island_size, island_height, is_atoll=True
+                )
+                total_islands += 1
+        
+        logger.debug(f"[地图管理器] 生成了 {total_islands} 个岛屿")
+    
+    def _create_island_at(self, tile_map: dict, x: int, y: int,
+                          size: int, base_elevation: float,
+                          is_volcanic: bool = False,
+                          is_atoll: bool = False) -> None:
+        """
+        在指定位置创建一个岛屿
+        
+        Args:
+            tile_map: 坐标到地块的映射
+            x, y: 岛屿中心坐标
+            size: 岛屿大小（格数）
+            base_elevation: 基础海拔
+            is_volcanic: 是否是火山岛
+            is_atoll: 是否是环礁
+        """
+        visited = set()
+        queue = [(x, y, 0)]
+        visited.add((x, y))
+        
+        while queue and len(visited) <= size:
+            cx, cy, dist = queue.pop(0)
+            
+            tile = tile_map.get((cx, cy))
+            if tile and tile.elevation < 0:
+                # 计算海拔
+                if is_atoll:
+                    # 环礁：中心略低（泻湖），边缘略高
+                    elev = base_elevation * (0.5 + dist * 0.2)
+                elif is_volcanic:
+                    # 火山岛：中心最高，陡峭下降
+                    decay = 1.0 - (dist / max(1, size)) ** 0.5
+                    elev = base_elevation * max(0.1, decay)
+                else:
+                    # 普通岛：平缓下降
+                    decay = 1.0 - (dist / max(1, size)) * 0.6
+                    elev = base_elevation * max(0.1, decay)
+                
+                tile.elevation = elev
+                
+                # 重新计算环境参数
+                latitude = 1 - (tile.y / (self.height - 1)) if self.height > 1 else 0.5
+                longitude = tile.x / (self.width - 1) if self.width > 1 else 0.5
+                tile.temperature = self._temperature(latitude, tile.elevation, longitude)
+                
+                # 岛屿通常比较湿润
+                island_humidity_bonus = 0.15 if not is_atoll else 0.05
+                tile.humidity = min(0.95, tile.humidity + island_humidity_bonus)
+                
+                tile.resources = self._resources(
+                    tile.temperature, tile.elevation, tile.humidity, latitude
+                )
+                tile.biome = self._infer_biome(tile.temperature, tile.humidity, tile.elevation)
+                
+                tile_noise = random.uniform(0.4, 0.9)
+                tile.cover = self._infer_cover(
+                    tile.biome, tile_noise,
+                    primordial=self.primordial_mode,
+                    temperature=tile.temperature,
+                    humidity=tile.humidity,
+                    elevation=tile.elevation
+                )
+                
+                # 扩展到相邻
+                if len(visited) < size:
+                    neighbors = self._get_neighbor_offsets(cx, cy)
+                    random.shuffle(neighbors)
+                    for nx, ny in neighbors:
+                        if (nx, ny) not in visited:
+                            neighbor = tile_map.get((nx, ny))
+                            if neighbor and neighbor.elevation < 0:
+                                visited.add((nx, ny))
+                                queue.append((nx, ny, dist + 1))
+    
+    def _generate_coastal_features(self, tiles: list[MapTile]) -> None:
+        """
+        生成海岸特征：内海、海湾和半岛
+        
+        使海岸线更加丰富多变，而不是简单的直线
+        """
+        tile_map = {(tile.x, tile.y): tile for tile in tiles}
+        
+        # 找出所有海岸线地块（陆地且邻近海洋）
+        coastal_land = []
+        coastal_ocean = []
+        
+        for tile in tiles:
+            neighbors = self._get_neighbor_offsets(tile.x, tile.y)
+            has_land_neighbor = False
+            has_ocean_neighbor = False
+            
+            for nx, ny in neighbors:
+                neighbor = tile_map.get((nx, ny))
+                if neighbor:
+                    if neighbor.elevation >= 0:
+                        has_land_neighbor = True
+                    else:
+                        has_ocean_neighbor = True
+            
+            if tile.elevation >= 0 and has_ocean_neighbor:
+                coastal_land.append(tile)
+            elif tile.elevation < 0 and has_land_neighbor:
+                coastal_ocean.append(tile)
+        
+        if not coastal_land or not coastal_ocean:
+            return
+        
+        features_created = {"bays": 0, "peninsulas": 0, "inland_seas": 0}
+        
+        # ================================================================
+        # 1. 生成海湾（将部分沿海陆地变成海洋）
+        # ================================================================
+        num_bays = random.randint(3, 8)
+        bay_candidates = random.sample(coastal_land, min(num_bays * 2, len(coastal_land)))
+        
+        for tile in bay_candidates[:num_bays]:
+            # 海湾深入陆地的深度
+            bay_depth = random.randint(2, 5)
+            bay_width = random.randint(1, 3)
+            
+            # 找一个向内陆的方向
+            inland_dir = self._find_inland_direction(tile, tile_map)
+            if inland_dir is None:
+                continue
+            
+            # 沿方向创建海湾
+            self._create_bay(tile_map, tile.x, tile.y, inland_dir, bay_depth, bay_width)
+            features_created["bays"] += 1
+        
+        # ================================================================
+        # 2. 生成半岛（将部分沿海海洋变成陆地）
+        # ================================================================
+        num_peninsulas = random.randint(2, 5)
+        peninsula_candidates = random.sample(
+            coastal_ocean, 
+            min(num_peninsulas * 2, len(coastal_ocean))
+        )
+        
+        for tile in peninsula_candidates[:num_peninsulas]:
+            # 半岛延伸入海的长度
+            peninsula_length = random.randint(3, 7)
+            peninsula_width = random.randint(1, 2)
+            
+            # 找一个向海洋的方向
+            ocean_dir = self._find_ocean_direction(tile, tile_map)
+            if ocean_dir is None:
+                continue
+            
+            # 沿方向创建半岛
+            self._create_peninsula(
+                tile_map, tile.x, tile.y, ocean_dir, 
+                peninsula_length, peninsula_width
+            )
+            features_created["peninsulas"] += 1
+        
+        # ================================================================
+        # 3. 生成内海/湖泊（在大陆内部创建水域）
+        # ================================================================
+        # 找出深入内陆的陆地（距海较远）
+        inland_land = [
+            t for t in tiles 
+            if t.elevation >= 0 and t not in coastal_land
+        ]
+        
+        if len(inland_land) > 50:
+            num_inland_seas = random.randint(1, 3)
+            inland_candidates = random.sample(
+                inland_land,
+                min(num_inland_seas * 3, len(inland_land))
+            )
+            
+            for tile in inland_candidates[:num_inland_seas]:
+                # 内海大小
+                sea_size = random.randint(5, 15)
+                
+                # 检查周围是否有足够空间
+                neighbors = self._get_neighbor_offsets(tile.x, tile.y)
+                land_count = sum(
+                    1 for nx, ny in neighbors 
+                    if tile_map.get((nx, ny)) and tile_map[(nx, ny)].elevation >= 0
+                )
+                
+                if land_count >= 4:  # 确保不在海岸附近
+                    self._create_inland_sea(tile_map, tile.x, tile.y, sea_size)
+                    features_created["inland_seas"] += 1
+        
+        logger.debug(
+            f"[地图管理器] 生成海岸特征: "
+            f"{features_created['bays']}个海湾, "
+            f"{features_created['peninsulas']}个半岛, "
+            f"{features_created['inland_seas']}个内海"
+        )
+    
+    def _find_inland_direction(self, tile: MapTile, 
+                               tile_map: dict) -> tuple[float, float] | None:
+        """找到一个向内陆的方向"""
+        neighbors = self._get_neighbor_offsets(tile.x, tile.y)
+        land_neighbors = []
+        
+        for nx, ny in neighbors:
+            neighbor = tile_map.get((nx, ny))
+            if neighbor and neighbor.elevation >= 0:
+                # 计算方向向量
+                dx = nx - tile.x
+                # 处理X循环
+                if abs(dx) > self.width / 2:
+                    dx = -dx
+                dy = ny - tile.y
+                land_neighbors.append((dx, dy))
+        
+        if not land_neighbors:
+            return None
+        
+        # 返回平均方向（指向内陆）
+        avg_dx = sum(d[0] for d in land_neighbors) / len(land_neighbors)
+        avg_dy = sum(d[1] for d in land_neighbors) / len(land_neighbors)
+        
+        # 归一化
+        length = math.sqrt(avg_dx ** 2 + avg_dy ** 2)
+        if length < 0.1:
+            return None
+        
+        return (avg_dx / length, avg_dy / length)
+    
+    def _find_ocean_direction(self, tile: MapTile,
+                              tile_map: dict) -> tuple[float, float] | None:
+        """找到一个向海洋的方向"""
+        neighbors = self._get_neighbor_offsets(tile.x, tile.y)
+        ocean_neighbors = []
+        
+        for nx, ny in neighbors:
+            neighbor = tile_map.get((nx, ny))
+            if neighbor and neighbor.elevation < 0:
+                dx = nx - tile.x
+                if abs(dx) > self.width / 2:
+                    dx = -dx
+                dy = ny - tile.y
+                ocean_neighbors.append((dx, dy))
+        
+        if not ocean_neighbors:
+            return None
+        
+        avg_dx = sum(d[0] for d in ocean_neighbors) / len(ocean_neighbors)
+        avg_dy = sum(d[1] for d in ocean_neighbors) / len(ocean_neighbors)
+        
+        length = math.sqrt(avg_dx ** 2 + avg_dy ** 2)
+        if length < 0.1:
+            return None
+        
+        return (avg_dx / length, avg_dy / length)
+    
+    def _create_bay(self, tile_map: dict, start_x: int, start_y: int,
+                    direction: tuple[float, float], depth: int, width: int) -> None:
+        """创建一个海湾（将陆地变成海洋）"""
+        dx, dy = direction
+        
+        for step in range(depth):
+            # 当前中心点
+            cx = int(start_x + dx * step) % self.width
+            cy = int(start_y + dy * step)
+            
+            if cy < 0 or cy >= self.height:
+                break
+            
+            # 创建宽度
+            for w in range(-width, width + 1):
+                # 垂直于方向的偏移
+                perp_x = int(-dy * w)
+                perp_y = int(dx * w)
+                
+                px = (cx + perp_x) % self.width
+                py = cy + perp_y
+                
+                if 0 <= py < self.height:
+                    tile = tile_map.get((px, py))
+                    if tile and tile.elevation >= 0:
+                        # 将陆地变成浅海
+                        tile.elevation = random.uniform(-20, -5)
+                        
+                        # 重新计算属性
+                        lat = 1 - (tile.y / (self.height - 1))
+                        lon = tile.x / (self.width - 1)
+                        tile.temperature = self._temperature(lat, tile.elevation, lon)
+                        tile.biome = "浅海"
+                        tile.cover = "水域"
+    
+    def _create_peninsula(self, tile_map: dict, start_x: int, start_y: int,
+                          direction: tuple[float, float], length: int, width: int) -> None:
+        """创建一个半岛（将海洋变成陆地）"""
+        dx, dy = direction
+        
+        for step in range(length):
+            cx = int(start_x + dx * step) % self.width
+            cy = int(start_y + dy * step)
+            
+            if cy < 0 or cy >= self.height:
+                break
+            
+            # 半岛逐渐变窄
+            current_width = max(1, width - step // 3)
+            
+            for w in range(-current_width, current_width + 1):
+                perp_x = int(-dy * w)
+                perp_y = int(dx * w)
+                
+                px = (cx + perp_x) % self.width
+                py = cy + perp_y
+                
+                if 0 <= py < self.height:
+                    tile = tile_map.get((px, py))
+                    if tile and tile.elevation < 0:
+                        # 将海洋变成低地
+                        tile.elevation = random.uniform(10, 100)
+                        
+                        lat = 1 - (tile.y / (self.height - 1))
+                        lon = tile.x / (self.width - 1)
+                        tile.temperature = self._temperature(lat, tile.elevation, lon)
+                        tile.humidity = self._humidity(lat, lon, tile.elevation)
+                        tile.resources = self._resources(
+                            tile.temperature, tile.elevation, tile.humidity, lat
+                        )
+                        tile.biome = self._infer_biome(
+                            tile.temperature, tile.humidity, tile.elevation
+                        )
+                        tile.cover = self._infer_cover(
+                            tile.biome, random.random(),
+                            primordial=self.primordial_mode,
+                            temperature=tile.temperature,
+                            humidity=tile.humidity,
+                            elevation=tile.elevation
+                        )
+    
+    def _create_inland_sea(self, tile_map: dict, center_x: int, center_y: int,
+                           size: int) -> None:
+        """创建内海/大湖"""
+        visited = set()
+        queue = [(center_x, center_y, 0)]
+        visited.add((center_x, center_y))
+        
+        while queue and len(visited) < size:
+            x, y, dist = queue.pop(0)
+            
+            tile = tile_map.get((x, y))
+            if tile and tile.elevation >= 0:
+                # 变成湖泊
+                tile.elevation = random.uniform(-30, -5)
+                tile.biome = "湖泊"
+                tile.cover = "水域"
+                tile.is_lake = True
+                tile.salinity = 0.5  # 淡水
+                
+                lat = 1 - (tile.y / (self.height - 1))
+                lon = tile.x / (self.width - 1)
+                tile.temperature = self._temperature(lat, tile.elevation, lon)
+                
+                # 扩展
+                if len(visited) < size:
                     neighbors = self._get_neighbor_offsets(x, y)
                     random.shuffle(neighbors)
                     for nx, ny in neighbors:
                         if (nx, ny) not in visited:
-                            neighbor_tile = tile_map.get((nx, ny))
-                            # 只扩展到海洋地块
-                            if neighbor_tile and neighbor_tile.elevation < 0:
-                                visited.add((nx, ny))
-                                island_tiles.append((nx, ny))
-                                queue.append((nx, ny, dist + 1))
-                                if len(island_tiles) >= island_size:
-                                    break
+                            neighbor = tile_map.get((nx, ny))
+                            # 优先扩展到低海拔陆地
+                            if neighbor and neighbor.elevation >= 0:
+                                if neighbor.elevation < 300 or random.random() < 0.3:
+                                    visited.add((nx, ny))
+                                    queue.append((nx, ny, dist + 1))
     
     def _adjust_coastal_depth(self, tiles: list[MapTile]) -> None:
         """
@@ -1281,31 +2108,199 @@ class MapStateManager:
                 # 3% - 极高山（3000-5000m）
                 return 3000 + (land_height - 0.97) / 0.03 * 2000
 
-    def _temperature(self, lat: float, elevation: float) -> float:
+    def _temperature(self, lat: float, elevation: float, lon: float = 0.5) -> float:
         """
-        计算温度（°C），基于纬度和海拔
-        - 赤道（lat=0.5）约30°C，极地（lat=0或1）约-30°C
-        - 海拔每升高100m，温度降低0.65°C (标准气温垂直递减率)
+        计算温度（°C），基于纬度、海拔和洋流效应
         
-        参考值：
-        4000m ≈ -11°C (假设基准15°C)
-        8000m ≈ -37°C
+        真实地球温度分布特征：
+        - 赤道（lat=0.5）约27°C，极地（lat=0或1）约-40°C
+        - 海拔每升高100m，温度降低0.65°C（湿绝热递减率）
+        - 大陆西岸有寒流（降温），东岸有暖流（升温）
+        - 海洋温差比陆地小
+        
+        Args:
+            lat: 纬度（0=北极，0.5=赤道，1=南极）
+            elevation: 海拔（米）
+            lon: 经度（0-1）
         """
-        # 基础温度（海平面）：赤道30°C，极地-30°C
-        base = 30 - abs(lat - 0.5) * 120
+        # ================================================================
+        # 第一层：基础纬度温度
+        # ================================================================
+        # 使用余弦函数模拟太阳辐射分布
+        # 赤道约27°C，极地约-40°C
+        lat_rad = abs(lat - 0.5) * 2  # 0=赤道，1=极地
+        base_temp = 27 - 67 * (lat_rad ** 1.3)  # 非线性，极地更冷
         
-        # 海拔修正：仅对陆地（elevation>=0）应用
-        # 海洋温度不受"海拔"影响，只受纬度影响
+        # ================================================================
+        # 第二层：洋流效应（仅海洋）
+        # ================================================================
+        ocean_current_effect = 0.0
+        if elevation < 0:  # 海洋
+            # 模拟主要洋流模式：
+            # 大洋西岸（经度0.0-0.3, 0.5-0.8）有暖流
+            # 大洋东岸（经度0.3-0.5, 0.8-1.0）有寒流
+            # 这是简化模型，真实洋流更复杂
+            
+            # 判断在哪个半球
+            is_northern = lat < 0.5
+            
+            # 洋流强度随纬度变化（中纬度最强）
+            current_strength = 1.0 - abs(lat_rad - 0.4) * 2
+            current_strength = max(0, current_strength)
+            
+            # 西岸暖流/东岸寒流模式
+            # 真实地球：北半球顺时针，南半球逆时针
+            lon_phase = (lon * 4) % 1.0  # 分成4个大洋区
+            if lon_phase < 0.4:
+                # 大洋西岸偏暖
+                ocean_current_effect = current_strength * 5
+            elif lon_phase > 0.6:
+                # 大洋东岸偏冷
+                ocean_current_effect = -current_strength * 4
+            
+            # 热带海洋温度更稳定
+            if lat_rad < 0.2:
+                ocean_current_effect *= 0.3
+        
+        # ================================================================
+        # 第三层：海拔修正
+        # ================================================================
+        altitude_effect = 0.0
         if elevation >= 0:
-            # 每100m降低0.65°C
-            altitude_adjustment = elevation * 0.0065
-            return base - altitude_adjustment
+            # 陆地：每100m降低0.65°C
+            altitude_effect = -elevation * 0.0065
         else:
-            # 海洋温度略低于同纬度陆地
-            return base - 2
+            # 深海：温度随深度变化
+            # 表层水温接近气温，深层约4°C
+            depth = abs(elevation)
+            if depth > 200:
+                # 温跃层以下逐渐趋向4°C
+                deep_factor = min(1.0, (depth - 200) / 3000)
+                target_deep_temp = 4.0
+                altitude_effect = (target_deep_temp - base_temp) * deep_factor * 0.3
+        
+        # ================================================================
+        # 第四层：大陆性气候
+        # ================================================================
+        # 海洋温差小，极端温度被缓冲
+        continental_effect = 0.0
+        if elevation >= 0:
+            # 陆地：极端温度更明显
+            if lat_rad < 0.2:
+                # 热带陆地更热
+                continental_effect = 3
+            elif lat_rad > 0.6:
+                # 高纬度陆地更冷
+                continental_effect = -5 * (lat_rad - 0.6) / 0.4
+        
+        # ================================================================
+        # 组合所有效应
+        # ================================================================
+        final_temp = base_temp + ocean_current_effect + altitude_effect + continental_effect
+        
+        # 添加微小随机扰动（基于坐标的确定性）
+        coord_hash = int((lon * 1000 + lat * 10000)) % 1000
+        noise = (coord_hash / 1000 - 0.5) * 2  # -1 到 1
+        final_temp += noise
+        
+        return final_temp
 
-    def _humidity(self, lat: float, lon: float) -> float:
-        return max(0.0, min(1.0, 0.5 + 0.3 * math.sin(2 * math.pi * lon) - 0.2 * abs(lat - 0.5)))
+    def _humidity(self, lat: float, lon: float, elevation: float = 0, 
+                  tiles: list | None = None, x: int = 0, y: int = 0) -> float:
+        """
+        计算湿度（0-1），考虑多种气候因素
+        
+        真实地球湿度分布特征：
+        1. 热带辐合带（ITCZ）- 赤道附近高湿
+        2. 副热带高压带 - 南北纬30°附近干燥（沙漠带）
+        3. 西风带 - 中纬度较湿润
+        4. 极地 - 干燥（冷空气含水量低）
+        5. 大陆内部 - 干燥（距海远）
+        6. 雨影效应 - 山脉背风面干燥
+        
+        Args:
+            lat: 纬度（0-1，0.5为赤道）
+            lon: 经度（0-1）
+            elevation: 海拔（米）
+            tiles: 地块列表（用于计算距海距离）
+            x, y: 当前坐标
+        """
+        # ================================================================
+        # 第一层：纬度带湿度（大气环流）
+        # ================================================================
+        lat_rad = abs(lat - 0.5) * 2  # 0=赤道，1=极地
+        
+        # 模拟哈德利环流、费雷尔环流、极地环流
+        if lat_rad < 0.15:
+            # 热带辐合带（ITCZ）- 高湿
+            base_humidity = 0.8
+        elif lat_rad < 0.35:
+            # 副热带高压带 - 干燥（撒哈拉、阿拉伯沙漠区）
+            # 平滑过渡
+            progress = (lat_rad - 0.15) / 0.2
+            base_humidity = 0.8 - progress * 0.5  # 0.8 -> 0.3
+        elif lat_rad < 0.55:
+            # 中纬度西风带 - 较湿润
+            progress = (lat_rad - 0.35) / 0.2
+            base_humidity = 0.3 + progress * 0.3  # 0.3 -> 0.6
+        elif lat_rad < 0.75:
+            # 亚极地 - 中等
+            progress = (lat_rad - 0.55) / 0.2
+            base_humidity = 0.6 - progress * 0.2  # 0.6 -> 0.4
+        else:
+            # 极地 - 干燥（极地沙漠）
+            base_humidity = 0.3
+        
+        # ================================================================
+        # 第二层：海陆分布影响
+        # ================================================================
+        if elevation < 0:
+            # 海洋上空湿度高
+            ocean_bonus = 0.2
+        else:
+            # 陆地基础较干
+            ocean_bonus = -0.05
+            
+            # 高海拔更干燥（空气稀薄）
+            if elevation > 2000:
+                altitude_penalty = min(0.2, (elevation - 2000) / 5000 * 0.2)
+                ocean_bonus -= altitude_penalty
+        
+        # ================================================================
+        # 第三层：经度变化（模拟季风和信风）
+        # ================================================================
+        # 简化模型：大洋西岸偏湿，东岸偏干
+        lon_effect = math.sin(lon * 4 * math.pi) * 0.1
+        
+        # 信风带：热带东部偏干（下沉气流）
+        if lat_rad < 0.3:
+            lon_phase = (lon * 2) % 1.0
+            if lon_phase > 0.6:  # 大洋东部
+                lon_effect -= 0.15
+        
+        # ================================================================
+        # 第四层：季风区域（模拟亚洲季风）
+        # ================================================================
+        # 假设在某些经度带有强季风效应
+        monsoon_effect = 0.0
+        if 0.3 < lat_rad < 0.5:  # 中低纬度
+            # 某些经度带（如亚洲季风区）更湿润
+            monsoon_zone = math.sin(lon * 3 * math.pi)
+            if monsoon_zone > 0.5:
+                monsoon_effect = 0.15
+        
+        # ================================================================
+        # 组合所有效应
+        # ================================================================
+        final_humidity = base_humidity + ocean_bonus + lon_effect + monsoon_effect
+        
+        # 添加微小随机扰动
+        coord_hash = int((lon * 7777 + lat * 3333)) % 1000
+        noise = (coord_hash / 1000 - 0.5) * 0.1
+        final_humidity += noise
+        
+        # 限制在合理范围
+        return max(0.05, min(0.95, final_humidity))
 
     def _resources(self, temperature: float, elevation: float, humidity: float, latitude: float) -> float:
         """
@@ -1429,7 +2424,15 @@ class MapStateManager:
             else:
                 return "温带森林"
 
-    def _infer_cover(self, biome: str, noise: float = 0.5) -> str:
+    def _infer_cover(
+        self, 
+        biome: str, 
+        noise: float = 0.5, 
+        primordial: bool = False,
+        temperature: float | None = None,
+        humidity: float | None = None,
+        elevation: float | None = None
+    ) -> str:
         """
         根据生物群系和局部噪声推断覆盖物类型
         使植被分布更加破碎和交织
@@ -1437,10 +2440,26 @@ class MapStateManager:
         Args:
             biome: 生物群系名称
             noise: 局部随机噪声值 (0.0 - 1.0)，默认0.5
+            primordial: 是否为原始地质模式（28亿年前无植物时代）
+            temperature: 温度（°C），用于判断极地冰雪
+            humidity: 湿度（0-1），用于判断沙漠/戈壁
+            elevation: 海拔（m），用于判断冰川
         """
-        # 水域始终是水域
-        if biome in ["深海", "浅海", "海岸", "湖泊"]:
+        # 【极地海洋冰盖】极寒海域应该有冰盖
+        if biome in ["深海", "浅海", "海岸"]:
+            if temperature is not None and temperature < -5:
+                return "海冰"
             return "水域"
+        
+        if biome == "湖泊":
+            if temperature is not None and temperature < -5:
+                return "冰湖"
+            return "水域"
+
+        # 【原始地质模式】28亿年前的地表没有植物
+        # 只有裸岩、沙漠（干燥区）、冰川/冰原（极寒区）
+        if primordial:
+            return self._infer_primordial_cover(biome, noise, temperature, humidity, elevation)
 
         if biome == "雨林":
             # 主要是森林，偶尔有林窗（草甸）或湿地
@@ -1489,6 +2508,84 @@ class MapStateManager:
             return "裸地"
 
         return "混合林"
+    
+    def _infer_primordial_cover(
+        self, 
+        biome: str, 
+        noise: float,
+        temperature: float | None = None,
+        humidity: float | None = None,
+        elevation: float | None = None
+    ) -> str:
+        """
+        原始地质模式下的覆盖物推断
+        28亿年前（太古宙晚期）的地表特征：
+        - 没有任何陆地植物（最早的陆地植物出现在4.7亿年前）
+        - 陆地表面为裸岩、风化碎屑、原始沙漠
+        - 极寒区域有冰川/冰原（南北极）
+        - 湿润区域可能有原始藻类膜（但视觉上仍是裸地）
+        
+        Args:
+            biome: 生物群系名称
+            noise: 局部噪声值
+            temperature: 温度（°C）
+            humidity: 湿度（0-1）
+            elevation: 海拔（m）
+        """
+        temp = temperature if temperature is not None else 15.0
+        humid = humidity if humidity is not None else 0.5
+        elev = elevation if elevation is not None else 0.0
+        
+        # ============================================================
+        # 【极地冰雪覆盖】最高优先级
+        # 南北极的陆地应该被冰雪覆盖
+        # ============================================================
+        if temp < -25:
+            # 极寒区域：冰川覆盖
+            return "冰川"
+        elif temp < -15:
+            # 冷极区域：冰原（冰盖）
+            if elev > 2000 or noise > 0.5:
+                return "冰川"
+            return "冰原"
+        elif temp < -5:
+            # 寒冷区域：冻土
+            return "冻土"
+        
+        # ============================================================
+        # 【非极地区域】根据气候分类
+        # ============================================================
+        if biome in ["高山", "山地"]:
+            # 高海拔：裸岩或冰川（如果够冷）
+            if temp < 0 or elev > 4000:
+                return "冰川"
+            if elev > 3000:
+                return "冻土"
+            return "裸地"
+        
+        elif biome == "冻原":
+            # 冻原区域（已经是寒冷地带）
+            if temp < 0:
+                return "冻土"
+            return "裸地"
+        
+        elif biome == "荒漠":
+            # 干旱区域：沙漠或戈壁
+            if humid < 0.15:
+                return "沙漠"
+            elif humid < 0.3:
+                if noise < 0.4:
+                    return "戈壁"  # 岩石荒漠
+                return "沙漠"
+            return "裸地"
+        
+        elif biome in ["雨林", "温带森林", "草原", "丘陵"]:
+            # 现代本应是植被茂盛的区域，在原始地质时代是裸地
+            return "裸地"
+        
+        else:
+            # 默认裸地
+            return "裸地"
 
     def _has_river(self, lat: float, lon: float) -> bool:
         return abs(math.sin(6 * math.pi * lon) * (0.5 - lat)) > 0.45

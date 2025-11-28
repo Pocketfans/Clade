@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import {
   LineChart,
   Line,
@@ -48,7 +48,12 @@ import {
   Target,
   Shield,
   Mountain,
-  Calendar
+  Calendar,
+  Sparkles,
+  Orbit,
+  Dna,
+  Leaf,
+  Wind
 } from "lucide-react";
 import { TurnReport, SpeciesSnapshot, BranchingEvent, MigrationEvent, MapChange } from "../services/api.types";
 import { GamePanel } from "./common/GamePanel";
@@ -92,6 +97,7 @@ interface MetricDefinition {
   deltaText: string;
   trend: TrendDirection;
   accent: string;
+  glow: string;
   icon: React.ReactNode;
 }
 
@@ -113,25 +119,58 @@ interface TimelineEvent {
 }
 
 // --- Constants ---
-const PANEL_WIDTH = "min(98vw, 1400px)";
+const PANEL_WIDTH = "min(98vw, 1480px)";
 
+// 深空主题配色 - 灵感来自于星际探索
 const THEME = {
-  bg: "rgba(15, 23, 42, 0.6)",
-  cardBg: "rgba(30, 41, 59, 0.5)",
-  borderColor: "rgba(148, 163, 184, 0.2)",
+  // 背景层次
+  bgDeep: "rgba(4, 6, 14, 0.98)",
+  bgPrimary: "rgba(8, 12, 24, 0.95)",
+  bgCard: "rgba(14, 20, 38, 0.75)",
+  bgCardHover: "rgba(20, 28, 52, 0.85)",
+  bgGlass: "rgba(255, 255, 255, 0.03)",
+  
+  // 边框
+  borderSubtle: "rgba(80, 100, 140, 0.12)",
+  borderDefault: "rgba(100, 130, 180, 0.18)",
+  borderActive: "rgba(120, 180, 255, 0.35)",
+  borderGlow: "rgba(100, 200, 255, 0.5)",
+  
+  // 文字层次
+  textBright: "#f8fafc",
   textPrimary: "#e2e8f0",
-  textSecondary: "rgba(226, 232, 240, 0.65)",
-  accentEnv: "#f97316",
-  accentSea: "#3b82f6",
-  accentBio: "#a855f7",
-  accentPop: "#10b981",
-  accentDeath: "#ef4444",
-  accentGeo: "#eab308",
-  accentHealth: "#06b6d4",
-  accentEvolution: "#ec4899",
+  textSecondary: "rgba(180, 195, 220, 0.75)",
+  textMuted: "rgba(130, 150, 180, 0.55)",
+  textDim: "rgba(100, 120, 150, 0.4)",
+  
+  // 强调色 - 生态系统主题
+  accentTemp: "#ff7b4a",        // 温暖的橙红 - 温度
+  accentOcean: "#00d4ff",       // 明亮的青色 - 海洋
+  accentLife: "#a78bfa",        // 柔和的紫色 - 生命多样性
+  accentGrowth: "#10b981",      // 生机绿 - 种群增长
+  accentDanger: "#f43f5e",      // 警示红 - 死亡/灭绝
+  accentEarth: "#fbbf24",       // 大地金 - 地质
+  accentVital: "#06b6d4",       // 生命青 - 健康
+  accentEvolve: "#ec4899",      // 演化粉 - 进化
+  accentNeutral: "#64748b",     // 中性灰 - 平衡
+  
+  // 发光效果
+  glowTemp: "rgba(255, 123, 74, 0.5)",
+  glowOcean: "rgba(0, 212, 255, 0.5)",
+  glowLife: "rgba(167, 139, 250, 0.5)",
+  glowGrowth: "rgba(16, 185, 129, 0.5)",
+  glowDanger: "rgba(244, 63, 94, 0.5)",
+  glowEarth: "rgba(251, 191, 36, 0.5)",
+  glowVital: "rgba(6, 182, 212, 0.5)",
+  glowEvolve: "rgba(236, 72, 153, 0.5)",
+  
+  // 渐变起点
+  gradientStart: "#050810",
+  gradientMid: "#0c1220",
+  gradientEnd: "#08101c",
 };
 
-const PIE_COLORS = ["#10b981", "#3b82f6", "#a855f7", "#f97316", "#ef4444", "#eab308", "#06b6d4", "#ec4899"];
+const PIE_COLORS = ["#10b981", "#00d4ff", "#a78bfa", "#ff7b4a", "#f43f5e", "#fbbf24", "#06b6d4", "#ec4899"];
 
 // --- Formatters ---
 const compactNumberFormatter = new Intl.NumberFormat("en-US", {
@@ -148,12 +187,122 @@ const percentFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1,
 });
 
+// --- Animated Background Component ---
+function AnimatedBackground({ activeTab }: { activeTab: Tab }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    const resize = () => {
+      canvas.width = canvas.offsetWidth * window.devicePixelRatio;
+      canvas.height = canvas.offsetHeight * window.devicePixelRatio;
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    };
+    resize();
+    window.addEventListener('resize', resize);
+    
+    // 粒子系统
+    const particles: Array<{
+      x: number; y: number; vx: number; vy: number;
+      size: number; alpha: number; color: string;
+    }> = [];
+    
+    const tabColors: Record<Tab, string> = {
+      environment: THEME.accentTemp,
+      biodiversity: THEME.accentLife,
+      evolution: THEME.accentEvolve,
+      geology: THEME.accentEarth,
+      health: THEME.accentVital,
+    };
+    
+    const baseColor = tabColors[activeTab];
+    
+    // 初始化粒子
+    for (let i = 0; i < 50; i++) {
+      particles.push({
+        x: Math.random() * canvas.offsetWidth,
+        y: Math.random() * canvas.offsetHeight,
+        vx: (Math.random() - 0.5) * 0.3,
+        vy: (Math.random() - 0.5) * 0.3,
+        size: Math.random() * 2 + 0.5,
+        alpha: Math.random() * 0.5 + 0.1,
+        color: baseColor,
+      });
+    }
+    
+    let animationId: number;
+    const animate = () => {
+      ctx.clearRect(0, 0, canvas.offsetWidth, canvas.offsetHeight);
+      
+      // 绘制粒子
+      particles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        
+        // 边界检查
+        if (p.x < 0 || p.x > canvas.offsetWidth) p.vx *= -1;
+        if (p.y < 0 || p.y > canvas.offsetHeight) p.vy *= -1;
+        
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fillStyle = p.color + Math.floor(p.alpha * 255).toString(16).padStart(2, '0');
+        ctx.fill();
+      });
+      
+      // 绘制连线
+      ctx.strokeStyle = baseColor + '15';
+      ctx.lineWidth = 0.5;
+      particles.forEach((p1, i) => {
+        particles.slice(i + 1).forEach(p2 => {
+          const dx = p1.x - p2.x;
+          const dy = p1.y - p2.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 120) {
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+          }
+        });
+      });
+      
+      animationId = requestAnimationFrame(animate);
+    };
+    animate();
+    
+    return () => {
+      window.removeEventListener('resize', resize);
+      cancelAnimationFrame(animationId);
+    };
+  }, [activeTab]);
+  
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+        opacity: 0.6,
+      }}
+    />
+  );
+}
+
 // --- Main Component ---
 export function GlobalTrendsPanel({ reports, onClose }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>("environment");
   const [chartType, setChartType] = useState<ChartType>("line");
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   const [showTimeline, setShowTimeline] = useState(false);
+  const [hoveredMetric, setHoveredMetric] = useState<string | null>(null);
 
   // Filter reports based on time range
   const filteredReports = useMemo(() => {
@@ -214,12 +363,89 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
     URL.revokeObjectURL(url);
   }, [summary, chartData, timelineEvents]);
 
+  // 获取当前tab的主题色
+  const tabAccent = useMemo(() => {
+    const accents: Record<Tab, { color: string; glow: string }> = {
+      environment: { color: THEME.accentTemp, glow: THEME.glowTemp },
+      biodiversity: { color: THEME.accentLife, glow: THEME.glowLife },
+      evolution: { color: THEME.accentEvolve, glow: THEME.glowEvolve },
+      geology: { color: THEME.accentEarth, glow: THEME.glowEarth },
+      health: { color: THEME.accentVital, glow: THEME.glowVital },
+    };
+    return accents[activeTab];
+  }, [activeTab]);
+
   return (
     <GamePanel
       title={
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Activity size={20} color={THEME.accentSea} />
-          <span>全球生态演变 (Global Trends)</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{
+            width: '42px',
+            height: '42px',
+            borderRadius: '12px',
+            background: `linear-gradient(145deg, ${tabAccent.color}20, ${tabAccent.color}08)`,
+            border: `1px solid ${tabAccent.color}40`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: `0 0 24px ${tabAccent.glow}, inset 0 0 12px ${tabAccent.color}15`,
+            position: 'relative',
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              position: 'absolute',
+              inset: 0,
+              background: `radial-gradient(circle at 30% 30%, ${tabAccent.color}30, transparent 60%)`,
+            }} />
+            <Globe size={22} color={tabAccent.color} style={{ position: 'relative', zIndex: 1 }} />
+          </div>
+          <div>
+            <div style={{ 
+              fontSize: '1.15rem', 
+              fontWeight: 700, 
+              letterSpacing: '0.03em',
+              background: `linear-gradient(135deg, ${THEME.textBright}, ${THEME.textPrimary})`,
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}>
+              全球生态演变
+            </div>
+            <div style={{ 
+              fontSize: '0.68rem', 
+              color: THEME.textMuted, 
+              marginTop: '3px',
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+            }}>
+              Global Ecosystem Evolution
+            </div>
+          </div>
+          <div style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '4px 12px',
+            borderRadius: '20px',
+            background: `${tabAccent.color}12`,
+            border: `1px solid ${tabAccent.color}25`,
+          }}>
+            <div style={{
+              width: '6px',
+              height: '6px',
+              borderRadius: '50%',
+              background: tabAccent.color,
+              boxShadow: `0 0 8px ${tabAccent.glow}`,
+              animation: 'pulse 2s ease-in-out infinite',
+            }} />
+            <span style={{ 
+              fontSize: '0.72rem', 
+              color: tabAccent.color,
+              fontWeight: 600,
+            }}>
+              T{summary.latestTurn || '--'}
+            </span>
+          </div>
         </div>
       }
       onClose={onClose}
@@ -227,50 +453,58 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
       width={PANEL_WIDTH}
     >
       <div style={styles.layoutContainer}>
+        {/* Animated Canvas Background */}
+        <AnimatedBackground activeTab={activeTab} />
+        
+        {/* Static Background Layers */}
+        <div style={styles.bgGradient} />
+        <div style={styles.bgMesh} />
+        <div style={styles.bgVignette} />
+        
         {/* Control Bar */}
         <div style={styles.controlBar}>
           <div style={styles.tabContainer}>
             <TabButton
               active={activeTab === "environment"}
               onClick={() => setActiveTab("environment")}
-              icon={<Thermometer size={14} />}
+              icon={<Thermometer size={15} />}
               label="环境气候"
-              color={THEME.accentEnv}
+              color={THEME.accentTemp}
             />
             <TabButton
               active={activeTab === "biodiversity"}
               onClick={() => setActiveTab("biodiversity")}
-              icon={<Sprout size={14} />}
+              icon={<Dna size={15} />}
               label="生物群落"
-              color={THEME.accentBio}
+              color={THEME.accentLife}
             />
             <TabButton
               active={activeTab === "evolution"}
               onClick={() => setActiveTab("evolution")}
-              icon={<GitBranch size={14} />}
+              icon={<GitBranch size={15} />}
               label="进化事件"
-              color={THEME.accentEvolution}
+              color={THEME.accentEvolve}
             />
             <TabButton
               active={activeTab === "geology"}
               onClick={() => setActiveTab("geology")}
-              icon={<Mountain size={14} />}
+              icon={<Mountain size={15} />}
               label="地质变化"
-              color={THEME.accentGeo}
+              color={THEME.accentEarth}
             />
             <TabButton
               active={activeTab === "health"}
               onClick={() => setActiveTab("health")}
-              icon={<Heart size={14} />}
+              icon={<Activity size={15} />}
               label="生态健康"
-              color={THEME.accentHealth}
+              color={THEME.accentVital}
             />
           </div>
 
           <div style={styles.controlGroup}>
             {/* Time Range Selector */}
             <div style={styles.selectWrapper}>
-              <Clock size={14} color={THEME.textSecondary} />
+              <Clock size={14} color={THEME.accentOcean} />
               <select 
                 value={timeRange} 
                 onChange={(e) => setTimeRange(e.target.value as TimeRange)}
@@ -310,12 +544,13 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
               onClick={() => setShowTimeline(!showTimeline)}
               style={{
                 ...styles.iconButton,
-                backgroundColor: showTimeline ? `${THEME.accentSea}33` : 'transparent',
-                borderColor: showTimeline ? THEME.accentSea : 'transparent',
+                backgroundColor: showTimeline ? `${THEME.accentOcean}20` : 'transparent',
+                borderColor: showTimeline ? `${THEME.accentOcean}50` : THEME.borderDefault,
+                boxShadow: showTimeline ? `0 0 16px ${THEME.glowOcean}, inset 0 0 8px ${THEME.accentOcean}15` : 'none',
               }}
               title="显示事件时间线"
             >
-              <Calendar size={14} />
+              <Calendar size={14} color={showTimeline ? THEME.accentOcean : THEME.textSecondary} />
             </button>
 
             {/* Export Button */}
@@ -327,8 +562,14 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
 
         {/* Top Metrics Row */}
         <div style={styles.metricsRow}>
-          {metrics.map((metric) => (
-            <MetricCard key={metric.key} metric={metric} />
+          {metrics.map((metric, idx) => (
+            <MetricCard 
+              key={metric.key} 
+              metric={metric} 
+              index={idx}
+              isHovered={hoveredMetric === metric.key}
+              onHover={setHoveredMetric}
+            />
           ))}
         </div>
 
@@ -337,11 +578,22 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
           {/* Left: Chart Section */}
           <div style={styles.chartSection}>
             <div style={styles.chartHeader}>
-              <div style={styles.chartTitle}>
-                {getChartTitle(activeTab)}
+              <div style={styles.chartTitleWrapper}>
+                <div style={styles.chartTitleIcon}>
+                  {getChartIcon(activeTab)}
+                </div>
+                <div>
+                  <div style={styles.chartTitle}>
+                    {getChartTitle(activeTab)}
+                  </div>
+                  <div style={styles.chartLegend}>
+                    {getChartLegend(activeTab)}
+                  </div>
+                </div>
               </div>
-              <div style={styles.chartLegend}>
-                {getChartLegend(activeTab)}
+              <div style={styles.chartBadge}>
+                <Activity size={12} />
+                <span>{chartData.length} 数据点</span>
               </div>
             </div>
 
@@ -352,31 +604,60 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
                 </ResponsiveContainer>
               ) : (
                 <div style={styles.emptyState}>
-                  <Activity size={48} color={THEME.textSecondary} strokeWidth={1} />
-                  <p>暂无演化数据，请推进回合</p>
+                  <div style={styles.emptyIcon}>
+                    <Activity size={48} strokeWidth={1} />
+                  </div>
+                  <p style={{ fontSize: '1rem', fontWeight: 600 }}>等待数据...</p>
+                  <p style={{ fontSize: '0.8rem', opacity: 0.6 }}>推进回合以生成演化记录</p>
                 </div>
               )}
             </div>
           </div>
 
           {/* Right: Sidebar */}
-          <div style={styles.sidebar}>
+          <div style={styles.sidebar} className="global-trends-scroll">
             {/* Insights Section */}
             <div style={styles.sidebarSection}>
               <div style={styles.sidebarHeader}>
-                <span style={styles.sidebarTitle}>📊 趋势洞察</span>
+                <div style={styles.sidebarTitleWrapper}>
+                  <div style={{
+                    width: '26px',
+                    height: '26px',
+                    borderRadius: '8px',
+                    background: `linear-gradient(135deg, ${THEME.accentOcean}20, ${THEME.accentOcean}08)`,
+                    border: `1px solid ${THEME.accentOcean}30`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}>
+                    <Sparkles size={13} color={THEME.accentOcean} />
+                  </div>
+                  <span style={styles.sidebarTitle}>趋势洞察</span>
+                </div>
+                <div style={styles.sidebarBadge}>{insightItems.length}</div>
               </div>
               <div style={styles.insightsList}>
-                {insightItems.map((insight) => (
+                {insightItems.map((insight, idx) => (
                   <div 
-                    key={insight.key} 
+                    key={insight.key}
+                    className="insight-card"
                     style={{
                       ...styles.insightCard,
-                      borderLeftColor: insight.accent || THEME.accentSea,
+                      animationDelay: `${idx * 60}ms`,
                     }}
                   >
+                    <div style={{
+                      ...styles.insightAccent,
+                      background: `linear-gradient(180deg, ${insight.accent || THEME.accentOcean}, ${insight.accent || THEME.accentOcean}20)`,
+                      boxShadow: `0 0 8px ${insight.accent || THEME.accentOcean}40`,
+                    }} />
                     <div style={styles.insightLabel}>{insight.label}</div>
-                    <div style={styles.insightValue}>{insight.value}</div>
+                    <div style={{
+                      ...styles.insightValue, 
+                      background: `linear-gradient(135deg, ${insight.accent || THEME.textBright}, ${insight.accent || THEME.textPrimary}cc)`,
+                      WebkitBackgroundClip: 'text',
+                      WebkitTextFillColor: 'transparent',
+                    }}>{insight.value}</div>
                     <div style={styles.insightDesc}>{insight.description}</div>
                   </div>
                 ))}
@@ -387,22 +668,51 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
             {activeTab === "biodiversity" && speciesRanking.length > 0 && (
               <div style={styles.sidebarSection}>
                 <div style={styles.sidebarHeader}>
-                  <span style={styles.sidebarTitle}>🏆 物种排行</span>
+                  <div style={styles.sidebarTitleWrapper}>
+                    <div style={{
+                      width: '26px',
+                      height: '26px',
+                      borderRadius: '8px',
+                      background: `linear-gradient(135deg, ${THEME.accentEarth}20, ${THEME.accentEarth}08)`,
+                      border: `1px solid ${THEME.accentEarth}30`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}>
+                      <Crown size={13} color={THEME.accentEarth} />
+                    </div>
+                    <span style={styles.sidebarTitle}>物种排行</span>
+                  </div>
+                  <div style={styles.sidebarBadge}>TOP 5</div>
                 </div>
                 <div style={styles.rankingList}>
                   {speciesRanking.slice(0, 5).map((sp, idx) => (
-                    <div key={sp.lineage_code} style={styles.rankingItem}>
-                      <div style={styles.rankBadge}>{idx + 1}</div>
+                    <div 
+                      key={sp.lineage_code} 
+                      className="ranking-item"
+                      style={{...styles.rankingItem, animationDelay: `${idx * 80}ms`}}
+                    >
+                      <div style={{
+                        ...styles.rankBadge,
+                        background: idx === 0 ? `linear-gradient(135deg, ${THEME.accentEarth}, ${THEME.accentTemp})` :
+                                   idx === 1 ? `linear-gradient(135deg, #94a3b8, #64748b)` :
+                                   idx === 2 ? `linear-gradient(135deg, #cd7f32, #b87333)` :
+                                   `linear-gradient(135deg, ${THEME.bgGlass}, transparent)`,
+                        color: idx < 3 ? '#fff' : THEME.textSecondary,
+                        boxShadow: idx === 0 ? `0 0 12px ${THEME.glowEarth}` : 'none',
+                        border: idx >= 3 ? `1px solid ${THEME.borderSubtle}` : 'none',
+                      }}>{idx + 1}</div>
                       <div style={styles.rankInfo}>
                         <div style={styles.rankName}>{sp.common_name}</div>
-                        <div style={styles.rankPop}>{formatPopulation(sp.population)}</div>
+                        <div style={styles.rankPop}>{formatPopulation(sp.population)} 个体</div>
                       </div>
                       <div style={styles.rankBar}>
                         <div 
                           style={{
                             ...styles.rankBarFill,
                             width: `${(sp.population / speciesRanking[0].population) * 100}%`,
-                            backgroundColor: PIE_COLORS[idx % PIE_COLORS.length],
+                            background: `linear-gradient(90deg, ${PIE_COLORS[idx % PIE_COLORS.length]}, ${PIE_COLORS[idx % PIE_COLORS.length]}88)`,
+                            boxShadow: `0 0 8px ${PIE_COLORS[idx % PIE_COLORS.length]}44`,
                           }}
                         />
                       </div>
@@ -416,28 +726,59 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
             {activeTab === "health" && roleDistribution.length > 0 && (
               <div style={styles.sidebarSection}>
                 <div style={styles.sidebarHeader}>
-                  <span style={styles.sidebarTitle}>🧬 生态角色分布</span>
+                  <div style={styles.sidebarTitleWrapper}>
+                    <div style={{
+                      width: '26px',
+                      height: '26px',
+                      borderRadius: '8px',
+                      background: `linear-gradient(135deg, ${THEME.accentEvolve}20, ${THEME.accentEvolve}08)`,
+                      border: `1px solid ${THEME.accentEvolve}30`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}>
+                      <Target size={13} color={THEME.accentEvolve} />
+                    </div>
+                    <span style={styles.sidebarTitle}>生态角色分布</span>
+                  </div>
                 </div>
-                <div style={{ height: 180 }}>
+                <div style={{ height: 180, position: 'relative' }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
+                      <defs>
+                        {roleDistribution.map((_, idx) => (
+                          <linearGradient key={idx} id={`pieGradient${idx}`} x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stopColor={PIE_COLORS[idx % PIE_COLORS.length]} stopOpacity={1} />
+                            <stop offset="100%" stopColor={PIE_COLORS[idx % PIE_COLORS.length]} stopOpacity={0.6} />
+                          </linearGradient>
+                        ))}
+                      </defs>
                       <Pie
                         data={roleDistribution}
                         cx="50%"
                         cy="50%"
-                        innerRadius={40}
-                        outerRadius={70}
-                        paddingAngle={2}
+                        innerRadius={45}
+                        outerRadius={72}
+                        paddingAngle={3}
                         dataKey="value"
                         nameKey="name"
+                        strokeWidth={0}
                       >
                         {roleDistribution.map((_, idx) => (
-                          <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                          <Cell 
+                            key={idx} 
+                            fill={`url(#pieGradient${idx})`}
+                            style={{ filter: `drop-shadow(0 0 6px ${PIE_COLORS[idx % PIE_COLORS.length]}44)` }}
+                          />
                         ))}
                       </Pie>
                       <Tooltip content={<PieTooltip />} />
                     </PieChart>
                   </ResponsiveContainer>
+                  <div style={styles.pieCenter}>
+                    <div style={styles.pieCenterValue}>{roleDistribution.length}</div>
+                    <div style={styles.pieCenterLabel}>角色</div>
+                  </div>
                 </div>
                 <div style={styles.legendGrid}>
                   {roleDistribution.map((item, idx) => (
@@ -445,10 +786,12 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
                       <div 
                         style={{
                           ...styles.legendDot,
-                          backgroundColor: PIE_COLORS[idx % PIE_COLORS.length],
+                          background: `linear-gradient(135deg, ${PIE_COLORS[idx % PIE_COLORS.length]}, ${PIE_COLORS[idx % PIE_COLORS.length]}88)`,
+                          boxShadow: `0 0 6px ${PIE_COLORS[idx % PIE_COLORS.length]}44`,
                         }}
                       />
                       <span>{item.name}</span>
+                      <span style={{ marginLeft: 'auto', color: THEME.textSecondary, fontSize: '0.65rem' }}>{item.value}</span>
                     </div>
                   ))}
                 </div>
@@ -457,20 +800,37 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
 
             {/* Footer Stats */}
             <div style={styles.footer}>
-              <div style={styles.footerItem}>
-                <span>数据范围:</span>
-                <span style={{ color: THEME.textPrimary }}>
-                  {hasReports ? `T${summary.baselineTurn} - T${summary.latestTurn}` : '--'}
-                </span>
+              <div style={styles.footerTitle}>
+                <div style={{
+                  width: '22px',
+                  height: '22px',
+                  borderRadius: '6px',
+                  background: `linear-gradient(135deg, ${THEME.accentOcean}20, ${THEME.accentOcean}08)`,
+                  border: `1px solid ${THEME.accentOcean}30`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  <Shield size={11} color={THEME.accentOcean} />
+                </div>
+                <span>数据概览</span>
               </div>
-              <div style={styles.footerItem}>
-                <span>采样点:</span>
-                <span style={{ color: THEME.textPrimary }}>{filteredReports.length}</span>
+              <div style={styles.footerGrid}>
+                <div style={styles.footerItem}>
+                  <span style={styles.footerLabel}>数据范围</span>
+                  <span style={styles.footerValue}>
+                    {hasReports ? `T${summary.baselineTurn} → T${summary.latestTurn}` : '--'}
+                  </span>
+                </div>
+                <div style={styles.footerItem}>
+                  <span style={styles.footerLabel}>采样点</span>
+                  <span style={styles.footerValue}>{filteredReports.length}</span>
+                </div>
               </div>
               {summary.tectonicStage && (
-                <div style={styles.footerItem}>
-                  <span>地质阶段:</span>
-                  <span style={{ color: THEME.accentGeo }}>{summary.tectonicStage}</span>
+                <div style={styles.footerStage}>
+                  <Mountain size={12} color={THEME.accentEarth} />
+                  <span>{summary.tectonicStage}</span>
                 </div>
               )}
             </div>
@@ -481,18 +841,64 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
         {showTimeline && timelineEvents.length > 0 && (
           <div style={styles.timelineSection}>
             <div style={styles.timelineHeader}>
-              <span style={styles.sidebarTitle}>📅 重大事件时间线</span>
-              <span style={styles.timelineCount}>{timelineEvents.length} 事件</span>
+              <div style={styles.timelineHeaderLeft}>
+                <div style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '10px',
+                  background: `linear-gradient(135deg, ${THEME.accentOcean}20, ${THEME.accentOcean}08)`,
+                  border: `1px solid ${THEME.accentOcean}30`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: `0 0 12px ${THEME.glowOcean}`,
+                }}>
+                  <Clock size={16} color={THEME.accentOcean} />
+                </div>
+                <span style={styles.timelineHeaderTitle}>重大事件时间线</span>
+              </div>
+              <div style={styles.timelineHeaderRight}>
+                <span style={styles.timelineCount}>{timelineEvents.length} 事件</span>
+              </div>
             </div>
-            <div style={styles.timelineScroll}>
+            <div style={styles.timelineScroll} className="global-trends-scroll">
+              <div style={styles.timelineTrack} />
               {timelineEvents.slice(0, 20).map((event, idx) => (
-                <div key={`${event.turn}-${idx}`} style={styles.timelineItem}>
-                  <div style={{ ...styles.timelineIcon, backgroundColor: `${event.color}22`, color: event.color }}>
+                <div 
+                  key={`${event.turn}-${idx}`}
+                  className="timeline-item"
+                  style={{
+                    ...styles.timelineItem,
+                    animationDelay: `${idx * 60}ms`,
+                  }}
+                >
+                  <div style={styles.timelineConnector}>
+                    <div style={{
+                      ...styles.timelineDot,
+                      background: `linear-gradient(135deg, ${event.color}, ${event.color}aa)`,
+                      boxShadow: `0 0 14px ${event.color}70`,
+                      border: `2px solid ${THEME.bgDeep}`,
+                    }} />
+                  </div>
+                  <div style={{ 
+                    ...styles.timelineIcon, 
+                    background: `linear-gradient(145deg, ${event.color}20, ${event.color}08)`,
+                    border: `1px solid ${event.color}40`,
+                    color: event.color,
+                    boxShadow: `0 0 20px ${event.color}25`,
+                  }}>
                     {event.icon}
                   </div>
-                  <div style={styles.timelineTurn}>T{event.turn}</div>
+                  <div style={styles.timelineTurnBadge}>
+                    <span>T{event.turn}</span>
+                  </div>
                   <div style={styles.timelineContent}>
-                    <div style={styles.timelineTitle}>{event.title}</div>
+                    <div style={{
+                      ...styles.timelineTitle, 
+                      background: `linear-gradient(135deg, ${event.color}, ${event.color}cc)`,
+                      WebkitBackgroundClip: 'text',
+                      WebkitTextFillColor: 'transparent',
+                    }}>{event.title}</div>
                     <div style={styles.timelineDesc}>{event.description}</div>
                   </div>
                 </div>
@@ -501,6 +907,108 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
           </div>
         )}
       </div>
+      <style>{`
+        @keyframes metricSlideIn {
+          from {
+            opacity: 0;
+            transform: translateY(16px) scale(0.96);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+        @keyframes insightSlideIn {
+          from {
+            opacity: 0;
+            transform: translateX(-12px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+        @keyframes rankSlideIn {
+          from {
+            opacity: 0;
+            transform: translateX(12px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+        @keyframes timelineSlideIn {
+          from {
+            opacity: 0;
+            transform: translateY(20px) scale(0.95);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+        @keyframes pulse {
+          0%, 100% { 
+            opacity: 1;
+            transform: scale(1);
+          }
+          50% { 
+            opacity: 0.6;
+            transform: scale(1.1);
+          }
+        }
+        @keyframes pulseGlow {
+          0%, 100% { 
+            opacity: 0.5;
+            box-shadow: 0 0 20px ${THEME.glowOcean}, inset 0 0 15px ${THEME.accentOcean}10;
+          }
+          50% { 
+            opacity: 0.8;
+            box-shadow: 0 0 40px ${THEME.glowOcean}, inset 0 0 25px ${THEME.accentOcean}20;
+          }
+        }
+        @keyframes shimmer {
+          0% { background-position: -200% 0; }
+          100% { background-position: 200% 0; }
+        }
+        @keyframes float {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-6px); }
+        }
+        
+        /* 滚动条样式 */
+        .global-trends-scroll::-webkit-scrollbar {
+          width: 6px;
+          height: 6px;
+        }
+        .global-trends-scroll::-webkit-scrollbar-track {
+          background: ${THEME.bgDeep};
+          border-radius: 3px;
+        }
+        .global-trends-scroll::-webkit-scrollbar-thumb {
+          background: ${THEME.borderDefault};
+          border-radius: 3px;
+        }
+        .global-trends-scroll::-webkit-scrollbar-thumb:hover {
+          background: ${THEME.borderActive};
+        }
+        
+        /* 悬停效果 */
+        .insight-card:hover {
+          background: linear-gradient(135deg, ${THEME.bgCardHover}, ${THEME.bgGlass}) !important;
+          border-color: ${THEME.borderDefault} !important;
+          transform: translateX(4px);
+        }
+        .ranking-item:hover {
+          background: linear-gradient(135deg, ${THEME.bgCardHover}, ${THEME.bgGlass}) !important;
+          border-color: ${THEME.borderDefault} !important;
+        }
+        .timeline-item:hover {
+          border-color: ${THEME.borderActive} !important;
+          transform: translateY(-4px);
+        }
+      `}</style>
     </GamePanel>
   );
 }
@@ -540,34 +1048,34 @@ function renderEnvironmentChart(type: ChartType, props: any) {
     <ChartComponent {...props}>
       <defs>
         <linearGradient id="tempGradient" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="5%" stopColor={THEME.accentEnv} stopOpacity={0.3}/>
-          <stop offset="95%" stopColor={THEME.accentEnv} stopOpacity={0}/>
+          <stop offset="5%" stopColor={THEME.accentTemp} stopOpacity={0.4}/>
+          <stop offset="95%" stopColor={THEME.accentTemp} stopOpacity={0}/>
         </linearGradient>
         <linearGradient id="seaGradient" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="5%" stopColor={THEME.accentSea} stopOpacity={0.3}/>
-          <stop offset="95%" stopColor={THEME.accentSea} stopOpacity={0}/>
+          <stop offset="5%" stopColor={THEME.accentOcean} stopOpacity={0.4}/>
+          <stop offset="95%" stopColor={THEME.accentOcean} stopOpacity={0}/>
         </linearGradient>
       </defs>
-      <CartesianGrid strokeDasharray="3 3" stroke={THEME.borderColor} vertical={false} />
-      <XAxis dataKey="turn" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
-      <YAxis yAxisId="left" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
-      <YAxis yAxisId="right" orientation="right" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
+      <CartesianGrid strokeDasharray="3 3" stroke={THEME.borderSubtle} vertical={false} />
+      <XAxis dataKey="turn" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
+      <YAxis yAxisId="left" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
+      <YAxis yAxisId="right" orientation="right" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
       <Tooltip content={<CustomTooltip />} />
-      <Legend wrapperStyle={{ paddingTop: '10px' }} />
+      <Legend wrapperStyle={{ paddingTop: '12px' }} />
       {type === "area" ? (
         <>
-          <Area yAxisId="left" type="monotone" dataKey="temp" name="全球均温 (°C)" stroke={THEME.accentEnv} fill="url(#tempGradient)" strokeWidth={2} />
-          <Area yAxisId="right" type="monotone" dataKey="seaLevel" name="海平面 (m)" stroke={THEME.accentSea} fill="url(#seaGradient)" strokeWidth={2} />
+          <Area yAxisId="left" type="monotone" dataKey="temp" name="全球均温 (°C)" stroke={THEME.accentTemp} fill="url(#tempGradient)" strokeWidth={2.5} />
+          <Area yAxisId="right" type="monotone" dataKey="seaLevel" name="海平面 (m)" stroke={THEME.accentOcean} fill="url(#seaGradient)" strokeWidth={2.5} />
         </>
       ) : type === "bar" ? (
         <>
-          <Bar yAxisId="left" dataKey="temp" name="全球均温 (°C)" fill={THEME.accentEnv} radius={[4, 4, 0, 0]} />
-          <Line yAxisId="right" type="monotone" dataKey="seaLevel" name="海平面 (m)" stroke={THEME.accentSea} strokeWidth={3} dot={false} />
+          <Bar yAxisId="left" dataKey="temp" name="全球均温 (°C)" fill={THEME.accentTemp} radius={[6, 6, 0, 0]} />
+          <Line yAxisId="right" type="monotone" dataKey="seaLevel" name="海平面 (m)" stroke={THEME.accentOcean} strokeWidth={3} dot={false} />
         </>
       ) : (
         <>
-          <Line yAxisId="left" type="monotone" dataKey="temp" name="全球均温 (°C)" stroke={THEME.accentEnv} strokeWidth={3} dot={false} activeDot={{ r: 6 }} />
-          <Line yAxisId="right" type="monotone" dataKey="seaLevel" name="海平面 (m)" stroke={THEME.accentSea} strokeWidth={3} dot={false} activeDot={{ r: 6 }} />
+          <Line yAxisId="left" type="monotone" dataKey="temp" name="全球均温 (°C)" stroke={THEME.accentTemp} strokeWidth={3} dot={false} activeDot={{ r: 6, fill: THEME.accentTemp, strokeWidth: 2, stroke: THEME.bgDeep }} />
+          <Line yAxisId="right" type="monotone" dataKey="seaLevel" name="海平面 (m)" stroke={THEME.accentOcean} strokeWidth={3} dot={false} activeDot={{ r: 6, fill: THEME.accentOcean, strokeWidth: 2, stroke: THEME.bgDeep }} />
         </>
       )}
     </ChartComponent>
@@ -586,34 +1094,34 @@ function renderBiodiversityChart(type: ChartType, props: any) {
     <ChartComponent {...props}>
       <defs>
         <linearGradient id="popGradient" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="5%" stopColor={THEME.accentPop} stopOpacity={0.3}/>
-          <stop offset="95%" stopColor={THEME.accentPop} stopOpacity={0}/>
+          <stop offset="5%" stopColor={THEME.accentGrowth} stopOpacity={0.4}/>
+          <stop offset="95%" stopColor={THEME.accentGrowth} stopOpacity={0}/>
         </linearGradient>
         <linearGradient id="speciesGradient" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="5%" stopColor={THEME.accentBio} stopOpacity={0.3}/>
-          <stop offset="95%" stopColor={THEME.accentBio} stopOpacity={0}/>
+          <stop offset="5%" stopColor={THEME.accentLife} stopOpacity={0.4}/>
+          <stop offset="95%" stopColor={THEME.accentLife} stopOpacity={0}/>
         </linearGradient>
       </defs>
-      <CartesianGrid strokeDasharray="3 3" stroke={THEME.borderColor} vertical={false} />
-      <XAxis dataKey="turn" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
-      <YAxis yAxisId="left" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
-      <YAxis yAxisId="right" orientation="right" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
+      <CartesianGrid strokeDasharray="3 3" stroke={THEME.borderSubtle} vertical={false} />
+      <XAxis dataKey="turn" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
+      <YAxis yAxisId="left" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
+      <YAxis yAxisId="right" orientation="right" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
       <Tooltip content={<CustomTooltip />} />
-      <Legend wrapperStyle={{ paddingTop: '10px' }} />
+      <Legend wrapperStyle={{ paddingTop: '12px' }} />
       {type === "area" ? (
         <>
-          <Area yAxisId="left" type="monotone" dataKey="totalPop" name="总生物量" stroke={THEME.accentPop} fill="url(#popGradient)" strokeWidth={2} />
-          <Area yAxisId="right" type="monotone" dataKey="speciesCount" name="物种数量" stroke={THEME.accentBio} fill="url(#speciesGradient)" strokeWidth={2} />
+          <Area yAxisId="left" type="monotone" dataKey="totalPop" name="总生物量" stroke={THEME.accentGrowth} fill="url(#popGradient)" strokeWidth={2.5} />
+          <Area yAxisId="right" type="monotone" dataKey="speciesCount" name="物种数量" stroke={THEME.accentLife} fill="url(#speciesGradient)" strokeWidth={2.5} />
         </>
       ) : type === "bar" ? (
         <>
-          <Bar yAxisId="left" dataKey="totalPop" name="总生物量" fill={THEME.accentPop} radius={[4, 4, 0, 0]} />
-          <Line yAxisId="right" type="monotone" dataKey="speciesCount" name="物种数量" stroke={THEME.accentBio} strokeWidth={3} dot={false} />
+          <Bar yAxisId="left" dataKey="totalPop" name="总生物量" fill={THEME.accentGrowth} radius={[6, 6, 0, 0]} />
+          <Line yAxisId="right" type="monotone" dataKey="speciesCount" name="物种数量" stroke={THEME.accentLife} strokeWidth={3} dot={false} />
         </>
       ) : (
         <>
-          <Line yAxisId="left" type="monotone" dataKey="totalPop" name="总生物量" stroke={THEME.accentPop} strokeWidth={3} dot={false} activeDot={{ r: 6 }} />
-          <Line yAxisId="right" type="monotone" dataKey="speciesCount" name="物种数量" stroke={THEME.accentBio} strokeWidth={3} dot={false} activeDot={{ r: 6 }} />
+          <Line yAxisId="left" type="monotone" dataKey="totalPop" name="总生物量" stroke={THEME.accentGrowth} strokeWidth={3} dot={false} activeDot={{ r: 6, fill: THEME.accentGrowth, strokeWidth: 2, stroke: THEME.bgDeep }} />
+          <Line yAxisId="right" type="monotone" dataKey="speciesCount" name="物种数量" stroke={THEME.accentLife} strokeWidth={3} dot={false} activeDot={{ r: 6, fill: THEME.accentLife, strokeWidth: 2, stroke: THEME.bgDeep }} />
         </>
       )}
     </ChartComponent>
@@ -623,14 +1131,14 @@ function renderBiodiversityChart(type: ChartType, props: any) {
 function renderEvolutionChart(type: ChartType, props: any) {
   return (
     <ComposedChart {...props}>
-      <CartesianGrid strokeDasharray="3 3" stroke={THEME.borderColor} vertical={false} />
-      <XAxis dataKey="turn" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
-      <YAxis stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
+      <CartesianGrid strokeDasharray="3 3" stroke={THEME.borderSubtle} vertical={false} />
+      <XAxis dataKey="turn" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
+      <YAxis stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
       <Tooltip content={<CustomTooltip />} />
-      <Legend wrapperStyle={{ paddingTop: '10px' }} />
-      <Bar dataKey="branchings" name="物种分化" fill={THEME.accentEvolution} radius={[4, 4, 0, 0]} />
-      <Bar dataKey="migrations" name="迁徙事件" fill={THEME.accentSea} radius={[4, 4, 0, 0]} />
-      <Line type="monotone" dataKey="speciesCount" name="物种总数" stroke={THEME.accentBio} strokeWidth={2} dot={false} />
+      <Legend wrapperStyle={{ paddingTop: '12px' }} />
+      <Bar dataKey="branchings" name="物种分化" fill={THEME.accentEvolve} radius={[6, 6, 0, 0]} />
+      <Bar dataKey="migrations" name="迁徙事件" fill={THEME.accentOcean} radius={[6, 6, 0, 0]} />
+      <Line type="monotone" dataKey="speciesCount" name="物种总数" stroke={THEME.accentLife} strokeWidth={2.5} dot={false} />
     </ComposedChart>
   );
 }
@@ -640,19 +1148,19 @@ function renderGeologyChart(type: ChartType, props: any) {
     <ComposedChart {...props}>
       <defs>
         <linearGradient id="geoGradient" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="5%" stopColor={THEME.accentGeo} stopOpacity={0.3}/>
-          <stop offset="95%" stopColor={THEME.accentGeo} stopOpacity={0}/>
+          <stop offset="5%" stopColor={THEME.accentEarth} stopOpacity={0.4}/>
+          <stop offset="95%" stopColor={THEME.accentEarth} stopOpacity={0}/>
         </linearGradient>
       </defs>
-      <CartesianGrid strokeDasharray="3 3" stroke={THEME.borderColor} vertical={false} />
-      <XAxis dataKey="turn" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
-      <YAxis yAxisId="left" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
-      <YAxis yAxisId="right" orientation="right" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
+      <CartesianGrid strokeDasharray="3 3" stroke={THEME.borderSubtle} vertical={false} />
+      <XAxis dataKey="turn" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
+      <YAxis yAxisId="left" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
+      <YAxis yAxisId="right" orientation="right" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
       <Tooltip content={<CustomTooltip />} />
-      <Legend wrapperStyle={{ paddingTop: '10px' }} />
-      <Bar yAxisId="left" dataKey="mapChanges" name="地形变化" fill={THEME.accentGeo} radius={[4, 4, 0, 0]} />
-      <Bar yAxisId="left" dataKey="majorEvents" name="重大事件" fill={THEME.accentDeath} radius={[4, 4, 0, 0]} />
-      <Line yAxisId="right" type="monotone" dataKey="seaLevel" name="海平面" stroke={THEME.accentSea} strokeWidth={2} dot={false} />
+      <Legend wrapperStyle={{ paddingTop: '12px' }} />
+      <Bar yAxisId="left" dataKey="mapChanges" name="地形变化" fill={THEME.accentEarth} radius={[6, 6, 0, 0]} />
+      <Bar yAxisId="left" dataKey="majorEvents" name="重大事件" fill={THEME.accentDanger} radius={[6, 6, 0, 0]} />
+      <Line yAxisId="right" type="monotone" dataKey="seaLevel" name="海平面" stroke={THEME.accentOcean} strokeWidth={2.5} dot={false} />
     </ComposedChart>
   );
 }
@@ -662,30 +1170,30 @@ function renderHealthChart(type: ChartType, props: any) {
     <ComposedChart {...props}>
       <defs>
         <linearGradient id="deathGradient" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="5%" stopColor={THEME.accentDeath} stopOpacity={0.3}/>
-          <stop offset="95%" stopColor={THEME.accentDeath} stopOpacity={0}/>
+          <stop offset="5%" stopColor={THEME.accentDanger} stopOpacity={0.4}/>
+          <stop offset="95%" stopColor={THEME.accentDanger} stopOpacity={0}/>
         </linearGradient>
       </defs>
-      <CartesianGrid strokeDasharray="3 3" stroke={THEME.borderColor} vertical={false} />
-      <XAxis dataKey="turn" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
-      <YAxis yAxisId="left" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
-      <YAxis yAxisId="right" orientation="right" stroke={THEME.textSecondary} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} domain={[0, 100]} />
+      <CartesianGrid strokeDasharray="3 3" stroke={THEME.borderSubtle} vertical={false} />
+      <XAxis dataKey="turn" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
+      <YAxis yAxisId="left" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} />
+      <YAxis yAxisId="right" orientation="right" stroke={THEME.textMuted} tick={{ fontSize: 11, fill: THEME.textSecondary }} tickLine={false} axisLine={false} domain={[0, 100]} />
       <Tooltip content={<CustomTooltip />} />
-      <Legend wrapperStyle={{ paddingTop: '10px' }} />
-      <Area yAxisId="left" type="monotone" dataKey="deaths" name="死亡数" stroke={THEME.accentDeath} fill="url(#deathGradient)" strokeWidth={2} />
-      <Line yAxisId="right" type="monotone" dataKey="deathRate" name="平均死亡率 (%)" stroke={THEME.accentHealth} strokeWidth={3} dot={false} />
-      <Line yAxisId="left" type="monotone" dataKey="totalPop" name="总种群" stroke={THEME.accentPop} strokeWidth={2} strokeDasharray="5 5" dot={false} />
+      <Legend wrapperStyle={{ paddingTop: '12px' }} />
+      <Area yAxisId="left" type="monotone" dataKey="deaths" name="死亡数" stroke={THEME.accentDanger} fill="url(#deathGradient)" strokeWidth={2.5} />
+      <Line yAxisId="right" type="monotone" dataKey="deathRate" name="平均死亡率 (%)" stroke={THEME.accentVital} strokeWidth={3} dot={false} />
+      <Line yAxisId="left" type="monotone" dataKey="totalPop" name="总种群" stroke={THEME.accentGrowth} strokeWidth={2} strokeDasharray="5 5" dot={false} />
     </ComposedChart>
   );
 }
 
 function getChartTitle(tab: Tab): string {
   const titles: Record<Tab, string> = {
-    environment: "🌡️ 环境变化趋势",
-    biodiversity: "🌿 生物多样性变化",
-    evolution: "🧬 进化与迁徙活动",
-    geology: "⛰️ 地质构造变化",
-    health: "❤️ 生态系统健康",
+    environment: "环境变化趋势",
+    biodiversity: "生物多样性变化",
+    evolution: "进化与迁徙活动",
+    geology: "地质构造变化",
+    health: "生态系统健康",
   };
   return titles[tab];
 }
@@ -701,28 +1209,154 @@ function getChartLegend(tab: Tab): string {
   return legends[tab];
 }
 
+// --- Helper Functions ---
+function getChartIcon(tab: Tab): React.ReactNode {
+  const icons: Record<Tab, React.ReactNode> = {
+    environment: <Thermometer size={20} color={THEME.accentTemp} />,
+    biodiversity: <Dna size={20} color={THEME.accentLife} />,
+    evolution: <GitBranch size={20} color={THEME.accentEvolve} />,
+    geology: <Mountain size={20} color={THEME.accentEarth} />,
+    health: <Activity size={20} color={THEME.accentVital} />,
+  };
+  return icons[tab];
+}
+
 // --- Sub Components ---
-function MetricCard({ metric }: { metric: MetricDefinition }) {
+function MetricCard({ metric, index, isHovered, onHover }: { 
+  metric: MetricDefinition; 
+  index: number;
+  isHovered: boolean;
+  onHover: (key: string | null) => void;
+}) {
   const trendColor =
     metric.trend === "up"
-      ? "#4ade80"
+      ? THEME.accentGrowth
       : metric.trend === "down"
-      ? "#f87171"
+      ? THEME.accentDanger
       : THEME.textSecondary;
 
   const TrendIcon = metric.trend === 'up' ? TrendingUp : metric.trend === 'down' ? TrendingDown : Minus;
 
   return (
-    <div style={{...styles.metricCard, borderTop: `3px solid ${metric.accent}`}}>
+    <div 
+      style={{
+        ...styles.metricCard,
+        animation: 'metricSlideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+        animationDelay: `${index * 80}ms`,
+        opacity: 0,
+        transform: isHovered ? 'translateY(-4px) scale(1.02)' : 'translateY(0) scale(1)',
+        boxShadow: isHovered 
+          ? `0 12px 40px ${metric.glow || metric.accent + '30'}, 0 0 0 1px ${metric.accent}30, inset 0 1px 0 rgba(255,255,255,0.08)`
+          : `0 4px 20px rgba(0,0,0,0.2), 0 0 0 1px ${THEME.borderSubtle}`,
+      }}
+      onMouseEnter={() => onHover(metric.key)}
+      onMouseLeave={() => onHover(null)}
+    >
+      {/* 顶部发光条 */}
+      <div style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: '2px',
+        background: `linear-gradient(90deg, transparent, ${metric.accent}, transparent)`,
+        opacity: isHovered ? 1 : 0.7,
+        transition: 'opacity 0.3s',
+      }} />
+      
+      {/* 顶部光晕 */}
+      <div style={{
+        position: 'absolute',
+        top: '-20px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        width: '80%',
+        height: '60px',
+        background: `radial-gradient(ellipse at center, ${metric.accent}20, transparent 70%)`,
+        pointerEvents: 'none',
+        opacity: isHovered ? 1 : 0.5,
+        transition: 'opacity 0.3s',
+      }} />
+      
+      {/* 角落装饰 */}
+      <div style={{
+        position: 'absolute',
+        top: '8px',
+        right: '8px',
+        width: '20px',
+        height: '20px',
+        borderTop: `1px solid ${metric.accent}40`,
+        borderRight: `1px solid ${metric.accent}40`,
+        borderRadius: '0 6px 0 0',
+        opacity: isHovered ? 1 : 0.4,
+        transition: 'opacity 0.3s',
+      }} />
+      <div style={{
+        position: 'absolute',
+        bottom: '8px',
+        left: '8px',
+        width: '20px',
+        height: '20px',
+        borderBottom: `1px solid ${metric.accent}40`,
+        borderLeft: `1px solid ${metric.accent}40`,
+        borderRadius: '0 0 0 6px',
+        opacity: isHovered ? 1 : 0.4,
+        transition: 'opacity 0.3s',
+      }} />
+      
       <div style={styles.metricHeader}>
         <span style={styles.metricLabel}>{metric.label}</span>
-        <div style={{ color: metric.accent, opacity: 0.8 }}>{metric.icon}</div>
+        <div style={{ 
+          width: '34px',
+          height: '34px',
+          borderRadius: '10px',
+          background: `linear-gradient(135deg, ${metric.accent}18, ${metric.accent}08)`,
+          border: `1px solid ${metric.accent}30`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: metric.accent,
+          boxShadow: isHovered ? `0 0 16px ${metric.accent}40` : 'none',
+          transition: 'box-shadow 0.3s',
+        }}>
+          {metric.icon}
+        </div>
       </div>
+      
       <div style={styles.metricContent}>
-        <span style={styles.metricValue}>{metric.value}</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: trendColor, fontSize: '0.85rem' }}>
-           <TrendIcon size={14} />
-           <span>{metric.deltaText}</span>
+        <span style={{
+          ...styles.metricValue, 
+          background: `linear-gradient(135deg, ${metric.accent}, ${metric.accent}cc)`,
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          filter: isHovered ? `drop-shadow(0 0 8px ${metric.accent}60)` : 'none',
+          transition: 'filter 0.3s',
+        }}>
+          {metric.value}
+        </span>
+      </div>
+      
+      <div style={styles.metricFooter}>
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '5px', 
+          color: trendColor, 
+          fontSize: '0.78rem',
+          fontWeight: 600,
+        }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '20px',
+            height: '20px',
+            borderRadius: '6px',
+            background: `${trendColor}18`,
+          }}>
+            <TrendIcon size={12} />
+          </div>
+          <span>{metric.deltaText}</span>
         </div>
       </div>
     </div>
@@ -730,31 +1364,78 @@ function MetricCard({ metric }: { metric: MetricDefinition }) {
 }
 
 function TabButton({ active, onClick, label, icon, color }: { active: boolean; onClick: () => void; label: string; icon: React.ReactNode; color: string }) {
+  const [isHovered, setIsHovered] = useState(false);
+  
   return (
     <button
       onClick={onClick}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
       style={{
         ...styles.tabButton,
-        backgroundColor: active ? `${color}22` : 'transparent',
-        borderColor: active ? color : 'transparent',
-        color: active ? color : THEME.textSecondary,
+        background: active 
+          ? `linear-gradient(135deg, ${color}22, ${color}10)` 
+          : isHovered 
+            ? `linear-gradient(135deg, ${THEME.bgGlass}, transparent)`
+            : 'transparent',
+        borderColor: active ? `${color}50` : isHovered ? THEME.borderDefault : 'transparent',
+        color: active ? color : isHovered ? THEME.textPrimary : THEME.textSecondary,
+        boxShadow: active 
+          ? `0 0 20px ${color}25, inset 0 1px 0 ${color}20, inset 0 0 12px ${color}08` 
+          : 'none',
+        transform: active ? 'translateY(-1px)' : isHovered ? 'translateY(-1px)' : 'none',
       }}
     >
-      {icon}
-      {label}
+      <div style={{ 
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '24px',
+        height: '24px',
+        borderRadius: '7px',
+        background: active ? `${color}20` : 'transparent',
+        transition: 'all 0.25s',
+      }}>
+        <span style={{ 
+          filter: active ? `drop-shadow(0 0 6px ${color})` : 'none',
+          transition: 'filter 0.25s',
+        }}>{icon}</span>
+      </div>
+      <span style={{ fontWeight: active ? 700 : 500 }}>{label}</span>
+      {active && (
+        <div style={{
+          position: 'absolute',
+          bottom: '-1px',
+          left: '20%',
+          right: '20%',
+          height: '2px',
+          background: `linear-gradient(90deg, transparent, ${color}, transparent)`,
+          borderRadius: '2px',
+        }} />
+      )}
     </button>
   );
 }
 
 function ChartTypeButton({ active, onClick, icon, title }: { active: boolean; onClick: () => void; icon: React.ReactNode; title: string }) {
+  const [isHovered, setIsHovered] = useState(false);
+  
   return (
     <button
       onClick={onClick}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
       style={{
         ...styles.chartTypeBtn,
-        backgroundColor: active ? `${THEME.accentSea}33` : 'transparent',
-        borderColor: active ? THEME.accentSea : 'transparent',
-        color: active ? THEME.accentSea : THEME.textSecondary,
+        background: active 
+          ? `linear-gradient(135deg, ${THEME.accentOcean}25, ${THEME.accentOcean}12)` 
+          : isHovered
+            ? THEME.bgGlass
+            : 'transparent',
+        borderColor: active ? `${THEME.accentOcean}45` : 'transparent',
+        color: active ? THEME.accentOcean : isHovered ? THEME.textPrimary : THEME.textSecondary,
+        boxShadow: active ? `0 0 14px ${THEME.glowOcean}, inset 0 0 8px ${THEME.accentOcean}10` : 'none',
+        transform: isHovered && !active ? 'scale(1.08)' : 'scale(1)',
       }}
       title={title}
     >
@@ -767,12 +1448,47 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
     return (
       <div style={styles.tooltip}>
-        <p style={styles.tooltipTitle}>{`回合 ${label}`}</p>
-        {payload.map((entry: any, index: number) => (
-          <div key={index} style={{ color: entry.color, fontSize: '0.85rem', marginBottom: '4px' }}>
-            {entry.name}: {typeof entry.value === 'number' && entry.value % 1 !== 0 ? entry.value.toFixed(2) : formatPopulation(entry.value)}
+        <div style={styles.tooltipHeader}>
+          <div style={{
+            width: '28px',
+            height: '28px',
+            borderRadius: '8px',
+            background: `linear-gradient(135deg, ${THEME.accentOcean}20, ${THEME.accentOcean}08)`,
+            border: `1px solid ${THEME.accentOcean}30`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            <Clock size={14} color={THEME.accentOcean} />
           </div>
-        ))}
+          <div>
+            <span style={styles.tooltipTitle}>{`回合 ${label}`}</span>
+            <div style={{ fontSize: '0.65rem', color: THEME.textMuted, marginTop: '1px' }}>TURN DATA</div>
+          </div>
+        </div>
+        <div style={styles.tooltipDivider} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {payload.map((entry: any, index: number) => (
+            <div key={index} style={styles.tooltipItem}>
+              <div style={{
+                width: '10px',
+                height: '10px',
+                borderRadius: '3px',
+                background: `linear-gradient(135deg, ${entry.color}, ${entry.color}aa)`,
+                boxShadow: `0 0 8px ${entry.color}50`,
+              }} />
+              <span style={{ color: THEME.textSecondary, flex: 1, fontSize: '0.8rem' }}>{entry.name}</span>
+              <span style={{ 
+                color: entry.color, 
+                fontWeight: 700,
+                fontSize: '0.88rem',
+                fontFamily: 'JetBrains Mono, monospace',
+              }}>
+                {typeof entry.value === 'number' && entry.value % 1 !== 0 ? entry.value.toFixed(2) : formatPopulation(entry.value)}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -781,10 +1497,37 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 const PieTooltip = ({ active, payload }: any) => {
   if (active && payload && payload.length) {
+    const color = PIE_COLORS[payload[0].payload.index % PIE_COLORS.length] || payload[0].payload.fill;
     return (
       <div style={styles.tooltip}>
-        <p style={{ ...styles.tooltipTitle, color: payload[0].payload.fill }}>{payload[0].name}</p>
-        <p style={{ fontSize: '0.9rem' }}>{payload[0].value} 个物种</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{
+            width: '14px',
+            height: '14px',
+            borderRadius: '4px',
+            background: `linear-gradient(135deg, ${color}, ${color}aa)`,
+            boxShadow: `0 0 10px ${color}50`,
+          }} />
+          <span style={{ ...styles.tooltipTitle, color }}>{payload[0].name}</span>
+        </div>
+        <div style={{ 
+          fontSize: '1.25rem', 
+          fontWeight: 800, 
+          marginTop: '8px', 
+          color: THEME.textBright,
+          fontFamily: 'JetBrains Mono, monospace',
+        }}>
+          {payload[0].value} 
+          <span style={{ 
+            fontSize: '0.75rem', 
+            fontWeight: 500, 
+            color: THEME.textSecondary,
+            marginLeft: '6px',
+            fontFamily: 'inherit',
+          }}>
+            个物种
+          </span>
+        </div>
       </div>
     );
   }
@@ -861,32 +1604,36 @@ function buildMetricDefinitions(summary: SummaryStats, tab: Tab): MetricDefiniti
       value: `${summary.temp.toFixed(1)}°C`,
       deltaText: formatDelta(summary.tempDelta, "°C", 1),
       trend: getTrend(summary.tempDelta),
-      accent: THEME.accentEnv,
-      icon: <Thermometer size={18} />,
+      accent: THEME.accentTemp,
+      glow: THEME.glowTemp,
+      icon: <Thermometer size={17} />,
     },
     {
       key: "seaLevel", label: "海平面",
       value: `${summary.seaLevel.toFixed(2)} m`,
       deltaText: formatDelta(summary.seaLevelDelta, " m", 2),
       trend: getTrend(summary.seaLevelDelta),
-      accent: THEME.accentSea,
-      icon: <Waves size={18} />,
+      accent: THEME.accentOcean,
+      glow: THEME.glowOcean,
+      icon: <Waves size={17} />,
     },
     {
       key: "species", label: "物种丰富度",
       value: integerFormatter.format(summary.species),
       deltaText: formatDelta(summary.speciesDelta, "", 0),
       trend: getTrend(summary.speciesDelta),
-      accent: THEME.accentBio,
-      icon: <Sprout size={18} />,
+      accent: THEME.accentLife,
+      glow: THEME.glowLife,
+      icon: <Leaf size={17} />,
     },
     {
       key: "population", label: "总生物量",
       value: formatPopulation(summary.population),
       deltaText: formatDelta(summary.populationDelta, "", 1, formatPopulation),
       trend: getTrend(summary.populationDelta),
-      accent: THEME.accentPop,
-      icon: <Users size={18} />,
+      accent: THEME.accentGrowth,
+      glow: THEME.glowGrowth,
+      icon: <Users size={17} />,
     },
   ];
 
@@ -900,16 +1647,18 @@ function buildMetricDefinitions(summary: SummaryStats, tab: Tab): MetricDefiniti
         value: integerFormatter.format(summary.branchingCount),
         deltaText: "累计事件",
         trend: "neutral",
-        accent: THEME.accentEvolution,
-        icon: <GitBranch size={18} />,
+        accent: THEME.accentEvolve,
+        glow: THEME.glowEvolve,
+        icon: <GitBranch size={17} />,
       },
       {
         key: "migrations", label: "迁徙活动",
         value: integerFormatter.format(summary.migrationCount),
         deltaText: "累计事件",
         trend: "neutral",
-        accent: THEME.accentSea,
-        icon: <Footprints size={18} />,
+        accent: THEME.accentOcean,
+        glow: THEME.glowOcean,
+        icon: <Footprints size={17} />,
       },
     ],
     geology: [
@@ -918,8 +1667,9 @@ function buildMetricDefinitions(summary: SummaryStats, tab: Tab): MetricDefiniti
         value: integerFormatter.format(summary.mapChanges),
         deltaText: "累计变化",
         trend: "neutral",
-        accent: THEME.accentGeo,
-        icon: <Mountain size={18} />,
+        accent: THEME.accentEarth,
+        glow: THEME.glowEarth,
+        icon: <Mountain size={17} />,
       },
     ],
     health: [
@@ -928,16 +1678,18 @@ function buildMetricDefinitions(summary: SummaryStats, tab: Tab): MetricDefiniti
         value: `${(summary.avgDeathRate * 100).toFixed(1)}%`,
         deltaText: summary.avgDeathRate > 0.3 ? "偏高" : summary.avgDeathRate > 0.15 ? "正常" : "健康",
         trend: summary.avgDeathRate > 0.25 ? "down" : "up",
-        accent: THEME.accentDeath,
-        icon: <Skull size={18} />,
+        accent: THEME.accentDanger,
+        glow: THEME.glowDanger,
+        icon: <Skull size={17} />,
       },
       {
         key: "totalDeaths", label: "累计死亡",
         value: formatPopulation(summary.totalDeaths),
         deltaText: "生命损失",
         trend: "neutral",
-        accent: THEME.accentHealth,
-        icon: <Heart size={18} />,
+        accent: THEME.accentVital,
+        glow: THEME.glowVital,
+        icon: <Heart size={17} />,
       },
     ],
   };
@@ -957,25 +1709,25 @@ function buildInsightItems(tab: Tab, summary: SummaryStats, reports: TurnReport[
           key: "tempRate", label: "升温速率",
           value: `${formatDelta(rate, "°C", 3)} / 回合`,
           description: "每回合平均温度变化",
-          accent: THEME.accentEnv,
+          accent: THEME.accentTemp,
         },
         {
           key: "seaTotal", label: "海平面净变",
           value: formatDelta(summary.seaLevelDelta, " m", 2),
           description: "相较于初始记录的累计变化",
-          accent: THEME.accentSea,
+          accent: THEME.accentOcean,
         },
         {
           key: "pressure", label: "环境压力",
           value: rate > 0.5 ? "🔴 危急" : rate > 0.1 ? "🟡 高压" : "🟢 稳定",
           description: "基于当前变化率的压力评级",
-          accent: rate > 0.5 ? THEME.accentDeath : rate > 0.1 ? THEME.accentGeo : THEME.accentPop,
+          accent: rate > 0.5 ? THEME.accentDanger : rate > 0.1 ? THEME.accentEarth : THEME.accentGrowth,
         },
         {
           key: "forecast", label: "趋势预测",
           value: rate > 0 ? "升温中" : rate < 0 ? "降温中" : "平稳",
           description: rate > 0 ? "生态系统面临热压力" : rate < 0 ? "可能进入冰期" : "环境条件稳定",
-          accent: THEME.accentEnv,
+          accent: THEME.accentTemp,
         },
       ];
       
@@ -987,25 +1739,25 @@ function buildInsightItems(tab: Tab, summary: SummaryStats, reports: TurnReport[
           key: "diversity", label: "多样性趋势",
           value: formatDelta(summary.speciesDelta, " 种", 0),
           description: "物种形成与灭绝的净结果",
-          accent: summary.speciesDelta >= 0 ? THEME.accentPop : THEME.accentDeath,
+          accent: summary.speciesDelta >= 0 ? THEME.accentGrowth : THEME.accentDanger,
         },
         {
           key: "biomass", label: "生物量净变",
           value: formatDelta(summary.populationDelta, "", 1, formatPopulation),
           description: "生态系统承载力变化",
-          accent: THEME.accentBio,
+          accent: THEME.accentLife,
         },
         {
           key: "density", label: "平均种群规模",
           value: formatPopulation(avgPop),
           description: "单物种平均种群大小",
-          accent: THEME.accentPop,
+          accent: THEME.accentGrowth,
         },
         {
           key: "health", label: "多样性健康",
           value: diversityHealth,
           description: summary.speciesDelta >= 0 ? "物种多样性正在恢复" : "物种多样性正在下降",
-          accent: summary.speciesDelta >= 0 ? THEME.accentPop : THEME.accentDeath,
+          accent: summary.speciesDelta >= 0 ? THEME.accentGrowth : THEME.accentDanger,
         },
       ];
       
@@ -1016,25 +1768,25 @@ function buildInsightItems(tab: Tab, summary: SummaryStats, reports: TurnReport[
           key: "speciation", label: "物种形成率",
           value: `${branchRate.toFixed(2)} / 回合`,
           description: "平均每回合产生的新物种",
-          accent: THEME.accentEvolution,
+          accent: THEME.accentEvolve,
         },
         {
           key: "migrations", label: "迁徙活跃度",
           value: integerFormatter.format(summary.migrationCount),
           description: "物种地理扩散事件总数",
-          accent: THEME.accentSea,
+          accent: THEME.accentOcean,
         },
         {
           key: "radiationPotential", label: "辐射潜力",
           value: summary.branchingCount > 5 ? "🔥 活跃" : summary.branchingCount > 2 ? "📈 中等" : "💤 低迷",
           description: "物种快速分化的可能性",
-          accent: THEME.accentEvolution,
+          accent: THEME.accentEvolve,
         },
         {
           key: "isolation", label: "隔离程度",
           value: summary.migrationCount > summary.branchingCount ? "低" : "高",
           description: summary.migrationCount > summary.branchingCount ? "频繁基因交流" : "地理隔离促进分化",
-          accent: THEME.accentBio,
+          accent: THEME.accentLife,
         },
       ];
       
@@ -1044,25 +1796,25 @@ function buildInsightItems(tab: Tab, summary: SummaryStats, reports: TurnReport[
           key: "tectonics", label: "地质阶段",
           value: summary.tectonicStage || "未知",
           description: "当前板块构造状态",
-          accent: THEME.accentGeo,
+          accent: THEME.accentEarth,
         },
         {
           key: "changes", label: "地形变化",
           value: `${summary.mapChanges} 次`,
           description: "地形改变事件总数",
-          accent: THEME.accentGeo,
+          accent: THEME.accentEarth,
         },
         {
           key: "seaChange", label: "海平面变化",
           value: formatDelta(summary.seaLevelDelta, " m", 2),
           description: summary.seaLevelDelta > 0 ? "海侵中，陆地面积减少" : summary.seaLevelDelta < 0 ? "海退中，陆地面积增加" : "海平面稳定",
-          accent: THEME.accentSea,
+          accent: THEME.accentOcean,
         },
         {
           key: "activity", label: "地质活动度",
           value: summary.mapChanges > 5 ? "🌋 剧烈" : summary.mapChanges > 2 ? "⛰️ 活跃" : "🏔️ 平静",
           description: "基于地形变化频率评估",
-          accent: summary.mapChanges > 5 ? THEME.accentDeath : THEME.accentGeo,
+          accent: summary.mapChanges > 5 ? THEME.accentDanger : THEME.accentEarth,
         },
       ];
       
@@ -1075,25 +1827,25 @@ function buildInsightItems(tab: Tab, summary: SummaryStats, reports: TurnReport[
           key: "score", label: "生态健康指数",
           value: `${healthScore.toFixed(0)} / 100`,
           description: healthScore > 70 ? "生态系统运行良好" : healthScore > 40 ? "存在压力但可恢复" : "生态系统处于危机",
-          accent: healthScore > 70 ? THEME.accentPop : healthScore > 40 ? THEME.accentGeo : THEME.accentDeath,
+          accent: healthScore > 70 ? THEME.accentGrowth : healthScore > 40 ? THEME.accentEarth : THEME.accentDanger,
         },
         {
           key: "mortality", label: "平均死亡率",
           value: `${(summary.avgDeathRate * 100).toFixed(1)}%`,
           description: summary.avgDeathRate < 0.15 ? "种群稳定繁衍" : summary.avgDeathRate < 0.3 ? "存在生存压力" : "高死亡率警报",
-          accent: THEME.accentDeath,
+          accent: THEME.accentDanger,
         },
         {
           key: "sustainability", label: "可持续性",
           value: summary.populationDelta >= 0 && summary.speciesDelta >= 0 ? "🌱 可持续" : "⚠️ 需关注",
           description: "综合种群和物种变化趋势",
-          accent: summary.populationDelta >= 0 ? THEME.accentPop : THEME.accentDeath,
+          accent: summary.populationDelta >= 0 ? THEME.accentGrowth : THEME.accentDanger,
         },
         {
           key: "resilience", label: "恢复力",
           value: summary.branchingCount > summary.extinctions ? "强" : "弱",
           description: "物种形成与灭绝的比率",
-          accent: summary.branchingCount > summary.extinctions ? THEME.accentPop : THEME.accentDeath,
+          accent: summary.branchingCount > summary.extinctions ? THEME.accentGrowth : THEME.accentDanger,
         },
       ];
       
@@ -1116,7 +1868,7 @@ function buildTimelineEvents(reports: TurnReport[]): TimelineEvent[] {
         title: `新物种: ${branch.new_lineage}`,
         description: branch.description || `从 ${branch.parent_lineage} 分化`,
         icon: <GitBranch size={14} />,
-        color: THEME.accentEvolution,
+        color: THEME.accentEvolve,
       });
     }
     
@@ -1128,7 +1880,7 @@ function buildTimelineEvents(reports: TurnReport[]): TimelineEvent[] {
         title: `迁徙: ${migration.lineage_code}`,
         description: `${migration.origin} → ${migration.destination}`,
         icon: <Footprints size={14} />,
-        color: THEME.accentSea,
+        color: THEME.accentOcean,
       });
     }
     
@@ -1140,7 +1892,7 @@ function buildTimelineEvents(reports: TurnReport[]): TimelineEvent[] {
         title: `地质事件: ${change.stage}`,
         description: change.description,
         icon: <Mountain size={14} />,
-        color: THEME.accentGeo,
+        color: THEME.accentEarth,
       });
     }
     
@@ -1152,7 +1904,7 @@ function buildTimelineEvents(reports: TurnReport[]): TimelineEvent[] {
         title: `压力事件: ${event.severity}`,
         description: event.description,
         icon: <AlertTriangle size={14} />,
-        color: THEME.accentDeath,
+        color: THEME.accentDanger,
       });
     }
   }
@@ -1206,11 +1958,45 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
-    padding: '20px',
+    padding: '20px 24px 24px',
     gap: '16px',
     color: THEME.textPrimary,
     maxHeight: '85vh',
     overflow: 'hidden',
+    position: 'relative',
+    background: `linear-gradient(180deg, ${THEME.bgDeep} 0%, ${THEME.bgPrimary} 100%)`,
+  },
+  bgGradient: {
+    position: 'absolute',
+    inset: 0,
+    background: `
+      radial-gradient(ellipse 80% 50% at 20% 10%, ${THEME.accentOcean}08 0%, transparent 50%),
+      radial-gradient(ellipse 60% 40% at 85% 90%, ${THEME.accentLife}06 0%, transparent 50%),
+      radial-gradient(ellipse 100% 60% at 50% 50%, ${THEME.accentTemp}03 0%, transparent 60%)
+    `,
+    pointerEvents: 'none',
+    zIndex: 0,
+  },
+  bgMesh: {
+    position: 'absolute',
+    inset: 0,
+    backgroundImage: `
+      linear-gradient(${THEME.borderSubtle} 1px, transparent 1px),
+      linear-gradient(90deg, ${THEME.borderSubtle} 1px, transparent 1px)
+    `,
+    backgroundSize: '60px 60px',
+    opacity: 0.4,
+    pointerEvents: 'none',
+    zIndex: 0,
+    maskImage: 'radial-gradient(ellipse at center, black 30%, transparent 80%)',
+    WebkitMaskImage: 'radial-gradient(ellipse at center, black 30%, transparent 80%)',
+  },
+  bgVignette: {
+    position: 'absolute',
+    inset: 0,
+    background: 'radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.4) 100%)',
+    pointerEvents: 'none',
+    zIndex: 0,
   },
   controlBar: {
     display: 'flex',
@@ -1219,27 +2005,35 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: 'wrap',
     gap: '12px',
     flexShrink: 0,
+    position: 'relative',
+    zIndex: 1,
   },
   tabContainer: {
     display: 'flex',
-    gap: '6px',
-    background: 'rgba(0,0,0,0.2)',
-    padding: '4px',
-    borderRadius: '10px',
+    gap: '3px',
+    background: `linear-gradient(135deg, ${THEME.bgCard}, ${THEME.bgDeep})`,
+    padding: '5px',
+    borderRadius: '14px',
     flexWrap: 'wrap',
+    border: `1px solid ${THEME.borderSubtle}`,
+    backdropFilter: 'blur(12px)',
+    boxShadow: '0 4px 20px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.03)',
   },
   tabButton: {
+    position: 'relative',
     display: 'flex',
     alignItems: 'center',
-    gap: '5px',
-    padding: '6px 10px',
-    borderRadius: '6px',
+    gap: '6px',
+    padding: '9px 14px',
+    borderRadius: '10px',
     border: '1px solid transparent',
     cursor: 'pointer',
     fontSize: '0.8rem',
     fontWeight: 500,
-    transition: 'all 0.2s',
+    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
     whiteSpace: 'nowrap',
+    letterSpacing: '0.02em',
+    overflow: 'hidden',
   },
   controlGroup: {
     display: 'flex',
@@ -1249,11 +2043,14 @@ const styles: Record<string, React.CSSProperties> = {
   selectWrapper: {
     display: 'flex',
     alignItems: 'center',
-    gap: '6px',
-    background: 'rgba(0,0,0,0.2)',
-    padding: '4px 8px',
-    borderRadius: '6px',
-    border: `1px solid ${THEME.borderColor}`,
+    gap: '8px',
+    background: `linear-gradient(135deg, ${THEME.bgCard}, ${THEME.bgDeep})`,
+    padding: '8px 14px',
+    borderRadius: '10px',
+    border: `1px solid ${THEME.borderSubtle}`,
+    backdropFilter: 'blur(12px)',
+    transition: 'all 0.25s',
+    boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
   },
   select: {
     background: 'transparent',
@@ -1262,44 +2059,51 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '0.8rem',
     cursor: 'pointer',
     outline: 'none',
+    fontWeight: 500,
   },
   chartTypeGroup: {
     display: 'flex',
     gap: '2px',
-    background: 'rgba(0,0,0,0.2)',
-    padding: '2px',
-    borderRadius: '6px',
+    background: `linear-gradient(135deg, ${THEME.bgCard}, ${THEME.bgDeep})`,
+    padding: '4px',
+    borderRadius: '10px',
+    border: `1px solid ${THEME.borderSubtle}`,
+    boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
   },
   chartTypeBtn: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '28px',
-    height: '28px',
-    borderRadius: '4px',
+    width: '32px',
+    height: '32px',
+    borderRadius: '8px',
     border: '1px solid transparent',
     cursor: 'pointer',
-    transition: 'all 0.2s',
+    transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
     background: 'transparent',
   },
   iconButton: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '32px',
-    height: '32px',
-    borderRadius: '6px',
-    border: `1px solid ${THEME.borderColor}`,
+    width: '38px',
+    height: '38px',
+    borderRadius: '10px',
+    border: `1px solid ${THEME.borderSubtle}`,
     cursor: 'pointer',
-    transition: 'all 0.2s',
-    background: 'rgba(0,0,0,0.2)',
+    transition: 'all 0.25s',
+    background: `linear-gradient(135deg, ${THEME.bgCard}, ${THEME.bgDeep})`,
     color: THEME.textSecondary,
+    backdropFilter: 'blur(12px)',
+    boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
   },
   metricsRow: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
     gap: '12px',
     flexShrink: 0,
+    position: 'relative',
+    zIndex: 1,
   },
   mainContent: {
     display: 'flex',
@@ -1307,37 +2111,77 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '16px',
     minHeight: 0,
     overflow: 'hidden',
+    position: 'relative',
+    zIndex: 1,
   },
   chartSection: {
     flex: 1,
     display: 'flex',
     flexDirection: 'column',
-    background: 'rgba(15, 23, 42, 0.3)',
-    borderRadius: '12px',
-    border: `1px solid ${THEME.borderColor}`,
-    padding: '16px',
+    background: `linear-gradient(145deg, ${THEME.bgCard}, ${THEME.bgDeep}90)`,
+    borderRadius: '18px',
+    border: `1px solid ${THEME.borderSubtle}`,
+    padding: '20px',
     minWidth: '0',
+    backdropFilter: 'blur(16px)',
+    boxShadow: `0 8px 32px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.04)`,
+    position: 'relative',
+    overflow: 'hidden',
   },
   chartHeader: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: '12px',
+    marginBottom: '16px',
     flexWrap: 'wrap',
-    gap: '8px',
+    gap: '12px',
+  },
+  chartTitleWrapper: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '14px',
+  },
+  chartTitleIcon: {
+    width: '44px',
+    height: '44px',
+    borderRadius: '12px',
+    background: `linear-gradient(135deg, ${THEME.bgGlass}, transparent)`,
+    border: `1px solid ${THEME.borderDefault}`,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+    position: 'relative',
+    overflow: 'hidden',
   },
   chartTitle: {
-    fontSize: '1rem',
-    fontWeight: 600,
-    color: THEME.textPrimary,
+    fontSize: '1.08rem',
+    fontWeight: 700,
+    color: THEME.textBright,
+    letterSpacing: '0.02em',
   },
   chartLegend: {
-    fontSize: '0.75rem',
-    color: THEME.textSecondary,
+    fontSize: '0.72rem',
+    color: THEME.textMuted,
+    marginTop: '3px',
+    letterSpacing: '0.02em',
+  },
+  chartBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '6px 12px',
+    borderRadius: '20px',
+    background: `linear-gradient(135deg, ${THEME.accentOcean}15, ${THEME.accentOcean}08)`,
+    border: `1px solid ${THEME.accentOcean}30`,
+    color: THEME.accentOcean,
+    fontSize: '0.72rem',
+    fontWeight: 600,
+    boxShadow: `0 0 12px ${THEME.glowOcean}`,
   },
   chartContainer: {
     flex: 1,
-    minHeight: '200px',
+    minHeight: '220px',
     position: 'relative',
   },
   emptyState: {
@@ -1347,81 +2191,136 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     color: THEME.textSecondary,
-    gap: '12px',
+    gap: '16px',
+  },
+  emptyIcon: {
+    width: '90px',
+    height: '90px',
+    borderRadius: '50%',
+    background: `linear-gradient(135deg, ${THEME.accentOcean}12, ${THEME.accentOcean}05)`,
+    border: `1px solid ${THEME.accentOcean}25`,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: THEME.accentOcean,
+    boxShadow: `0 0 40px ${THEME.glowOcean}, inset 0 0 20px ${THEME.accentOcean}10`,
+    animation: 'pulseGlow 3s ease-in-out infinite',
   },
   sidebar: {
-    width: '280px',
+    width: '290px',
     flexShrink: 0,
     display: 'flex',
     flexDirection: 'column',
     gap: '12px',
     overflowY: 'auto',
+    paddingRight: '4px',
   },
   sidebarSection: {
-    background: 'rgba(15, 23, 42, 0.3)',
-    borderRadius: '12px',
-    border: `1px solid ${THEME.borderColor}`,
-    padding: '14px',
+    background: `linear-gradient(145deg, ${THEME.bgCard}, ${THEME.bgDeep}90)`,
+    borderRadius: '16px',
+    border: `1px solid ${THEME.borderSubtle}`,
+    padding: '16px',
+    backdropFilter: 'blur(16px)',
+    boxShadow: `0 4px 20px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.03)`,
   },
   sidebarHeader: {
-    marginBottom: '12px',
-    paddingBottom: '8px',
-    borderBottom: `1px solid ${THEME.borderColor}`,
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '14px',
+    paddingBottom: '10px',
+    borderBottom: `1px solid ${THEME.borderSubtle}`,
+  },
+  sidebarTitleWrapper: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '9px',
   },
   sidebarTitle: {
     fontSize: '0.85rem',
-    fontWeight: 600,
+    fontWeight: 700,
+    color: THEME.textBright,
+    letterSpacing: '0.02em',
+  },
+  sidebarBadge: {
+    fontSize: '0.65rem',
+    fontWeight: 700,
+    padding: '3px 9px',
+    borderRadius: '12px',
+    background: `linear-gradient(135deg, ${THEME.bgGlass}, transparent)`,
     color: THEME.textSecondary,
+    border: `1px solid ${THEME.borderSubtle}`,
   },
   insightsList: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '10px',
+    gap: '8px',
   },
   insightCard: {
-    padding: '10px',
-    background: 'rgba(255,255,255,0.03)',
-    borderRadius: '8px',
-    borderLeft: `3px solid ${THEME.accentSea}`,
+    position: 'relative',
+    padding: '12px 14px 12px 18px',
+    background: `linear-gradient(135deg, ${THEME.bgGlass}, transparent)`,
+    borderRadius: '12px',
+    border: `1px solid ${THEME.borderSubtle}`,
+    overflow: 'hidden',
+    animation: 'insightSlideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+    opacity: 0,
+    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+    cursor: 'default',
+  },
+  insightAccent: {
+    position: 'absolute',
+    left: 0,
+    top: '10%',
+    bottom: '10%',
+    width: '3px',
+    borderRadius: '3px',
   },
   insightLabel: {
-    fontSize: '0.75rem',
-    color: THEME.textSecondary,
-    marginBottom: '2px',
+    fontSize: '0.68rem',
+    color: THEME.textMuted,
+    marginBottom: '5px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
+    fontWeight: 600,
   },
   insightValue: {
-    fontSize: '1rem',
-    fontWeight: 600,
-    color: THEME.textPrimary,
+    fontSize: '1.15rem',
+    fontWeight: 800,
+    letterSpacing: '-0.01em',
   },
   insightDesc: {
     fontSize: '0.7rem',
-    color: 'rgba(148, 163, 184, 0.7)',
-    marginTop: '2px',
+    color: THEME.textSecondary,
+    marginTop: '5px',
+    lineHeight: 1.45,
   },
   rankingList: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '8px',
+    gap: '6px',
   },
   rankingItem: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
-    padding: '6px',
-    background: 'rgba(255,255,255,0.02)',
-    borderRadius: '6px',
+    gap: '10px',
+    padding: '10px 12px',
+    background: `linear-gradient(135deg, ${THEME.bgGlass}, transparent)`,
+    borderRadius: '12px',
+    border: `1px solid ${THEME.borderSubtle}`,
+    animation: 'rankSlideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+    opacity: 0,
+    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
   },
   rankBadge: {
-    width: '20px',
-    height: '20px',
-    borderRadius: '50%',
-    background: 'rgba(255,255,255,0.1)',
+    width: '26px',
+    height: '26px',
+    borderRadius: '8px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: '0.7rem',
-    fontWeight: 700,
+    fontSize: '0.75rem',
+    fontWeight: 800,
     flexShrink: 0,
   },
   rankInfo: {
@@ -1430,172 +2329,319 @@ const styles: Record<string, React.CSSProperties> = {
   },
   rankName: {
     fontSize: '0.8rem',
+    fontWeight: 600,
     color: THEME.textPrimary,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
   },
   rankPop: {
-    fontSize: '0.7rem',
-    color: THEME.textSecondary,
+    fontSize: '0.68rem',
+    color: THEME.textMuted,
+    marginTop: '2px',
+    fontFamily: 'JetBrains Mono, monospace',
   },
   rankBar: {
-    width: '50px',
-    height: '4px',
-    background: 'rgba(255,255,255,0.1)',
-    borderRadius: '2px',
+    width: '55px',
+    height: '6px',
+    background: `linear-gradient(90deg, ${THEME.bgGlass}, transparent)`,
+    borderRadius: '3px',
     overflow: 'hidden',
+    border: `1px solid ${THEME.borderSubtle}`,
   },
   rankBarFill: {
     height: '100%',
     borderRadius: '2px',
-    transition: 'width 0.3s',
+    transition: 'width 0.6s cubic-bezier(0.16, 1, 0.3, 1)',
   },
   legendGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(2, 1fr)',
-    gap: '6px',
-    marginTop: '8px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '5px',
+    marginTop: '12px',
   },
   legendItem: {
     display: 'flex',
     alignItems: 'center',
-    gap: '4px',
-    fontSize: '0.7rem',
-    color: THEME.textSecondary,
+    gap: '8px',
+    fontSize: '0.72rem',
+    color: THEME.textPrimary,
+    padding: '5px 8px',
+    borderRadius: '8px',
+    background: `linear-gradient(135deg, ${THEME.bgGlass}, transparent)`,
+    border: `1px solid ${THEME.borderSubtle}`,
+    transition: 'all 0.2s',
   },
   legendDot: {
-    width: '8px',
-    height: '8px',
-    borderRadius: '50%',
+    width: '10px',
+    height: '10px',
+    borderRadius: '3px',
+  },
+  pieCenter: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    textAlign: 'center',
+    pointerEvents: 'none',
+  },
+  pieCenterValue: {
+    fontSize: '1.5rem',
+    fontWeight: 800,
+    color: THEME.textBright,
+    lineHeight: 1,
+    fontFamily: 'JetBrains Mono, monospace',
+  },
+  pieCenterLabel: {
+    fontSize: '0.62rem',
+    color: THEME.textMuted,
+    marginTop: '3px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.1em',
   },
   metricCard: {
-    background: THEME.cardBg,
-    borderRadius: '10px',
-    padding: '12px',
-    border: `1px solid ${THEME.borderColor}`,
+    position: 'relative',
+    background: `linear-gradient(145deg, ${THEME.bgCard}, ${THEME.bgDeep}95)`,
+    borderRadius: '16px',
+    padding: '16px 18px',
+    border: `1px solid ${THEME.borderSubtle}`,
     display: 'flex',
     flexDirection: 'column',
-    gap: '6px',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+    gap: '12px',
+    backdropFilter: 'blur(16px)',
+    overflow: 'hidden',
+    transition: 'all 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+    cursor: 'pointer',
   },
   metricHeader: {
     display: 'flex',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
   metricLabel: {
-    fontSize: '0.75rem',
+    fontSize: '0.72rem',
     color: THEME.textSecondary,
+    fontWeight: 600,
+    letterSpacing: '0.03em',
+    textTransform: 'uppercase',
   },
   metricContent: {
     display: 'flex',
-    alignItems: 'baseline',
-    gap: '6px',
-    flexWrap: 'wrap',
+    flexDirection: 'column',
+    gap: '4px',
   },
   metricValue: {
-    fontSize: '1.3rem',
-    fontWeight: 700,
-    color: THEME.textPrimary,
+    fontSize: '1.65rem',
+    fontWeight: 800,
+    letterSpacing: '-0.02em',
+    fontFamily: 'JetBrains Mono, monospace',
+  },
+  metricFooter: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    marginTop: '2px',
   },
   tooltip: {
-    backgroundColor: "rgba(15, 23, 42, 0.95)",
-    border: `1px solid ${THEME.borderColor}`,
-    borderRadius: "8px",
-    padding: "10px",
-    boxShadow: "0 8px 16px rgba(0,0,0,0.4)",
+    background: `linear-gradient(145deg, ${THEME.bgDeep}f8, ${THEME.bgPrimary}f5)`,
+    border: `1px solid ${THEME.borderActive}`,
+    borderRadius: '14px',
+    padding: '16px',
+    boxShadow: `0 16px 48px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04), 0 0 30px ${THEME.glowOcean}`,
+    backdropFilter: 'blur(20px)',
+    minWidth: '200px',
+  },
+  tooltipHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    marginBottom: '12px',
   },
   tooltipTitle: {
-    fontSize: '0.85rem',
-    fontWeight: 600,
-    color: THEME.textPrimary,
-    marginBottom: '6px',
-    borderBottom: `1px solid ${THEME.borderColor}`,
-    paddingBottom: '4px',
+    fontSize: '0.9rem',
+    fontWeight: 700,
+    color: THEME.textBright,
+  },
+  tooltipDivider: {
+    height: '1px',
+    background: `linear-gradient(90deg, transparent, ${THEME.borderDefault}, transparent)`,
+    marginBottom: '12px',
+  },
+  tooltipItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    padding: '4px 0',
   },
   footer: {
     marginTop: 'auto',
-    paddingTop: '12px',
-    borderTop: `1px solid ${THEME.borderColor}`,
+    background: `linear-gradient(145deg, ${THEME.bgCard}80, ${THEME.bgDeep}60)`,
+    borderRadius: '14px',
+    padding: '14px 16px',
+    border: `1px solid ${THEME.borderSubtle}`,
+    backdropFilter: 'blur(12px)',
+  },
+  footerTitle: {
     display: 'flex',
-    flexDirection: 'column',
-    gap: '6px',
+    alignItems: 'center',
+    gap: '8px',
     fontSize: '0.75rem',
+    fontWeight: 700,
     color: THEME.textSecondary,
-    background: 'rgba(15, 23, 42, 0.3)',
-    borderRadius: '12px',
-    padding: '12px',
-    border: `1px solid ${THEME.borderColor}`,
+    marginBottom: '12px',
+    paddingBottom: '10px',
+    borderBottom: `1px solid ${THEME.borderSubtle}`,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+  },
+  footerGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '10px',
   },
   footerItem: {
     display: 'flex',
-    justifyContent: 'space-between',
+    flexDirection: 'column',
+    gap: '3px',
+  },
+  footerLabel: {
+    fontSize: '0.65rem',
+    color: THEME.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  footerValue: {
+    fontSize: '0.88rem',
+    fontWeight: 700,
+    color: THEME.textBright,
+    fontFamily: 'JetBrains Mono, monospace',
+  },
+  footerStage: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    marginTop: '12px',
+    paddingTop: '10px',
+    borderTop: `1px solid ${THEME.borderSubtle}`,
+    fontSize: '0.78rem',
+    color: THEME.accentEarth,
+    fontWeight: 600,
   },
   timelineSection: {
-    background: 'rgba(15, 23, 42, 0.3)',
-    borderRadius: '12px',
-    border: `1px solid ${THEME.borderColor}`,
-    padding: '14px',
+    background: `linear-gradient(145deg, ${THEME.bgCard}, ${THEME.bgDeep}90)`,
+    borderRadius: '18px',
+    border: `1px solid ${THEME.borderSubtle}`,
+    padding: '18px 20px',
     flexShrink: 0,
+    position: 'relative',
+    zIndex: 1,
+    backdropFilter: 'blur(16px)',
+    boxShadow: `0 8px 32px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.03)`,
   },
   timelineHeader: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: '12px',
-    paddingBottom: '8px',
-    borderBottom: `1px solid ${THEME.borderColor}`,
+    marginBottom: '18px',
+    paddingBottom: '14px',
+    borderBottom: `1px solid ${THEME.borderSubtle}`,
+  },
+  timelineHeaderLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  timelineHeaderTitle: {
+    fontSize: '0.95rem',
+    fontWeight: 700,
+    color: THEME.textBright,
+    letterSpacing: '0.02em',
+  },
+  timelineHeaderRight: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
   },
   timelineCount: {
-    fontSize: '0.75rem',
-    color: THEME.textSecondary,
-    background: 'rgba(255,255,255,0.1)',
-    padding: '2px 8px',
-    borderRadius: '10px',
+    fontSize: '0.72rem',
+    fontWeight: 700,
+    color: THEME.accentOcean,
+    background: `linear-gradient(135deg, ${THEME.accentOcean}18, ${THEME.accentOcean}08)`,
+    padding: '5px 14px',
+    borderRadius: '20px',
+    border: `1px solid ${THEME.accentOcean}30`,
+    boxShadow: `0 0 12px ${THEME.glowOcean}`,
   },
   timelineScroll: {
     display: 'flex',
     gap: '10px',
     overflowX: 'auto',
-    paddingBottom: '8px',
+    paddingBottom: '10px',
+    position: 'relative',
+  },
+  timelineTrack: {
+    position: 'absolute',
+    top: '22px',
+    left: '0',
+    right: '0',
+    height: '2px',
+    background: `linear-gradient(90deg, transparent, ${THEME.accentOcean}40, ${THEME.accentOcean}40, transparent)`,
+    borderRadius: '1px',
   },
   timelineItem: {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    minWidth: '140px',
-    padding: '10px',
-    background: 'rgba(255,255,255,0.02)',
-    borderRadius: '8px',
-    border: `1px solid ${THEME.borderColor}`,
+    minWidth: '150px',
+    padding: '14px 12px',
+    background: `linear-gradient(145deg, ${THEME.bgGlass}, transparent)`,
+    borderRadius: '14px',
+    border: `1px solid ${THEME.borderSubtle}`,
+    animation: 'timelineSlideIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+    opacity: 0,
+    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+  },
+  timelineConnector: {
+    marginBottom: '10px',
+  },
+  timelineDot: {
+    width: '14px',
+    height: '14px',
+    borderRadius: '50%',
   },
   timelineIcon: {
-    width: '28px',
-    height: '28px',
-    borderRadius: '50%',
+    width: '40px',
+    height: '40px',
+    borderRadius: '12px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: '6px',
+    marginBottom: '10px',
   },
-  timelineTurn: {
-    fontSize: '0.7rem',
+  timelineTurnBadge: {
+    fontSize: '0.68rem',
+    fontWeight: 800,
     color: THEME.textSecondary,
-    marginBottom: '4px',
+    background: `linear-gradient(135deg, ${THEME.bgGlass}, transparent)`,
+    padding: '3px 10px',
+    borderRadius: '10px',
+    marginBottom: '8px',
+    border: `1px solid ${THEME.borderSubtle}`,
+    fontFamily: 'JetBrains Mono, monospace',
   },
   timelineContent: {
     textAlign: 'center',
   },
   timelineTitle: {
-    fontSize: '0.75rem',
-    fontWeight: 600,
-    color: THEME.textPrimary,
-    marginBottom: '2px',
+    fontSize: '0.78rem',
+    fontWeight: 700,
+    marginBottom: '5px',
+    lineHeight: 1.35,
   },
   timelineDesc: {
-    fontSize: '0.65rem',
+    fontSize: '0.68rem',
     color: THEME.textSecondary,
-    lineHeight: 1.3,
+    lineHeight: 1.45,
+    maxWidth: '125px',
   },
 };

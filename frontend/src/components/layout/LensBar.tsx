@@ -12,8 +12,21 @@ interface Props {
   onOpenMapHistory?: () => void;
   onOpenLogs?: () => void;
   onCreateSpecies?: () => void;
-  is3D?: boolean;
-  onToggle3D?: () => void;
+  onOpenHybridization?: () => void;
+  onOpenAIAssistant?: () => void;
+  onOpenAchievements?: () => void;
+  onToggleHints?: () => void;
+  showHints?: boolean;
+}
+
+// Tooltip 组件
+function ToolTooltip({ title, description, color }: { title: string; description: string; color?: string }) {
+  return (
+    <div className="tool-tooltip-v2" style={{ '--tooltip-color': color || '#2dd4bf' } as React.CSSProperties}>
+      <div className="tooltip-title">{title}</div>
+      <div className="tooltip-desc">{description}</div>
+    </div>
+  );
 }
 
 // 视图模式分组
@@ -47,10 +60,14 @@ const VIEW_GROUPS = {
 // 分析工具定义
 const ANALYSIS_TOOLS = [
   { id: "create", label: "创建物种", icon: "✨", description: "设计并投放新物种", color: "#f59e0b" },
-  { id: "genealogy", label: "演化族谱", icon: "🧬", description: "查看物种演化关系树", color: "#c084fc" },
+  { id: "hybridize", label: "物种杂交", icon: "🧬", description: "诱导两个物种杂交产生后代", color: "#10b981" },
+  { id: "genealogy", label: "演化族谱", icon: "🌳", description: "查看物种演化关系树", color: "#c084fc" },
   { id: "foodweb", label: "食物网", icon: "🕸️", description: "分析捕食与被捕食关系", color: "#f43f5e" },
   { id: "niche", label: "生态位对比", icon: "📊", description: "对比不同物种的生态位", color: "#38bdf8" },
   { id: "trends", label: "全球趋势", icon: "📈", description: "查看环境与种群变化趋势", color: "#4ade80" },
+  { id: "ai", label: "AI 助手", icon: "🤖", description: "智能搜索、问答与演化预测", color: "#a855f7" },
+  { id: "achievements", label: "成就", icon: "🏆", description: "查看成就进度与解锁奖励", color: "#fbbf24" },
+  { id: "hints", label: "提示", icon: "💡", description: "智能游戏建议与提示", color: "#22d3ee" },
 ];
 
 // 历史工具
@@ -71,11 +88,15 @@ export function LensBar({
   onOpenMapHistory,
   onOpenLogs,
   onCreateSpecies,
-  is3D = false,
-  onToggle3D
+  onOpenHybridization,
+  onOpenAIAssistant,
+  onOpenAchievements,
+  onToggleHints,
+  showHints = true,
 }: Props) {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [hoveredTool, setHoveredTool] = useState<string | null>(null);
+  const [hoveredViewGroup, setHoveredViewGroup] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // 点击外部关闭下拉菜单
@@ -111,6 +132,7 @@ export function LensBar({
   const handleToolClick = (toolId: string) => {
     switch (toolId) {
       case "create": onCreateSpecies?.(); break;
+      case "hybridize": onOpenHybridization?.(); break;
       case "genealogy": onToggleGenealogy(); break;
       case "foodweb": onToggleFoodWeb(); break;
       case "niche": onToggleNiche(); break;
@@ -118,6 +140,9 @@ export function LensBar({
       case "maphistory": onOpenMapHistory?.(); break;
       case "history": onToggleHistory(); break;
       case "logs": onOpenLogs?.(); break;
+      case "ai": onOpenAIAssistant?.(); break;
+      case "achievements": onOpenAchievements?.(); break;
+      case "hints": onToggleHints?.(); break;
     }
   };
 
@@ -136,6 +161,14 @@ export function LensBar({
             const isDropdownOpen = activeDropdown === groupKey;
             const groupModes = group.modes;
             const activeModeInGroup = groupModes.find(m => m.id === currentMode);
+            const isHovered = hoveredViewGroup === groupKey && !isDropdownOpen;
+            
+            // 视图分组的颜色
+            const groupColors: Record<string, string> = {
+              terrain: "#10b981",
+              climate: "#f59e0b", 
+              ecology: "#a78bfa"
+            };
 
             return (
               <div key={groupKey} className="view-group-wrapper">
@@ -151,6 +184,8 @@ export function LensBar({
                       setActiveDropdown(isDropdownOpen ? null : groupKey);
                     }
                   }}
+                  onMouseEnter={() => setHoveredViewGroup(groupKey)}
+                  onMouseLeave={() => setHoveredViewGroup(null)}
                 >
                   <span className="view-icon">{activeModeInGroup?.icon || group.icon}</span>
                   <span className="view-label">
@@ -158,6 +193,14 @@ export function LensBar({
                   </span>
                   {groupModes.length > 1 && (
                     <span className="dropdown-arrow">{isDropdownOpen ? '▲' : '▼'}</span>
+                  )}
+                  {/* 悬浮提示 - 只在没有打开下拉菜单时显示 */}
+                  {isHovered && (
+                    <ToolTooltip 
+                      title={activeModeInGroup?.label || group.label}
+                      description={activeModeInGroup?.description || `切换${group.label}视图模式`}
+                      color={groupColors[groupKey]}
+                    />
                   )}
                 </button>
 
@@ -186,18 +229,6 @@ export function LensBar({
               </div>
             );
           })}
-
-          {/* 2D/3D 切换 */}
-          {onToggle3D && (
-            <button
-              className={`render-toggle ${is3D ? 'is-3d' : 'is-2d'}`}
-              onClick={onToggle3D}
-              title={is3D ? "切换至2D平面视图" : "切换至3D立体视图"}
-            >
-              <span className="render-icon">{is3D ? '🌐' : '🗺️'}</span>
-              <span className="render-label">{is3D ? '3D' : '2D'}</span>
-            </button>
-          )}
         </div>
       </div>
 
@@ -210,11 +241,15 @@ export function LensBar({
         <div className="tool-row">
           {ANALYSIS_TOOLS.filter(t => {
             if (t.id === "create") return !!onCreateSpecies;
+            if (t.id === "hybridize") return !!onOpenHybridization;
+            if (t.id === "ai") return !!onOpenAIAssistant;
+            if (t.id === "achievements") return !!onOpenAchievements;
+            if (t.id === "hints") return !!onToggleHints;
             return true;
           }).map(tool => (
             <button
               key={tool.id}
-              className={`tool-btn-v2 ${hoveredTool === tool.id ? 'hovered' : ''}`}
+              className={`tool-btn-v2 ${hoveredTool === tool.id ? 'hovered' : ''} ${tool.id === 'hints' && showHints ? 'active' : ''}`}
               style={{ '--tool-color': tool.color } as React.CSSProperties}
               onClick={() => handleToolClick(tool.id)}
               onMouseEnter={() => setHoveredTool(tool.id)}
@@ -222,10 +257,11 @@ export function LensBar({
             >
               <span className="tool-icon-v2">{tool.icon}</span>
               {hoveredTool === tool.id && (
-                <div className="tool-tooltip-v2">
-                  <div className="tooltip-title">{tool.label}</div>
-                  <div className="tooltip-desc">{tool.description}</div>
-                </div>
+                <ToolTooltip 
+                  title={tool.label} 
+                  description={tool.description} 
+                  color={tool.color}
+                />
               )}
             </button>
           ))}
@@ -254,20 +290,15 @@ export function LensBar({
             >
               <span className="tool-icon-v2">{tool.icon}</span>
               {hoveredTool === tool.id && (
-                <div className="tool-tooltip-v2">
-                  <div className="tooltip-title">{tool.label}</div>
-                  <div className="tooltip-desc">{tool.description}</div>
-                </div>
+                <ToolTooltip 
+                  title={tool.label} 
+                  description={tool.description} 
+                  color={tool.color}
+                />
               )}
             </button>
           ))}
         </div>
-      </div>
-
-      {/* ===== 当前视图信息指示 ===== */}
-      <div className="current-view-indicator">
-        <span className="indicator-icon">{currentModeInfo.icon}</span>
-        <span className="indicator-label">{currentModeInfo.label}</span>
       </div>
     </div>
   );

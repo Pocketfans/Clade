@@ -343,21 +343,54 @@ class GeneticDistanceCalculator:
     def _compute_embedding_distance_matrix(self, species_list: Sequence[Species]) -> np.ndarray:
         """计算描述文本的语义距离矩阵
         
-        使用embedding服务计算物种描述的语义相似度，然后转换为距离。
+        【优化】优先从已有索引获取向量，只对未索引的物种调用embed：
+        1. 首先尝试从 EmbeddingService 的物种索引获取已存在的向量
+        2. 对于未索引的物种，使用统一的描述文本构建方法生成 embedding
         
         Returns:
             N×N 的距离矩阵（1 - 余弦相似度）
         """
+        species_list = list(species_list)
         n = len(species_list)
         if n == 0 or self.embedding_service is None:
             return np.zeros((n, n))
         
         try:
-            # 收集描述
-            descriptions = [sp.description for sp in species_list]
+            # 【优化】先尝试从索引批量获取已存在的向量
+            lineage_codes = [sp.lineage_code for sp in species_list]
+            indexed_vectors, indexed_codes = self.embedding_service.get_species_vectors(lineage_codes)
             
-            # 批量获取embedding
-            vectors = self.embedding_service.embed(descriptions, require_real=False)
+            # 构建代码到向量的映射
+            code_to_vector = dict(zip(indexed_codes, indexed_vectors))
+            
+            # 收集需要新生成向量的物种
+            vectors = []
+            missing_species = []
+            missing_indices = []
+            
+            for i, sp in enumerate(species_list):
+                if sp.lineage_code in code_to_vector:
+                    vectors.append(code_to_vector[sp.lineage_code])
+                else:
+                    vectors.append(None)
+                    missing_species.append(sp)
+                    missing_indices.append(i)
+            
+            # 对未索引的物种生成向量
+            if missing_species:
+                # 使用统一的描述文本构建方法
+                from ..system.embedding import EmbeddingService
+                descriptions = [
+                    EmbeddingService.build_species_text(sp, include_traits=True, include_names=True)
+                    for sp in missing_species
+                ]
+                
+                new_vectors = self.embedding_service.embed(descriptions, require_real=False)
+                
+                for i, idx in enumerate(missing_indices):
+                    vectors[idx] = new_vectors[i]
+            
+            # 转换为numpy数组
             vectors = np.array(vectors, dtype=float)
             
             # 计算余弦相似度矩阵

@@ -448,6 +448,10 @@ class ReproductionService:
     ) -> dict[int, float]:
         """P3优化：计算跨地块的种群压力传导
         
+        【改进】支持植物散布能力：
+        - 植物的"散布能力"特质影响扩散效率
+        - 高散布能力的植物更容易占领新地块
+        
         当相邻地块的种群密度差异大时，会产生扩散压力：
         - 高密度地块向低密度地块扩散
         - 降低高密度地块的承载力
@@ -462,6 +466,8 @@ class ReproductionService:
         Returns:
             {tile_id: pressure_modifier} - 修正系数（0.8-1.2）
         """
+        from .trait_config import PlantTraitConfig
+        
         pressure_modifiers: dict[int, float] = {}
         
         # 计算平均种群密度（用于判断相对压力）
@@ -471,6 +477,16 @@ class ReproductionService:
         
         if avg_density == 0:
             return {h.tile_id: 1.0 for h in habitats}
+        
+        # 【新增】植物散布能力修正
+        is_plant = PlantTraitConfig.is_plant(species)
+        dispersal_bonus = 1.0
+        if is_plant:
+            # 植物散布能力（0-10）影响扩散效率
+            dispersal_ability = species.abstract_traits.get("散布能力", 3.0)
+            # 散布能力5为基准，每超过1点增加10%扩散效率
+            dispersal_bonus = 1.0 + (dispersal_ability - 5.0) * 0.1
+            dispersal_bonus = max(0.5, min(1.5, dispersal_bonus))  # 限制在0.5-1.5
         
         for habitat in habitats:
             tile_id = habitat.tile_id
@@ -482,13 +498,21 @@ class ReproductionService:
             # 高密度地块（>1.5倍平均）：压力增加，承载力降低
             if relative_density > 1.5:
                 # 最多降低20%承载力
-                pressure_mod = 1.0 - min(0.2, (relative_density - 1.5) * 0.1)
+                # 【新增】植物高散布能力可以更有效地缓解高密度压力
+                base_pressure = (relative_density - 1.5) * 0.1
+                if is_plant:
+                    base_pressure = base_pressure / dispersal_bonus  # 高散布能力降低压力影响
+                pressure_mod = 1.0 - min(0.2, base_pressure)
                 pressure_modifiers[tile_id] = pressure_mod
             
             # 低密度地块（<0.5倍平均）：压力减小，承载力提高
             elif relative_density < 0.5:
                 # 最多提高20%承载力
-                pressure_mod = 1.0 + min(0.2, (0.5 - relative_density) * 0.2)
+                # 【新增】植物高散布能力可以更好地利用新地块
+                base_bonus = (0.5 - relative_density) * 0.2
+                if is_plant:
+                    base_bonus = base_bonus * dispersal_bonus  # 高散布能力增强扩张能力
+                pressure_mod = 1.0 + min(0.2, base_bonus)
                 pressure_modifiers[tile_id] = pressure_mod
             
             # 中等密度地块：无修正
@@ -918,114 +942,130 @@ class ReproductionService:
         survival_rate: float,
         resource_saturation: float
     ) -> int:
-        """使用逻辑斯谛方程的闭式解计算种群增长。
+        """使用改进的逻辑斯谛模型计算种群增长。
         
-        【重要修复】使用闭式解替代迭代计算，避免数值爆炸。
+        【平衡修复】
+        1. 添加微生物/快繁殖物种的增长加成
+        2. 衰退时提高繁殖效率（生存本能）
+        3. 修复承载力接近时增长效率过低的问题
         
         闭式解公式: P(t) = K / (1 + ((K - P0) / P0) * e^(-r * t))
-        
-        其中：
-        - K = carrying_capacity (承载力)
-        - P0 = current_pop (初始种群)
-        - r = effective_r (有效增长率，基于回合而非世代)
-        - t = 1 (一个回合)
-        
-        这保证了种群永远不会超过承载力，增长是平滑稳定的。
         """
-        # 【关键修复】参数验证，防止负数或异常值
-        MAX_SAFE_POPULATION = 9_007_199_254_740_991  # JavaScript安全整数上限
+        MAX_SAFE_POPULATION = 9_007_199_254_740_991
         current_pop = max(0, min(int(current_pop), MAX_SAFE_POPULATION))
         carrying_capacity = max(1, min(int(carrying_capacity), MAX_SAFE_POPULATION))
         survival_rate = max(0.0, min(1.0, float(survival_rate)))
         resource_saturation = max(0.0, float(resource_saturation))
         
-        # 如果初始种群为0，直接返回0
         if current_pop <= 0:
             return 0
         
-        # 1. 计算基于【回合】的有效增长率
-        # 一个回合 = 50万年，无论世代数多少，种群增长都应该是合理的
+        # 1. 基础增长率（基于繁殖速度属性）
         repro_speed = species.abstract_traits.get("繁殖速度", 5)
-        
-        # 基础增长倍数（每回合）：
-        # 繁殖速度 1 -> 1.5倍 (50%增长)
-        # 繁殖速度 5 -> 3.0倍 (200%增长)
-        # 繁殖速度 10 -> 5.0倍 (400%增长)
-        # 这是一个回合（50万年）内的合理增长范围
         base_growth_multiplier = 1.0 + (repro_speed * 0.4)  # 1.4 - 5.0
         
-        # 2. 应用修正因子
-        # 生存率修正（死亡率已在MortalityEngine中应用，这里只是微调）
-        # 生存率 0.3 -> 0.7倍
-        # 生存率 0.5 -> 1.0倍
-        # 生存率 0.7 -> 1.3倍
+        # 【新增】2. 体型/世代加成
+        # 微生物和快繁殖物种有更高的增长潜力
+        body_length = species.morphology_stats.get("body_length_cm", 10.0)
+        generation_time = species.morphology_stats.get("generation_time_days", 365)
+        
+        # 体型加成：越小增长越快
+        if body_length < 0.01:  # 微生物（<0.1mm）
+            size_bonus = 2.0
+        elif body_length < 0.1:  # 小型生物（0.1mm-1mm）
+            size_bonus = 1.5
+        elif body_length < 1.0:  # 小型生物（1mm-1cm）
+            size_bonus = 1.2
+        else:
+            size_bonus = 1.0
+        
+        # 繁殖速度加成：世代越短增长越快
+        if generation_time < 7:  # <1周
+            repro_bonus = 1.8
+        elif generation_time < 30:  # <1月
+            repro_bonus = 1.4
+        elif generation_time < 180:  # <半年
+            repro_bonus = 1.2
+        else:
+            repro_bonus = 1.0
+        
+        # 综合繁殖加成（取最大值，避免双重加成过高）
+        fertility_bonus = max(size_bonus, repro_bonus)
+        base_growth_multiplier *= fertility_bonus
+        
+        # 3. 生存率修正
         survival_modifier = 0.4 + survival_rate * 1.2  # 0.4 - 1.6
         
-        # 资源压力修正
-        # 资源饱和度 < 1.0 -> 无影响
-        # 资源饱和度 1.0-2.0 -> 逐渐降低
-        # 资源饱和度 > 2.0 -> 严重抑制
+        # 【新增】4. 生存本能加成
+        # 当种群处于衰退（死亡率>50%）时，繁殖效率提高
+        # 这模拟了r-策略物种在危机时的适应性反应
+        death_rate = 1.0 - survival_rate
+        if death_rate > 0.5:
+            # 死亡率50%以上时激活生存本能
+            survival_instinct = 1.0 + (death_rate - 0.5) * 0.8  # 最多1.4倍加成
+            survival_modifier *= survival_instinct
+            logger.debug(f"[生存本能] {species.common_name} 激活生存本能，繁殖加成 {survival_instinct:.2f}x")
+        
+        # 5. 资源压力修正（更温和）
         if resource_saturation <= 1.0:
             resource_modifier = 1.0
         elif resource_saturation <= 2.0:
-            resource_modifier = 1.0 - (resource_saturation - 1.0) * 0.5  # 1.0 - 0.5
+            resource_modifier = 1.0 - (resource_saturation - 1.0) * 0.4  # 从0.5改为0.4，更温和
         else:
-            resource_modifier = max(0.1, 0.5 - (resource_saturation - 2.0) * 0.2)
+            resource_modifier = max(0.2, 0.6 - (resource_saturation - 2.0) * 0.15)  # 从0.1提高到0.2
         
         # 综合增长倍数
         growth_multiplier = base_growth_multiplier * survival_modifier * resource_modifier
         
-        # 限制单回合增长倍数在合理范围内
-        # 最小 0.5倍（衰减50%）
-        # 最大 10倍（增长10倍）
-        growth_multiplier = max(0.5, min(10.0, growth_multiplier))
+        # 限制单回合增长倍数
+        # 最小 0.6倍（从0.5提高，给更多生存机会）
+        # 最大 15倍（从10提高，允许快速繁殖物种爆发）
+        growth_multiplier = max(0.6, min(15.0, growth_multiplier))
         
-        # 3. 使用逻辑斯谛闘式解计算新种群
-        # 将增长倍数转换为增长率 r = ln(multiplier)
-        # 然后应用闭式解
+        # 6. 使用改进的逻辑斯谛模型计算新种群
         P0 = float(current_pop)
         K = float(carrying_capacity)
         
         if P0 >= K:
             # 已超过承载力，应用衰减
-            # 每回合最多衰减到承载力的110%（渐进收敛）
-            decay_rate = 0.3  # 每回合衰减30%的超出部分
+            decay_rate = 0.25  # 从0.3降到0.25，更缓慢收敛
             overshoot = P0 - K
             new_pop = K + overshoot * (1.0 - decay_rate)
         else:
             # 低于承载力，应用增长
-            # 使用逻辑斯谛公式的变形：考虑当前种群占承载力的比例
             utilization = P0 / K  # 0 - 1
             
-            # 接近承载力时增长放缓
-            # utilization = 0 -> 满速增长
-            # utilization = 0.5 -> 50%速度
-            # utilization = 0.9 -> 10%速度
-            growth_efficiency = 1.0 - utilization
+            # 【修复】改进增长效率曲线
+            # 原来：growth_efficiency = 1.0 - utilization（线性）
+            # 问题：接近承载力时效率趋近0
+            # 修复：使用S型曲线，保证最低20%效率
+            # utilization = 0 -> efficiency = 1.0
+            # utilization = 0.5 -> efficiency = 0.65
+            # utilization = 0.9 -> efficiency = 0.30
+            # utilization = 1.0 -> efficiency = 0.20
+            growth_efficiency = 0.20 + 0.80 * (1.0 - utilization ** 0.7)
             
             # 计算实际增长
             actual_multiplier = 1.0 + (growth_multiplier - 1.0) * growth_efficiency
             new_pop = P0 * actual_multiplier
             
-            # 确保不超过承载力
-            new_pop = min(new_pop, K)
+            # 允许小幅超过承载力（110%），模拟短期过载
+            new_pop = min(new_pop, K * 1.1)
         
-        # 4. 边界检查
+        # 7. 边界检查
         new_pop = max(0, min(new_pop, MAX_SAFE_POPULATION))
         
-        # 处理异常值
         if math.isinf(new_pop) or math.isnan(new_pop):
             logger.warning(f"[种群计算] 检测到异常值，重置为当前值: {current_pop}")
             new_pop = current_pop
         
         result = int(new_pop)
         
-        # 日志记录显著变化
         change_ratio = result / max(current_pop, 1)
         if change_ratio > 2.0 or change_ratio < 0.5:
             logger.debug(
                 f"[种群变化] {species.common_name}: {current_pop:,} -> {result:,} "
-                f"(倍数={change_ratio:.2f}, K={carrying_capacity:,})"
+                f"(倍数={change_ratio:.2f}, K={carrying_capacity:,}, 繁殖加成={fertility_bonus:.1f}x)"
             )
         
         return result

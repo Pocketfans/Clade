@@ -118,6 +118,10 @@ def _extract_species_features(species: 'Species') -> dict:
     else:
         functional_group = "apex_predator"
     
+    # 【新增】植物专属字段
+    growth_form = getattr(species, 'growth_form', 'aquatic') or 'aquatic'
+    life_form_stage = getattr(species, 'life_form_stage', 0) or 0
+    
     return {
         "traits": traits,
         "trait_names": trait_names,
@@ -129,6 +133,9 @@ def _extract_species_features(species: 'Species') -> dict:
         "habitat_type": habitat_type,
         "functional_group": functional_group,
         "population": int(species.morphology_stats.get("population", 0) or 0),
+        # 植物专属
+        "growth_form": growth_form,
+        "life_form_stage": life_form_stage,
     }
 
 
@@ -338,10 +345,28 @@ def _compute_competition_intensity(
     size_modifier = 1.0 / (1.0 + np.log2(max(size_ratio, 1.0)) * 0.3)
     details["size_modifier"] = round(size_modifier, 3)
     
+    # ============ 【新增】6. 植物生长形式竞争修正 ============
+    # 同生长形式的植物竞争更激烈（争夺相同生态位）
+    plant_modifier = 1.0
+    if func_a == "producer" and func_b == "producer":
+        growth_a = features_a.get("growth_form", "aquatic")
+        growth_b = features_b.get("growth_form", "aquatic")
+        
+        if growth_a == growth_b:
+            # 同生长形式竞争激烈
+            plant_modifier = 1.4
+        elif {growth_a, growth_b} in [{"herb", "shrub"}, {"shrub", "tree"}]:
+            # 相邻高度层竞争（遮蔽/被遮蔽）
+            plant_modifier = 1.2
+        else:
+            # 不同生态位，竞争减弱
+            plant_modifier = 0.8
+    details["plant_modifier"] = round(plant_modifier, 3)
+    
     # ============ 综合竞争强度 ============
     # 公式：overlap × density × balance × modifiers
     base_competition = overlap * density_factor * (0.3 + 0.7 * balance_factor)
-    competition = base_competition * trophic_modifier * functional_modifier * size_modifier
+    competition = base_competition * trophic_modifier * functional_modifier * size_modifier * plant_modifier
     
     # 限制在0-1范围
     competition = float(np.clip(competition, 0.0, 1.0))

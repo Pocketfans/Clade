@@ -1,5 +1,6 @@
 import { Zap, Save, FolderOpen, Settings } from "lucide-react";
 import { ActionQueueStatus } from "../../services/api.types";
+import { EnergyBar } from "../EnergyBar";
 
 interface Props {
   turnIndex: number;
@@ -12,6 +13,7 @@ interface Props {
   onLoadGame: () => void;
   onOpenLedger: () => void;
   onOpenPressure: () => void;
+  onOpenEnergyHistory?: () => void;
 }
 
 export function TopBar({ 
@@ -24,7 +26,8 @@ export function TopBar({
   onSaveGame,
   onLoadGame,
   onOpenLedger,
-  onOpenPressure
+  onOpenPressure,
+  onOpenEnergyHistory
 }: Props) {
   const normalizedTurn = Math.max(turnIndex, 0);
   const displayTurn = normalizedTurn + 1;
@@ -46,6 +49,7 @@ export function TopBar({
           <span className="resource-label">📋 队列</span>
           <span className="resource-value">{queueStatus?.queued_rounds ?? 0}</span>
         </div>
+        <EnergyBar onOpenHistory={onOpenEnergyHistory} />
       </div>
 
       {/* Center: Time Display & Next Turn Button */}

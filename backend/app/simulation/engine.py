@@ -45,6 +45,7 @@ from ..services.analytics.focus_processor import FocusBatchProcessor
 from ..services.species.habitat_manager import habitat_manager  # 新增：栖息地管理器
 from ..services.geo.map_evolution import MapEvolutionService
 from ..services.geo.map_manager import MapStateManager
+from ..services.geo.vegetation_cover import vegetation_cover_service
 from ..services.species.migration import MigrationAdvisor
 from ..services.species.reproduction import ReproductionService
 from ..ai.model_router import ModelRouter
@@ -787,45 +788,112 @@ class SimulationEngine:
                 logger.info(f"【阶段3】最终死亡率计算完成")
                 
                 # ========== 【方案B：第四阶段】应用死亡和繁殖 ==========
-                # 10. 更新种群（应用最终死亡率）
-                logger.info(f"更新种群数据...")
-                self._emit_event("stage", "💀 更新种群数据", "物种")
-                self._update_populations(combined_results)
-                
-                # 11. 应用繁殖增长（50万年的自然增长）
-                logger.info(f"计算繁殖增长...")
-                self._emit_event("stage", "🐣 计算繁殖增长", "物种")
+                # 【优化】死亡和繁殖并行计算，然后合并结果
+                # 这更符合50万年时间尺度：死亡和繁殖是同时发生的过程
+                logger.info(f"计算种群变化（死亡+繁殖并行）...")
+                self._emit_event("stage", "💀🐣 计算种群变化", "物种")
                 
                 # P2: 更新环境动态修正系数（基于本回合的气候变化）
-                # 修复：modifiers 是 dict[str, float]，直接获取值
                 temp_change = modifiers.get("temperature", 0.0) if modifiers else 0.0
-                sea_level_change = 0.0  # 海平面变化在 map_evolution 中单独计算
+                sea_level_change = 0.0
                 if current_map_state:
-                    # 从地图状态获取海平面变化（与上回合比较）
                     prev_sea = getattr(current_map_state, '_prev_sea_level', current_map_state.sea_level)
                     sea_level_change = current_map_state.sea_level - prev_sea
                     current_map_state._prev_sea_level = current_map_state.sea_level
                 self.reproduction_service.update_environmental_modifier(temp_change, sea_level_change)
                 
-                survival_rates = {
-                    item.species.lineage_code: (1.0 - item.death_rate)
+                # 【修复】繁殖计算应基于死亡前的种群，而不是死亡后
+                # 这样更符合生态学：活着的个体在繁殖的同时也在死亡
+                # 记录死亡前的种群数（用于繁殖计算）
+                initial_populations = {
+                    item.species.lineage_code: item.initial_population
                     for item in combined_results
                 }
+                
+                # 【修复】survival_rate 用于繁殖服务的"环境质量"评估
+                # 不再双重惩罚，因为死亡率已经单独计算
+                # 这里传 1.0 表示不额外惩罚繁殖
+                survival_rates = {
+                    item.species.lineage_code: 1.0  # 繁殖不再受死亡率惩罚
+                    for item in combined_results
+                }
+                
                 niche_data = {
                     code: (metrics.overlap, metrics.saturation)
                     for code, metrics in niche_metrics.items()
                 }
-                new_populations = self.reproduction_service.apply_reproduction(
+                
+                # 【优化】先计算繁殖增长（基于死亡前种群）
+                # 临时设置种群为初始值
+                for item in combined_results:
+                    item.species.morphology_stats["population"] = item.initial_population
+                
+                reproduction_results = self.reproduction_service.apply_reproduction(
                     species_batch, niche_data, survival_rates,
-                    habitat_manager=habitat_manager  # P3: 传递habitat_manager用于区域承载力
+                    habitat_manager=habitat_manager
                 )
-                # 应用繁殖后的种群数量
+                
+                # 【新逻辑】计算最终种群 = 初始种群 × (1 - 死亡率) + 繁殖增量
+                # 这更符合连续时间的积分效果
+                new_populations = {}
+                for item in combined_results:
+                    code = item.species.lineage_code
+                    initial = item.initial_population
+                    death_rate = item.death_rate
+                    
+                    # 繁殖后的种群（如果没有死亡）
+                    repro_pop = reproduction_results.get(code, initial)
+                    # 繁殖增量
+                    repro_gain = max(0, repro_pop - initial)
+                    
+                    # 最终种群 = 存活者 + 繁殖增量 × 存活者比例
+                    # 逻辑：只有存活的个体才能繁殖后代
+                    survivors = int(initial * (1.0 - death_rate))
+                    if initial > 0:
+                        survivor_ratio = survivors / initial
+                    else:
+                        survivor_ratio = 0
+                    
+                    # 繁殖后代也受到一定的环境压力（但比成年个体小）
+                    offspring_survival = 0.8 + 0.2 * (1.0 - death_rate)  # 80%-100%
+                    effective_gain = int(repro_gain * survivor_ratio * offspring_survival)
+                    
+                    final_pop = survivors + effective_gain
+                    new_populations[code] = max(0, final_pop)
+                    
+                    if abs(final_pop - initial) > initial * 0.3:
+                        logger.debug(
+                            f"[种群变化] {item.species.common_name}: "
+                            f"{initial:,} → {final_pop:,} "
+                            f"(死亡{death_rate:.1%}, 存活{survivors:,}, 繁殖+{effective_gain:,})"
+                        )
+                
+                # 应用最终种群
                 for species in species_batch:
                     if species.lineage_code in new_populations:
                         species.morphology_stats["population"] = new_populations[species.lineage_code]
                         species_repository.upsert(species)
-                logger.info(f"繁殖完成，种群更新")
-                self._emit_event("info", "繁殖完成，种群更新", "物种")
+                
+                # 更新灭绝状态（基于最终种群）
+                self._update_populations_extinction_check(combined_results, new_populations)
+                
+                logger.info(f"种群变化计算完成")
+                self._emit_event("info", "种群变化计算完成", "物种")
+                
+                # 【新增】更新慢性衰退追踪
+                # 用于下回合判断是否需要生存迁徙
+                for result in combined_results:
+                    old_pop = result.initial_population
+                    new_pop = new_populations.get(result.species.lineage_code, result.survivors)
+                    if old_pop > 0:
+                        growth_rate = new_pop / old_pop
+                    else:
+                        growth_rate = 1.0
+                    self.migration_advisor.update_decline_streak(
+                        result.species.lineage_code,
+                        result.death_rate,
+                        growth_rate
+                    )
                 
                 # 8.5.5 基因激活检查
                 logger.info(f"检查休眠基因激活...")
@@ -842,7 +910,7 @@ class SimulationEngine:
                         traits = event['activated_traits']
                         organs = event['activated_organs']
                         detail = f"{event['common_name']}: 特质{traits} 器官{organs}"
-                        print(f"  - {detail}")
+                        logger.debug(f"  - {detail}")
                         self._emit_event("activation", f"🔓 激活: {detail}", "进化")
                     for species in species_batch:
                         species_repository.upsert(species)
@@ -962,7 +1030,8 @@ class SimulationEngine:
                         """适应性演化任务"""
                         return await asyncio.wait_for(
                             self.adaptation_service.apply_adaptations_async(
-                                species_batch, modifiers, self.turn_counter, pressures
+                                species_batch, modifiers, self.turn_counter, pressures,
+                                mortality_results=combined_results  # 【新增】传递死亡率结果（含植物压力）
                             ),
                             timeout=300  # 5分钟超时
                         )
@@ -1165,9 +1234,10 @@ class SimulationEngine:
                 async def on_narrative_chunk(chunk: str):
                     self._emit_event("narrative_token", chunk, "报告")
 
-                # 【修复】再次强制加入超时保护，防止报告生成阶段永久卡死
-                # 如果AI生成超时，会自动降级为模板生成，确保游戏能继续
+                # 【优化】缩短超时时间，快速降级确保游戏流畅
+                # 报告生成最多等待45秒，超时后立即降级为模板模式
                 try:
+                    self._emit_event("stage", "📝 生成回合报告...", "报告")
                     report = await asyncio.wait_for(
                         self._build_report_async(
                             combined_results,
@@ -1180,25 +1250,35 @@ class SimulationEngine:
                             migration_events,
                             stream_callback=on_narrative_chunk,
                         ),
-                        timeout=120
+                        timeout=45  # 缩短到45秒，快速降级
                     )
+                    self._emit_event("stage", "✅ 报告生成完成", "报告")
                 except asyncio.TimeoutError:
-                    logger.error(f"[报告生成] AI 生成超时，转为使用模板生成")
-                    self._emit_event("warning", "AI响应超时，使用简报模式", "报告")
-                    # 禁用回调以跳过AI
-                    report = await self._build_report_async(
-                        combined_results,
-                        pressures,
-                        branching,
-                        background_summary,
-                        reemergence,
-                        major_events,
-                        map_changes,
-                        migration_events,
-                        stream_callback=None, 
-                    )
+                    logger.warning(f"[报告生成] 超时（45秒），转为模板模式")
+                    self._emit_event("warning", "⏱️ AI响应超时，使用快速模式", "报告")
+                    # 禁用LLM润色，直接使用模板生成
+                    self.report_builder.enable_llm_polish = False
+                    try:
+                        report = await asyncio.wait_for(
+                            self._build_report_async(
+                                combined_results,
+                                pressures,
+                                branching,
+                                background_summary,
+                                reemergence,
+                                major_events,
+                                map_changes,
+                                migration_events,
+                                stream_callback=None, 
+                            ),
+                            timeout=10  # 模板模式应该很快
+                        )
+                    finally:
+                        # 恢复LLM润色设置
+                        self.report_builder.enable_llm_polish = True
                     if not report.narrative:
-                        report.narrative = "由于 AI 响应超时，本回合详细叙事已省略。"
+                        report.narrative = "由于 AI 响应超时，本回合使用简报模式。"
+                    self._emit_event("stage", "✅ 快速报告生成完成", "报告")
                 
                 # 12. 保存地图快照
                 # 【修复】重新查询数据库获取最新物种列表
@@ -1212,6 +1292,24 @@ class SimulationEngine:
                     all_species_final, turn_index=self.turn_counter
                 )
                 
+                # 12.0 【新增】根据植物分布更新地块覆盖物
+                # 随着植物物种增多，地块覆盖物从裸地变为草原、森林等
+                logger.info(f"更新植被覆盖...")
+                self._emit_event("stage", "🌿 更新植被覆盖", "环境")
+                try:
+                    tiles = environment_repository.list_tiles()
+                    habitats = environment_repository.latest_habitats()
+                    species_map = {sp.id: sp for sp in all_species_final if sp.id}
+                    
+                    updated_tiles = vegetation_cover_service.update_vegetation_cover(
+                        tiles, habitats, species_map
+                    )
+                    if updated_tiles:
+                        environment_repository.upsert_tiles(updated_tiles)
+                        logger.info(f"[植被覆盖] 更新了 {len(updated_tiles)} 个地块的覆盖物")
+                except Exception as e:
+                    logger.warning(f"[植被覆盖] 更新失败: {e}")
+                
                 # 12.1 保存人口快照（用于族谱视图的当前/峰值人口）
                 # 【修复】使用最新物种列表，确保：
                 # - 灭绝物种保存 population=0 的快照
@@ -1224,10 +1322,19 @@ class SimulationEngine:
                     try:
                         for result in combined_results:
                             if result.species.status == "extinct":
+                                # 【修复】正确获取死因：优先使用death_causes，否则使用灭绝原因
+                                cause = ""
+                                if hasattr(result, 'death_causes') and result.death_causes:
+                                    cause = result.death_causes
+                                elif result.species.morphology_stats.get("extinction_reason"):
+                                    cause = result.species.morphology_stats["extinction_reason"]
+                                else:
+                                    cause = f"死亡率{result.death_rate:.1%}"
+                                
                                 self.embedding_integration.on_extinction(
                                     self.turn_counter,
                                     result.species,
-                                    cause=result.death_causes if hasattr(result, 'death_causes') else "环境压力"
+                                    cause=cause
                                 )
                     except Exception as e:
                         logger.warning(f"[Embedding集成] 记录灭绝事件失败: {e}")
@@ -1280,12 +1387,13 @@ class SimulationEngine:
                 self.turn_counter += 1
                 reports.append(report)
                 logger.info(f"回合 {report.turn_index} 完成")
-                self._emit_event("turn_complete", f"✅ 回合 {report.turn_index} 完成", "系统")
+                # 【优化】发送详细的完成信息，让前端知道进度
+                self._emit_event("turn_complete", f"✅ 回合 {report.turn_index} 完成，正在返回数据...", "系统")
                 
             except Exception as e:
                 logger.error(f"回合 {turn_num + 1} 执行失败: {str(e)}")
                 import traceback
-                print(traceback.format_exc())
+                logger.error(traceback.format_exc())
                 
                 # 继续执行下一回合，不要完全中断
                 continue
@@ -1377,6 +1485,7 @@ class SimulationEngine:
             )
         
         ecosystem_metrics = self._compute_ecosystem_metrics(mortality)
+        # 【优化】V2报告生成器支持 branching_events 参数用于事件驱动叙事
         narrative = await self.report_builder.build_turn_narrative_async(
             species_snapshots,
             pressures,
@@ -1385,6 +1494,7 @@ class SimulationEngine:
             major_events,
             map_changes,
             migration_events,
+            branching_events=branching_events,  # 【新增】传递分化事件
             stream_callback=stream_callback,
         )
         
@@ -1416,45 +1526,66 @@ class SimulationEngine:
         )
 
     def _update_populations(self, mortality_results) -> None:
-        """更新种群数量并检测灭绝条件。
+        """【已废弃】旧的种群更新方法，保留用于兼容。
         
-        灭绝条件（50万年时间尺度，淘汰更严格）：
+        新逻辑在 run_turns_async 中直接计算种群变化。
+        """
+        # 不再使用此方法进行种群更新
+        # 只保留灭绝检查
+        pass
+    
+    def _update_populations_extinction_check(
+        self, 
+        mortality_results, 
+        final_populations: dict[str, int]
+    ) -> None:
+        """检测灭绝条件并更新物种状态。
+        
+        【优化】与种群计算分离，只负责灭绝判定
+        
+        灭绝条件（50万年时间尺度）：
         - 单回合死亡率≥90%：灾难性死亡，直接灭绝
         - 死亡率≥70%且连续2回合：种群衰退严重，灭绝
         - 死亡率≥60%且连续3回合：长期不适应环境，灭绝
+        - 【新增】种群<100且死亡率>50%：种群过小，无法恢复
         
-        设计理念：50万年足够让不适应的物种被自然选择淘汰
+        Args:
+            mortality_results: 死亡率计算结果
+            final_populations: 最终种群数量 {lineage_code: population}
         """
         for item in mortality_results:
             species = item.species
-            current_population = item.survivors
+            final_pop = final_populations.get(species.lineage_code, 0)
             death_rate = item.death_rate
             streak_key = "mortality_streak"
             mortality_streak = int(species.morphology_stats.get(streak_key, 0) or 0)
             
-            # 追踪连续高死亡率（门槛从75%降到60%）
+            # 追踪连续高死亡率
             if death_rate >= 0.60:
                 mortality_streak += 1
             else:
                 mortality_streak = 0
             species.morphology_stats[streak_key] = mortality_streak
             
-            # 【修复】更严格的灭绝条件，让淘汰更快
             extinction_triggered = False
             extinction_reason = ""
             
-            # 条件1：单回合死亡率≥90%（从98%降低）
+            # 条件1：单回合死亡率≥90%
             if death_rate >= 0.90:
                 extinction_triggered = True
                 extinction_reason = f"单回合死亡率{death_rate:.1%}，种群崩溃"
-            # 条件2：死亡率≥70%且连续2回合（从85%降低）
+            # 条件2：死亡率≥70%且连续2回合
             elif death_rate >= 0.70 and mortality_streak >= 2:
                 extinction_triggered = True
                 extinction_reason = f"连续{mortality_streak}回合高死亡率（≥70%），种群衰退"
-            # 条件3：死亡率≥60%且连续3回合（新增）
+            # 条件3：死亡率≥60%且连续3回合
             elif death_rate >= 0.60 and mortality_streak >= 3:
                 extinction_triggered = True
                 extinction_reason = f"连续{mortality_streak}回合中高死亡率（≥60%），长期不适应环境"
+            # 【新增】条件4：种群过小且高死亡率
+            elif final_pop < 100 and death_rate > 0.50:
+                extinction_triggered = True
+                extinction_reason = f"种群过小({final_pop})且死亡率高({death_rate:.1%})，无法恢复"
             
             # 执行灭绝
             if extinction_triggered and species.status == "alive":
@@ -1474,16 +1605,12 @@ class SimulationEngine:
                         payload={
                             "turn": self.turn_counter,
                             "reason": extinction_reason,
-                            "final_population": current_population,
+                            "final_population": final_pop,
                             "death_rate": death_rate,
                         }
                     )
                 )
-            else:
-                # 正常更新种群
-                species.morphology_stats["population"] = current_population
-            
-            species_repository.upsert(species)
+                species_repository.upsert(species)
 
     def _rule_based_reemergence(self, candidates, modifiers):
         """基于规则筛选背景物种重现。
@@ -1597,7 +1724,7 @@ class SimulationEngine:
                 species.taxonomic_rank = "species"
                 species_repository.upsert(species)
                 promotion_count += 1
-                print(f"  - {species.common_name} ({species.lineage_code}) 晋升为独立种")
+                logger.debug(f"  - {species.common_name} ({species.lineage_code}) 晋升为独立种")
         
         return promotion_count
     

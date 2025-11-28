@@ -5,6 +5,7 @@ import App from "./App";
 
 import "./styles.css";
 import "./animations.css";
+import "./enhancements.css"; // 界面增强样式
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

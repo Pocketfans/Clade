@@ -95,11 +95,12 @@ class PopulationCalculator:
     ) -> int:
         """获取推荐的初始种群数量。
         
-        【平衡修改】从小族群开始，让演化过程更有意义
-        - 微生物（<1mm）：约 10万
-        - 小型生物（1mm-10cm）：约 1-5万
-        - 中型生物（10cm-1m）：约 5000-1万
-        - 大型生物（>1m）：约 1000-5000
+        【平衡修复】提高微生物初始种群，确保有足够的生存基数
+        - 微生物（<0.1mm）：50万-100万（高繁殖率需要更大基数）
+        - 小型微生物（0.1-1mm）：10万-50万
+        - 小型生物（1mm-10cm）：1万-10万
+        - 中型生物（10cm-1m）：5000-2万
+        - 大型生物（>1m）：1000-5000
         """
         import math
         
@@ -107,14 +108,23 @@ class PopulationCalculator:
         # 使用对数缩放：体长越大，初始种群越小
         log_length = math.log10(max(0.001, body_length_cm))  # -3 到 3 范围
         
-        # 初始种群基数
-        # log_length = -3 (0.001cm = 10μm，微生物) -> 100,000
-        # log_length = 0 (1cm) -> 10,000
-        # log_length = 2 (100cm = 1m) -> 1,000
-        base_initial = 10_000  # 1万作为基准
+        # 【修复】提高微生物基数
+        # 微生物需要更大的种群基数来抵御随机波动
+        if body_length_cm < 0.01:  # <0.1mm，真正的微生物
+            base_initial = 500_000  # 50万
+        elif body_length_cm < 0.1:  # 0.1-1mm，小型微生物
+            base_initial = 100_000  # 10万
+        elif body_length_cm < 1.0:  # 1-10mm，小型生物
+            base_initial = 30_000   # 3万
+        elif body_length_cm < 10.0:  # 1-10cm
+            base_initial = 10_000   # 1万
+        elif body_length_cm < 100.0:  # 10cm-1m
+            base_initial = 5_000    # 5千
+        else:  # >1m
+            base_initial = 2_000    # 2千
         
-        # 缩放因子：体长每增加10倍，初始种群减少到1/3
-        scale = 3.0 ** (-log_length)
+        # 缩放因子：体长每增加10倍，初始种群减少到1/2（比原来1/3更温和）
+        scale = 2.0 ** (-max(0, log_length))  # 只对大型生物应用缩放
         initial_pop = int(base_initial * scale)
         
         # 应用栖息地质量
@@ -122,9 +132,9 @@ class PopulationCalculator:
         initial_pop = int(initial_pop * habitat_quality)
         
         # 边界限制
-        # 最小：1,000（保证物种能够存活）
-        # 最大：500,000（不能太大，否则第一回合就到上限）
-        initial_pop = max(1_000, min(initial_pop, 500_000))
+        # 最小：2,000（从1000提高，保证物种有足够的生存基数）
+        # 最大：1,000,000（从500,000提高，允许微生物有更大种群）
+        initial_pop = max(2_000, min(initial_pop, 1_000_000))
         
         return initial_pop
     

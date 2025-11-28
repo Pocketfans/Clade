@@ -78,6 +78,12 @@ class AggregatedMortalityResult:
     ai_headline: str = ""
     ai_mood: str = ""
     death_causes: str = ""  # 主要死因描述
+    
+    # 【新增】植物专用压力字段
+    plant_competition_pressure: float = 0.0  # 植物竞争压力（光照+养分）
+    light_competition: float = 0.0           # 光照竞争程度
+    nutrient_competition: float = 0.0        # 养分竞争程度
+    herbivory_pressure: float = 0.0          # 食草压力
 
 
 class TileBasedMortalityEngine:
@@ -120,6 +126,10 @@ class TileBasedMortalityEngine:
         
         # 【新增】捕食网服务
         self._predation_service = PredationService()
+        
+        # 【新增】植物压力缓存（用于结果汇总）
+        self._last_plant_competition_matrix: np.ndarray | None = None
+        self._last_herbivory_pressure: dict[str, float] = {}  # {lineage_code: pressure}
     
     def build_matrices(
         self,
@@ -636,13 +646,14 @@ class TileBasedMortalityEngine:
     ) -> np.ndarray:
         """计算每个地块上每个物种的死亡率
         
+        【平衡修复】使用混合模型替代纯乘法，添加微生物抗性
+        
         Args:
             species_list: 当前批次的物种列表
             species_arrays: 物种属性数组
             pressure_modifiers: 压力修饰符
             trophic_interactions: 营养级互动
-            batch_population_matrix: 【关键】当前批次对应的population子矩阵，
-                                     维度为 (n_tiles × len(species_list))
+            batch_population_matrix: 当前批次对应的population子矩阵
         
         Returns:
             (num_tiles × num_species) 的死亡率矩阵
@@ -650,8 +661,6 @@ class TileBasedMortalityEngine:
         n_tiles = len(self._tiles)
         n_species = len(species_list)
         
-        # 【关键修复】如果提供了batch_population_matrix，使用它；否则使用全局矩阵
-        # 这确保了矩阵维度与当前species_list匹配
         if batch_population_matrix is None:
             batch_population_matrix = self._population_matrix
         
@@ -659,53 +668,125 @@ class TileBasedMortalityEngine:
         mortality = np.zeros((n_tiles, n_species), dtype=np.float64)
         
         # ========== 1. 计算地块环境压力 ==========
-        # 环境压力因子 (num_tiles × num_species)
         env_pressure = self._compute_tile_environment_pressure(
             species_list, species_arrays, pressure_modifiers
         )
         
         # ========== 2. 计算地块内竞争压力 ==========
-        # 竞争因子 (num_tiles × num_species)
         competition_pressure = self._compute_tile_competition_pressure(
             species_list, species_arrays, batch_population_matrix
         )
         
         # ========== 3. 计算地块内营养级互动 ==========
-        # 营养级因子 (num_tiles × num_species)
         trophic_pressure = self._compute_tile_trophic_pressure(
             species_list, species_arrays, trophic_interactions, batch_population_matrix
         )
         
         # ========== 4. 计算地块资源压力 ==========
-        # 资源因子 (num_tiles × num_species)
         resource_pressure = self._compute_tile_resource_pressure(
             species_list, species_arrays, batch_population_matrix
         )
         
-        # ========== 5. 计算捕食网压力（新增）==========
-        # 基于真实捕食关系计算饥饿压力和被捕食压力
+        # ========== 5. 计算捕食网压力 ==========
         predation_network_pressure = self._compute_predation_network_pressure(
             species_list, species_arrays, batch_population_matrix
         )
         
-        # ========== 6. 组合所有因子 ==========
-        # 复合存活率 = (1-环境) × (1-竞争) × (1-营养级) × (1-资源) × (1-捕食网)
-        survival = (
-            (1.0 - np.minimum(0.8, env_pressure)) *
-            (1.0 - np.minimum(0.6, competition_pressure)) *
-            (1.0 - np.minimum(0.7, trophic_pressure)) *
-            (1.0 - np.minimum(0.65, resource_pressure)) *
-            (1.0 - np.minimum(0.7, predation_network_pressure))
+        # ========== 【新增】6. 计算植物竞争压力（光照+养分）==========
+        plant_competition_pressure = self._compute_plant_competition_pressure(
+            species_list, species_arrays, batch_population_matrix
         )
         
-        mortality = 1.0 - survival
+        # 【新增】缓存植物竞争压力矩阵（用于结果汇总）
+        self._last_plant_competition_matrix = plant_competition_pressure
+        
+        # 【新增】计算并缓存食草压力（供结果汇总使用）
+        self._compute_and_cache_herbivory_pressure(species_list)
+        
+        # ========== 【平衡修复】7. 使用混合模型替代纯乘法 ==========
+        # 问题：纯乘法会导致累积死亡率过高
+        #   例：0.2 × 0.3 × 0.2 × 0.3 × 0.2 = 0.000072 存活率 = 99.99% 死亡
+        # 解决：使用加权和 + 乘法混合，并降低各因素上限
+        
+        # 更合理的上限（降低每个因素的最大贡献）
+        env_capped = np.minimum(0.50, env_pressure)          # 从0.8降到0.5
+        competition_capped = np.minimum(0.40, competition_pressure)  # 从0.6降到0.4
+        trophic_capped = np.minimum(0.50, trophic_pressure)  # 从0.7降到0.5
+        resource_capped = np.minimum(0.45, resource_pressure)  # 从0.65降到0.45
+        predation_capped = np.minimum(0.50, predation_network_pressure)  # 从0.7降到0.5
+        plant_competition_capped = np.minimum(0.35, plant_competition_pressure)  # 植物竞争上限0.35
+        
+        # 【新增】计算体型/繁殖抗性
+        # 微生物和快速繁殖物种应该有更好的生存率
+        body_size = species_arrays['body_size']
+        generation_time = species_arrays['generation_time']
+        
+        # 体型抗性：越小越抗压（繁殖快、适应强）
+        # body_size < 0.01cm (微生物) -> 0.4 抗性
+        # body_size 0.01-0.1cm -> 0.3 抗性
+        # body_size 0.1-1cm -> 0.2 抗性
+        # body_size > 1cm -> 0.1 抗性
+        size_resistance = np.where(
+            body_size < 0.01, 0.40,
+            np.where(body_size < 0.1, 0.30,
+                np.where(body_size < 1.0, 0.20, 0.10))
+        )
+        
+        # 繁殖速度抗性：繁殖越快越抗压
+        # generation_time < 7天 -> 0.35 抗性
+        # generation_time 7-30天 -> 0.25 抗性
+        # generation_time 30-365天 -> 0.15 抗性
+        # generation_time > 365天 -> 0.05 抗性
+        repro_resistance = np.where(
+            generation_time < 7, 0.35,
+            np.where(generation_time < 30, 0.25,
+                np.where(generation_time < 365, 0.15, 0.05))
+        )
+        
+        # 综合抗性（取两者的加权平均）
+        total_resistance = size_resistance * 0.6 + repro_resistance * 0.4
+        # 广播到矩阵形状 (n_tiles, n_species)
+        resistance_matrix = total_resistance[np.newaxis, :]
+        
+        # 【新模型】混合死亡率计算
+        # 方法1：加权和模型（更可控）
+        # 各因素权重，总和约2.5，使得满压力时死亡率约80%
+        weighted_sum = (
+            env_capped * 0.50 +           # 环境占比高
+            competition_capped * 0.35 +   # 竞争次之
+            trophic_capped * 0.45 +       # 营养级重要
+            resource_capped * 0.40 +      # 资源重要
+            predation_capped * 0.40 +     # 捕食重要
+            plant_competition_capped * 0.30  # 【新增】植物竞争（光照+养分）
+        )  # 总权重 = 2.4
+        
+        # 方法2：修正的乘法模型（保留一定的累积效应，但更温和）
+        # 使用开方来减弱乘法效应
+        survival_product = (
+            (1.0 - env_capped * 0.6) *        # 降低系数
+            (1.0 - competition_capped * 0.5) *
+            (1.0 - trophic_capped * 0.6) *
+            (1.0 - resource_capped * 0.5) *
+            (1.0 - predation_capped * 0.6) *
+            (1.0 - plant_competition_capped * 0.4)  # 【新增】植物竞争
+        )
+        multiplicative_mortality = 1.0 - survival_product
+        
+        # 混合两种模型（加权和占70%，乘法占30%）
+        raw_mortality = weighted_sum * 0.70 + multiplicative_mortality * 0.30
+        
+        # 应用抗性减免
+        # 抗性直接减少死亡率，最多减少40%
+        mortality = raw_mortality * (1.0 - resistance_matrix)
         
         # ========== 7. 应用世代累积死亡率 ==========
         if _settings.enable_generational_mortality:
             mortality = self._apply_generational_mortality(species_arrays, mortality)
         
         # ========== 8. 边界约束 ==========
-        mortality = np.clip(mortality, 0.03, 0.98)
+        # 【修复】最低死亡率从3%降到2%，给快繁殖物种更多生存空间
+        # 最高死亡率保持98%
+        mortality = np.clip(mortality, 0.02, 0.98)
         
         return mortality
     
@@ -717,19 +798,22 @@ class TileBasedMortalityEngine:
     ) -> np.ndarray:
         """计算每个地块对每个物种的环境压力
         
+        【生物学依据】
+        环境压力基于物种特质与环境条件的匹配度计算：
+        - 温度压力：基于物种耐热/耐寒特质
+        - 水分压力：基于物种耐旱/耐湿特质
+        - 特殊事件：疾病、火灾、紫外辐射等
+        
         考虑：
         - 地块温度 vs 物种耐热/耐寒性
         - 地块湿度 vs 物种耐旱性
-        - 全局压力修饰符
+        - 全局压力修饰符（疾病、火灾、毒素等）
         """
         n_tiles = len(self._tiles)
         n_species = len(species_list)
         
         # 初始化压力矩阵
         pressure = np.zeros((n_tiles, n_species), dtype=np.float64)
-        
-        # 获取全局压力分数
-        pressure_score = sum(pressure_modifiers.values()) / max(len(pressure_modifiers), 1)
         
         # 地块温度 (n_tiles,)
         tile_temps = self._tile_env_matrix[:, 0]
@@ -740,18 +824,20 @@ class TileBasedMortalityEngine:
         cold_res = species_arrays['cold_resistance']
         heat_res = species_arrays['heat_resistance']
         drought_res = species_arrays['drought_resistance']
+        salinity_res = species_arrays['salinity_resistance']
         base_sens = species_arrays['base_sensitivity']
         
         # ========== 温度压力 ==========
-        # 广播计算：(n_tiles, 1) vs (1, n_species)
-        temp_deviation = np.abs(tile_temps[:, np.newaxis] - 15.0)  # 15°C 为最适温度
+        # 全局温度修饰（来自冰河期/温室效应等）
+        temp_modifier = pressure_modifiers.get('temperature', 0.0)
+        adjusted_temps = tile_temps + temp_modifier * 3.0  # 每单位修饰器=3°C
         
-        # 高温地块 (>20°C)：检验耐热性
-        high_temp_mask = tile_temps[:, np.newaxis] > 20.0
-        # 低温地块 (<10°C)：检验耐寒性
-        low_temp_mask = tile_temps[:, np.newaxis] < 10.0
+        temp_deviation = np.abs(adjusted_temps[:, np.newaxis] - 15.0)
         
-        # 温度压力 = 温度偏差 × (1 - 对应耐性)
+        # 高温/低温检测
+        high_temp_mask = adjusted_temps[:, np.newaxis] > 20.0
+        low_temp_mask = adjusted_temps[:, np.newaxis] < 10.0
+        
         temp_pressure = np.zeros((n_tiles, n_species))
         temp_pressure = np.where(
             high_temp_mask,
@@ -764,17 +850,100 @@ class TileBasedMortalityEngine:
             temp_pressure
         )
         
-        # ========== 干旱压力 ==========
-        # 低湿度地块增加干旱压力
-        # 注意：不使用 *= 就地操作，避免广播形状不匹配
-        drought_base = np.maximum(0, 0.5 - tile_humidity[:, np.newaxis]) * 2.0
+        # ========== 水分压力（干旱/洪水） ==========
+        drought_modifier = pressure_modifiers.get('drought', 0.0)
+        flood_modifier = pressure_modifiers.get('flood', 0.0)
+        
+        # 干旱压力
+        adjusted_humidity = tile_humidity - drought_modifier * 0.1
+        drought_base = np.maximum(0, 0.5 - adjusted_humidity[:, np.newaxis]) * 2.0
         drought_pressure = drought_base * (1.0 - drought_res[np.newaxis, :])
         
-        # ========== 全局压力 ==========
-        global_pressure = (pressure_score / 25.0) * base_sens[np.newaxis, :]
+        # 洪水压力（陆生生物受影响）
+        flood_pressure = np.zeros((n_tiles, n_species))
+        if flood_modifier > 0:
+            # 只有陆生生物受洪水影响
+            for sp_idx, sp in enumerate(species_list):
+                habitat = getattr(sp, 'habitat_type', 'terrestrial')
+                if habitat in ('terrestrial', 'aerial'):
+                    flood_pressure[:, sp_idx] = flood_modifier * 0.05
         
-        # 组合压力
-        pressure = temp_pressure * 0.3 + drought_pressure * 0.2 + global_pressure * 0.5
+        # ========== 特殊事件压力 ==========
+        special_pressure = np.zeros((n_tiles, n_species))
+        
+        # 疾病压力 - 社会性越高越容易传播
+        disease_mod = pressure_modifiers.get('disease', 0.0)
+        if disease_mod > 0:
+            for sp_idx, sp in enumerate(species_list):
+                sociality = sp.abstract_traits.get('社会性', 3.0)
+                immunity = sp.abstract_traits.get('免疫力', 5.0) / 15.0
+                # 社会性高的物种更易感染，免疫力提供保护
+                disease_risk = (sociality / 10.0) * disease_mod * 0.08 * (1.0 - immunity)
+                special_pressure[:, sp_idx] += disease_risk
+        
+        # 野火压力 - 陆生生物受影响，挖掘能力提供保护
+        wildfire_mod = pressure_modifiers.get('wildfire', 0.0)
+        if wildfire_mod > 0:
+            for sp_idx, sp in enumerate(species_list):
+                habitat = getattr(sp, 'habitat_type', 'terrestrial')
+                if habitat in ('terrestrial', 'aerial', 'amphibious'):
+                    fire_res = sp.abstract_traits.get('耐火性', 0.0) / 15.0
+                    burrow = sp.abstract_traits.get('挖掘能力', 0.0) / 15.0
+                    fire_risk = wildfire_mod * 0.07 * (1.0 - max(fire_res, burrow))
+                    special_pressure[:, sp_idx] += fire_risk
+        
+        # 紫外辐射压力 - 表层生物受影响
+        uv_mod = pressure_modifiers.get('uv_radiation', 0.0)
+        if uv_mod > 0:
+            for sp_idx, sp in enumerate(species_list):
+                uv_res = sp.abstract_traits.get('抗紫外线', 0.0) / 15.0
+                uv_risk = uv_mod * 0.06 * (1.0 - uv_res)
+                special_pressure[:, sp_idx] += uv_risk
+        
+        # 硫化物/毒素压力
+        sulfide_mod = pressure_modifiers.get('sulfide', 0.0) + pressure_modifiers.get('toxin_level', 0.0)
+        if sulfide_mod > 0:
+            for sp_idx, sp in enumerate(species_list):
+                detox = sp.abstract_traits.get('解毒能力', 0.0) / 15.0
+                toxin_risk = sulfide_mod * 0.08 * (1.0 - detox)
+                special_pressure[:, sp_idx] += toxin_risk
+        
+        # 盐度变化压力 - 主要影响水生生物
+        salinity_mod = abs(pressure_modifiers.get('salinity_change', 0.0))
+        if salinity_mod > 0:
+            salinity_pressure = salinity_mod * 0.05 * (1.0 - salinity_res[np.newaxis, :])
+            for sp_idx, sp in enumerate(species_list):
+                habitat = getattr(sp, 'habitat_type', 'terrestrial')
+                if habitat in ('marine', 'coastal', 'freshwater', 'deep_sea'):
+                    special_pressure[:, sp_idx] += salinity_pressure[0, sp_idx]
+        
+        # 直接死亡率修饰（风暴、地震等）
+        mortality_spike = pressure_modifiers.get('mortality_spike', 0.0)
+        if mortality_spike > 0:
+            special_pressure += mortality_spike * 0.03  # 直接增加基础死亡率
+        
+        # ========== 基础环境敏感度 ==========
+        # 计算剩余未特化处理的压力的综合影响
+        handled_modifiers = {
+            'temperature', 'drought', 'flood', 'disease', 'wildfire', 
+            'uv_radiation', 'sulfide', 'toxin_level', 'salinity_change', 
+            'mortality_spike', 'volcano', 'volcanic'
+        }
+        other_pressure = sum(
+            abs(v) for k, v in pressure_modifiers.items() 
+            if k not in handled_modifiers
+        )
+        global_pressure = (other_pressure / 30.0) * base_sens[np.newaxis, :]
+        
+        # ========== 组合压力 ==========
+        # 【优化】调整各压力因素权重
+        pressure = (
+            temp_pressure * 0.25 +      # 温度是基础影响
+            drought_pressure * 0.15 +   # 水分次之
+            flood_pressure * 0.10 +     # 洪水影响较小
+            special_pressure * 0.30 +   # 特殊事件影响显著
+            global_pressure * 0.20      # 其他综合影响
+        )
         
         return np.clip(pressure, 0.0, 1.0)
     
@@ -1200,14 +1369,106 @@ class TileBasedMortalityEngine:
         
         return np.clip(predation_pressure, 0.0, 0.7)
     
+    def _compute_plant_competition_pressure(
+        self,
+        species_list: list[Species],
+        species_arrays: dict[str, np.ndarray],
+        batch_population_matrix: np.ndarray,
+    ) -> np.ndarray:
+        """【优化版】矩阵化计算植物竞争压力（光照+养分）
+        
+        只对植物（营养级<2.0）有效：
+        1. 光照竞争：高大植物遮蔽矮小植物
+        2. 养分竞争：根系发达的植物抢夺更多养分
+        3. Embedding相似度加成：相似物种竞争更激烈
+        
+        Args:
+            species_list: 物种列表
+            species_arrays: 物种属性数组
+            batch_population_matrix: 种群分布矩阵
+            
+        Returns:
+            (n_tiles, n_species) 植物竞争压力矩阵
+        """
+        from ..services.species.plant_competition import plant_competition_calculator
+        
+        n_tiles = len(self._tiles)
+        n_species = len(species_list)
+        
+        # 过滤出植物物种
+        trophic_levels = species_arrays['trophic_level']
+        plant_mask = trophic_levels < 2.0
+        
+        if not np.any(plant_mask):
+            return np.zeros((n_tiles, n_species), dtype=np.float64)
+        
+        # 地块资源向量
+        tile_resources = self._tile_env_matrix[:, 2] if self._tile_env_matrix is not None else np.full(n_tiles, 50.0)
+        
+        # 【优化】直接使用矩阵化计算
+        try:
+            plant_pressure = plant_competition_calculator.compute_competition_matrix(
+                species_list,
+                batch_population_matrix,
+                tile_resources,
+            )
+            
+            # 统计日志
+            if np.any(plant_mask):
+                avg_pressure = plant_pressure[:, plant_mask].mean()
+                max_pressure = plant_pressure[:, plant_mask].max()
+                logger.debug(
+                    f"[植物竞争] 矩阵计算完成，"
+                    f"平均压力={avg_pressure:.3f}, 最大压力={max_pressure:.3f}"
+                )
+        except Exception as e:
+            logger.warning(f"[植物竞争] 矩阵计算失败: {e}")
+            plant_pressure = np.zeros((n_tiles, n_species), dtype=np.float64)
+        
+        return np.clip(plant_pressure, 0.0, 0.5)
+    
+    def _compute_and_cache_herbivory_pressure(
+        self,
+        species_list: list[Species],
+    ) -> None:
+        """【新增】计算并缓存食草压力
+        
+        为每个植物物种计算食草动物的捕食压力，
+        并缓存到 _last_herbivory_pressure 供结果汇总使用
+        """
+        from ..services.species.plant_competition import plant_competition_calculator
+        from ..services.species.trait_config import PlantTraitConfig
+        
+        self._last_herbivory_pressure.clear()
+        
+        for species in species_list:
+            if not PlantTraitConfig.is_plant(species):
+                continue
+            
+            try:
+                herbivory_info = plant_competition_calculator.get_herbivory_pressure(
+                    species, species_list
+                )
+                self._last_herbivory_pressure[species.lineage_code] = herbivory_info.get("pressure", 0.0)
+            except Exception as e:
+                logger.debug(f"[食草压力] 计算失败 {species.common_name}: {e}")
+                self._last_herbivory_pressure[species.lineage_code] = 0.0
+    
     def _apply_generational_mortality(
         self,
         species_arrays: dict[str, np.ndarray],
         mortality: np.ndarray,
     ) -> np.ndarray:
-        """应用世代累积死亡率（矩阵优化版）
+        """【修复】应用世代适应性加成
         
-        短世代物种（如微生物）的累积效应
+        50万年时间尺度说明：
+        - 微生物（1天1代）：约1.8亿代，有充足时间演化适应
+        - 昆虫（1月1代）：约600万代
+        - 哺乳动物（1年1代）：约50万代
+        
+        核心逻辑：世代越多，演化适应能力越强，死亡率应该降低
+        - 不是重新计算累积死亡率（那个逻辑是错误的）
+        - 而是给快繁殖物种额外的抗性加成
         """
         n_tiles, n_species = mortality.shape
         
@@ -1215,59 +1476,47 @@ class TileBasedMortalityEngine:
         body_size = species_arrays['body_size']
         population = species_arrays['population']
         
-        # 每个物种的世代数 (n_species,)
+        # 计算50万年内的世代数 (n_species,)
         num_generations = (_settings.turn_years * 365) / np.maximum(1.0, generation_time)
         
-        # 体型抗性 (n_species,)
-        size_resistance = np.ones(n_species) * 0.1
-        size_resistance = np.where(body_size < 10.0, 0.3, size_resistance)
-        size_resistance = np.where(body_size < 1.0, 0.5, size_resistance)
-        size_resistance = np.where(body_size < 0.1, 0.7, size_resistance)
+        # 【新逻辑】基于世代数的适应性加成
+        # 世代越多，演化适应能力越强
+        # 使用对数缩放，避免微生物获得过高加成
+        # log10(1e8) = 8, log10(1e6) = 6, log10(5e5) = 5.7
+        log_generations = np.log10(np.maximum(1.0, num_generations))
         
-        # 繁殖策略抗性 (n_species,)
-        repro_resistance = np.ones(n_species) * 0.1
-        repro_resistance = np.where(population > 100_000, 0.2, repro_resistance)
-        repro_resistance = np.where(population > 500_000, 0.3, repro_resistance)
+        # 演化适应加成：
+        # 1亿代(log=8) -> 0.35加成（死亡率降低35%）
+        # 100万代(log=6) -> 0.25加成
+        # 50万代(log=5.7) -> 0.22加成
+        # 1万代(log=4) -> 0.12加成
+        # 1千代(log=3) -> 0.05加成
+        evolution_bonus = np.clip((log_generations - 3.0) / 5.0 * 0.35, 0.0, 0.40)
         
-        # 抗性因子 (n_species,)
-        resistance_factor = (1.0 - size_resistance * 0.6) * (1.0 - repro_resistance * 0.5)
+        # 体型抗性（小体型物种繁殖恢复快）
+        size_bonus = np.where(
+            body_size < 0.01, 0.15,  # 微生物
+            np.where(body_size < 0.1, 0.10,  # 小型
+                np.where(body_size < 1.0, 0.05, 0.0))  # 中型
+        )
         
-        # 广播到矩阵形状
-        n_gen_matrix = num_generations[np.newaxis, :]  # (1, n_species)
-        resistance_matrix = resistance_factor[np.newaxis, :]  # (1, n_species)
+        # 种群规模抗性（大种群有更高基因多样性）
+        pop_bonus = np.where(
+            population > 1_000_000, 0.10,
+            np.where(population > 100_000, 0.05, 0.0)
+        )
         
-        # 每代风险 (n_tiles × n_species)
-        with np.errstate(divide='ignore', invalid='ignore'):
-            per_gen_risk = mortality / n_gen_matrix
-            per_gen_risk = np.nan_to_num(per_gen_risk, 0.0)
+        # 综合抗性（不要累加太多，最多50%减免）
+        total_resistance = np.minimum(0.50, evolution_bonus + size_bonus + pop_bonus)
         
-        # 每代存活率 (n_tiles × n_species)
-        per_gen_survival = np.clip(1.0 - per_gen_risk, 0.0, 1.0)
+        # 广播到矩阵形状 (n_tiles, n_species)
+        resistance_matrix = total_resistance[np.newaxis, :]
         
-        # 累积存活率 = survival ^ n_generations
-        # 使用对数计算避免数值溢出
-        with np.errstate(divide='ignore', invalid='ignore'):
-            log_survival = np.log(np.maximum(per_gen_survival, 1e-300))
-            cumulative_log = n_gen_matrix * log_survival
-            cumulative_log = np.maximum(cumulative_log, -700)  # 防止下溢
-            cumulative_survival = np.exp(cumulative_log)
-            cumulative_survival = np.nan_to_num(cumulative_survival, 0.0)
+        # 应用抗性：降低死亡率
+        # mortality_new = mortality_old * (1 - resistance)
+        adjusted_mortality = mortality * (1.0 - resistance_matrix)
         
-        # 边界处理：存活率为0或1的特殊情况
-        cumulative_survival = np.where(per_gen_survival <= 0, 0.0, cumulative_survival)
-        cumulative_survival = np.where(per_gen_survival >= 1.0, 1.0, cumulative_survival)
-        
-        # 累积死亡率 (n_tiles × n_species)
-        cumulative_mortality = 1.0 - cumulative_survival
-        
-        # 应用抗性因子
-        adjusted_mortality = cumulative_mortality * resistance_matrix
-        
-        # 只对多世代物种应用调整（n_gen > 1 且 base_risk > 0）
-        apply_mask = (n_gen_matrix > 1) & (mortality > 0)
-        mortality = np.where(apply_mask, adjusted_mortality, mortality)
-        
-        return np.clip(mortality, 0.0, 0.98)
+        return np.clip(adjusted_mortality, 0.0, 0.98)
     
     def _aggregate_tile_results(
         self,
@@ -1338,8 +1587,36 @@ class TileBasedMortalityEngine:
                 species, weighted_death_rate, species_arrays, sp_idx
             )]
             
+            # 【Embedding兼容】生成死因描述
+            death_causes = self._generate_death_causes(
+                species, weighted_death_rate, species_arrays, sp_idx
+            )
+            
             if weighted_death_rate > 0.5:
                 logger.info(f"[高死亡率警告] {species.common_name}: {weighted_death_rate:.1%}")
+            
+            # 【新增】计算植物专用压力字段
+            plant_comp_pressure = 0.0
+            light_comp = 0.0
+            nutrient_comp = 0.0
+            herb_pressure = 0.0
+            
+            if species_arrays['trophic_level'][sp_idx] < 2.0:  # 是植物
+                # 从缓存的植物竞争矩阵中计算加权平均
+                if self._last_plant_competition_matrix is not None:
+                    if self._population_matrix is not None:
+                        sp_pops = self._population_matrix[:, sp_idx]
+                        total_sp_pop = sp_pops.sum()
+                        if total_sp_pop > 0:
+                            plant_comp_pressure = float(
+                                (self._last_plant_competition_matrix[:, sp_idx] * sp_pops).sum() 
+                                / total_sp_pop
+                            )
+                    else:
+                        plant_comp_pressure = float(self._last_plant_competition_matrix[:, sp_idx].mean())
+                
+                # 获取食草压力
+                herb_pressure = self._last_herbivory_pressure.get(species.lineage_code, 0.0)
             
             results.append(AggregatedMortalityResult(
                 species=species,
@@ -1352,6 +1629,11 @@ class TileBasedMortalityEngine:
                 resource_pressure=species_arrays['saturation'][sp_idx],
                 is_background=species.is_background,
                 tier=tier,
+                death_causes=death_causes,  # 【新增】死因描述
+                plant_competition_pressure=plant_comp_pressure,  # 【新增】植物竞争压力
+                light_competition=light_comp,                     # 【新增】光照竞争
+                nutrient_competition=nutrient_comp,               # 【新增】养分竞争
+                herbivory_pressure=herb_pressure,                 # 【新增】食草压力
             ))
         
         return results
@@ -1381,6 +1663,59 @@ class TileBasedMortalityEngine:
             return f"{species.common_name}本回合死亡率{death_rate:.1%}（按地块加权）：" + "；".join(analysis_parts) + "。"
         else:
             return f"{species.common_name}死亡率{death_rate:.1%}（按地块加权），种群状况稳定。"
+    
+    def _generate_death_causes(
+        self,
+        species: Species,
+        death_rate: float,
+        species_arrays: dict[str, np.ndarray],
+        sp_idx: int,
+    ) -> str:
+        """【Embedding兼容】生成死因描述
+        
+        用于Embedding模块记录灭绝事件的原因
+        """
+        if death_rate < 0.1:
+            return "环境稳定，种群健康"
+        
+        causes = []
+        
+        # 生态位竞争
+        overlap = species_arrays['overlap'][sp_idx]
+        if overlap > 0.5:
+            causes.append(f"激烈的生态位竞争（重叠度{overlap:.0%}）")
+        elif overlap > 0.3:
+            causes.append("生态位竞争")
+        
+        # 资源压力
+        saturation = species_arrays['saturation'][sp_idx]
+        if saturation > 1.5:
+            causes.append("严重的资源匮乏")
+        elif saturation > 1.0:
+            causes.append("资源压力")
+        
+        # 营养级（从营养级推断）
+        trophic = species_arrays['trophic_level'][sp_idx]
+        if trophic >= 4.0 and death_rate > 0.4:
+            causes.append("食物链顶端的猎物稀缺")
+        elif trophic >= 2.0 and trophic < 3.0 and death_rate > 0.5:
+            causes.append("被捕食压力或食物短缺")
+        elif trophic < 2.0 and death_rate > 0.4:
+            causes.append("被过度采食")
+        
+        # 体型相关
+        body_size = species_arrays['body_size'][sp_idx]
+        if body_size > 100 and death_rate > 0.5:
+            causes.append("大型体型的高代谢负担")
+        
+        # 如果死亡率高但没有明确原因
+        if not causes and death_rate > 0.3:
+            causes.append("环境综合压力")
+        
+        if causes:
+            return "；".join(causes[:3])  # 最多3个原因
+        else:
+            return f"死亡率{death_rate:.1%}"
     
     def _fallback_global_evaluate(
         self,

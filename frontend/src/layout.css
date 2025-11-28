@@ -167,6 +167,21 @@
   gap: 1rem;
 }
 
+/* 浮动面板层（提示面板等） */
+.extras-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 50;
+  pointer-events: none;
+}
+
+.extras-layer > * {
+  pointer-events: auto;
+}
+
 .modal-layer {
   position: absolute;
   top: 0;
@@ -422,6 +437,15 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  position: relative;
+}
+
+/* 让中间区域真正居中 */
+.topbar-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .resource-group {
@@ -473,22 +497,24 @@
   text-shadow: 0 0 10px rgba(45, 212, 191, 0.3);
 }
 
-/* TopBar Center */
+/* TopBar Center - 补充样式 */
 .topbar-center {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  z-index: 10;
 }
 
 .time-display {
   display: flex;
   align-items: center;
-  gap: 12px;
-  background: linear-gradient(135deg, rgba(12, 18, 12, 0.8), rgba(8, 16, 12, 0.9));
-  padding: 8px 20px;
-  border-radius: 12px;
-  border: 1px solid rgba(45, 212, 191, 0.15);
+  gap: 10px;
+  background: linear-gradient(135deg, rgba(12, 18, 12, 0.85), rgba(8, 16, 12, 0.92));
+  padding: 8px 18px;
+  border-radius: 10px;
+  border: 1px solid rgba(45, 212, 191, 0.12);
+  backdrop-filter: blur(8px);
 }
 
 .turn-number {
@@ -510,85 +536,54 @@
   font-family: var(--font-mono);
 }
 
-/* 压力策划按钮 - 演化主题 */
+/* 压力策划按钮 - 精简现代风格 */
 .btn-pressure-evolution {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 10px 32px;
-  border: none;
-  border-radius: 50px;
-  background: linear-gradient(135deg, #2dd4bf 0%, #22c55e 100%);
-  color: #0a0d08;
-  font-size: 1rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 1.5px;
+  gap: 8px;
+  padding: 10px 24px;
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.12), rgba(34, 197, 94, 0.08));
+  color: #2dd4bf;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
   cursor: pointer;
   overflow: hidden;
-  transition: all 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  box-shadow: 
-    0 8px 25px rgba(45, 212, 191, 0.35),
-    inset 0 2px 0 rgba(255, 255, 255, 0.25),
-    inset 0 -2px 0 rgba(0, 0, 0, 0.1);
+  transition: all 0.25s ease;
+  backdrop-filter: blur(8px);
 }
 
 .btn-pressure-evolution:hover {
-  transform: translateY(-4px) scale(1.03);
-  box-shadow: 
-    0 15px 35px rgba(45, 212, 191, 0.5),
-    0 0 40px rgba(45, 212, 191, 0.3),
-    inset 0 2px 0 rgba(255, 255, 255, 0.3),
-    inset 0 -2px 0 rgba(0, 0, 0, 0.1);
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.2), rgba(34, 197, 94, 0.15));
+  border-color: rgba(45, 212, 191, 0.5);
+  box-shadow: 0 0 20px rgba(45, 212, 191, 0.2);
+  transform: translateY(-1px);
 }
 
 .btn-pressure-evolution:active {
-  transform: translateY(-2px) scale(1.01);
+  transform: translateY(0);
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.25), rgba(34, 197, 94, 0.18));
 }
 
 .btn-pressure-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.2));
+  color: #2dd4bf;
 }
 
 .btn-pressure-text {
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  font-weight: 600;
 }
 
-.btn-pressure-shine {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 50%;
-  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.35) 0%, transparent 100%);
-  border-radius: 50px 50px 0 0;
-  pointer-events: none;
-}
-
+/* 隐藏不需要的装饰元素 */
+.btn-pressure-shine,
 .btn-pressure-glow {
-  position: absolute;
-  inset: -2px;
-  background: linear-gradient(135deg, rgba(45, 212, 191, 0.4), rgba(34, 197, 94, 0.4));
-  border-radius: 52px;
-  opacity: 0;
-  z-index: -1;
-  transition: opacity 0.3s;
-  filter: blur(8px);
-}
-
-.btn-pressure-evolution:hover .btn-pressure-glow {
-  opacity: 1;
-  animation: pulse-glow 2s ease-in-out infinite;
-}
-
-@keyframes pulse-glow {
-  0%, 100% { opacity: 0.6; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.05); }
+  display: none;
 }
 
 /* TopBar Actions */
@@ -638,6 +633,7 @@
     0 0 0 1px rgba(45, 212, 191, 0.08) inset,
     0 0 60px rgba(45, 212, 191, 0.05);
   padding: 8px 12px;
+  overflow: visible;
 }
 
 /* 区块容器 */
@@ -646,6 +642,7 @@
   flex-direction: column;
   gap: 6px;
   padding: 0 12px;
+  overflow: visible;
 }
 
 .section-label {
@@ -676,6 +673,7 @@
   display: flex;
   gap: 6px;
   align-items: center;
+  overflow: visible;
 }
 
 .view-group-wrapper {
@@ -683,6 +681,7 @@
 }
 
 .view-group-btn {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -696,6 +695,7 @@
   cursor: pointer;
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   white-space: nowrap;
+  overflow: visible;
 }
 
 .view-group-btn:hover {
@@ -833,49 +833,11 @@
   font-size: 1rem;
 }
 
-/* 2D/3D 切换按钮 */
-.render-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 14px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.03);
-  color: rgba(240, 244, 232, 0.7);
-  font-family: var(--font-mono);
-  font-weight: 700;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: all 0.25s;
-  margin-left: 8px;
-}
-
-.render-toggle:hover {
-  background: rgba(45, 212, 191, 0.1);
-  border-color: rgba(45, 212, 191, 0.25);
-  color: #2dd4bf;
-}
-
-.render-toggle.is-3d {
-  background: rgba(45, 212, 191, 0.15);
-  border-color: rgba(45, 212, 191, 0.3);
-  color: #2dd4bf;
-  box-shadow: 0 0 15px rgba(45, 212, 191, 0.2);
-}
-
-.render-icon {
-  font-size: 1.1rem;
-}
-
-.render-label {
-  letter-spacing: 1px;
-}
-
 /* ===== 工具按钮区 ===== */
 .tool-row {
   display: flex;
   gap: 4px;
+  overflow: visible;
 }
 
 .tool-btn-v2 {
@@ -905,6 +867,12 @@
   border-color: color-mix(in srgb, var(--tool-color) 30%, transparent);
 }
 
+.tool-btn-v2.active {
+  background: color-mix(in srgb, var(--tool-color) 25%, transparent);
+  border-color: var(--tool-color);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--tool-color) 30%, transparent);
+}
+
 .tool-icon-v2 {
   font-size: 1.35rem;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
@@ -917,25 +885,29 @@
 
 /* 改进的工具提示 */
 .tool-tooltip-v2 {
+  --tooltip-color: #2dd4bf;
   position: absolute;
   bottom: calc(100% + 12px);
   left: 50%;
   transform: translateX(-50%);
-  min-width: 140px;
-  padding: 10px 14px;
-  background: rgba(12, 18, 12, 0.98);
+  width: 160px;
+  padding: 10px 12px;
+  background: rgba(8, 14, 22, 0.96);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(45, 212, 191, 0.2);
-  border-radius: 12px;
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--tooltip-color);
+  border-radius: 10px;
   text-align: center;
   pointer-events: none;
-  animation: tooltip-appear-v2 0.2s ease;
+  animation: tooltip-appear-v2 0.2s ease-out forwards;
   box-shadow: 
-    0 -4px 20px rgba(0, 0, 0, 0.4),
-    0 0 0 1px rgba(45, 212, 191, 0.05) inset;
-  z-index: 100;
+    0 6px 24px rgba(0, 0, 0, 0.5),
+    0 0 12px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  z-index: 99999;
 }
 
+/* 底部箭头 */
 .tool-tooltip-v2::after {
   content: '';
   position: absolute;
@@ -943,7 +915,7 @@
   left: 50%;
   transform: translateX(-50%);
   border: 6px solid transparent;
-  border-top-color: rgba(45, 212, 191, 0.2);
+  border-top-color: var(--tooltip-color);
 }
 
 @keyframes tooltip-appear-v2 {
@@ -958,48 +930,19 @@
 }
 
 .tooltip-title {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: rgba(240, 244, 232, 0.95);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--tooltip-color);
   margin-bottom: 4px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 .tooltip-desc {
-  font-size: 0.72rem;
-  color: rgba(240, 244, 232, 0.55);
-  line-height: 1.4;
-}
-
-/* ===== 当前视图指示器 ===== */
-.current-view-indicator {
-  position: absolute;
-  top: -32px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  background: rgba(12, 18, 12, 0.9);
-  border: 1px solid rgba(45, 212, 191, 0.2);
-  border-radius: 20px;
-  font-size: 0.75rem;
-  color: rgba(45, 212, 191, 0.8);
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.3s;
-}
-
-.lensbar-v2:hover .current-view-indicator {
-  opacity: 1;
-}
-
-.indicator-icon {
-  font-size: 1rem;
-}
-
-.indicator-label {
-  font-weight: 500;
+  font-size: 0.68rem;
+  color: rgba(220, 230, 240, 0.8);
+  line-height: 1.35;
+  white-space: normal;
 }
 
 /* ==================== 旧版 LensBar 样式（保留兼容性） ==================== */

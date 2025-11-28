@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     batch_rule_limit: int = 50
     map_width: int = 128
     map_height: int = 40
+    data_dir: str = str(PROJECT_ROOT / "data")
     reports_dir: str = str(PROJECT_ROOT / "data/reports")
     exports_dir: str = str(PROJECT_ROOT / "data/exports")
     saves_dir: str = str(PROJECT_ROOT / "data/saves")
@@ -36,6 +37,7 @@ class Settings(BaseSettings):
     critical_species_limit: int = 3
     focus_batch_size: int = 8
     focus_batch_limit: int = 3
+    use_report_v2: bool = Field(default=True, alias="USE_REPORT_V2")  # 使用并行化报告生成器
     minor_pressure_window: int = 10
     escalation_threshold: int = 80
     high_event_cooldown: int = 5

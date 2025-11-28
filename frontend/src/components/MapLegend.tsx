@@ -9,7 +9,7 @@ interface Props {
   hasSelectedSpecies?: boolean;
 }
 
-// 图例数据定义
+// 图例数据定义 - 与后端 map_coloring.py 35级分类保持一致
 const LEGENDS: Record<ViewMode, { 
   title: string;
   subtitle?: string;
@@ -17,83 +17,122 @@ const LEGENDS: Record<ViewMode, {
 }> = {
   terrain: {
     title: "实景地图",
-    subtitle: "综合地形与生态",
+    subtitle: "35级地形 + 30种覆盖",
     items: [
-      { color: "#000d1f", label: "海沟", range: "< -6000m" },
-      { color: "#001f3f", label: "深海", range: "-6000 ~ -3000m" },
-      { color: "#0074D9", label: "浅海", range: "-3000 ~ -200m" },
-      { color: "#7FDBFF", label: "海岸", range: "-200 ~ 0m" },
-      { color: "#7CB342", label: "平原", range: "0 ~ 200m" },
-      { color: "#C0A853", label: "丘陵", range: "200 ~ 1000m" },
-      { color: "#8B7355", label: "山地", range: "1000 ~ 2500m" },
-      { color: "#B0B0B0", label: "高山", range: "2500 ~ 5000m" },
-      { color: "#FFFFFF", label: "极高山", range: "> 5000m" },
-      { color: "#2ECC40", label: "森林" },
-      { color: "#D2B48C", label: "沙漠" },
-      { color: "#F0F8FF", label: "冰川" },
+      // 海洋层级 (关键节点)
+      { color: "#050a12", label: "超深海沟", range: "< -8000m" },
+      { color: "#0c1e38", label: "深海平原", range: "-6000 ~ -4000m" },
+      { color: "#2d6699", label: "大陆坡", range: "-800 ~ -400m" },
+      { color: "#5dade2", label: "近岸浅水", range: "-50 ~ 0m" },
+      // 陆地关键节点
+      { color: "#3d6b4a", label: "潮间带", range: "0 ~ 10m" },
+      { color: "#649f6d", label: "平原", range: "150 ~ 300m" },
+      { color: "#a6c48e", label: "台地", range: "1000 ~ 1300m" },
+      { color: "#9f7a50", label: "中山", range: "3500 ~ 4000m" },
+      { color: "#f0f4f8", label: "极地之巅", range: "> 8000m" },
+      // 冰雪类覆盖
+      { color: "#F5FAFF", label: "冰川" },
+      { color: "#E6F2FF", label: "冰原" },
+      { color: "#8A9BAA", label: "冻土" },
+      // 荒漠类覆盖
+      { color: "#E8C872", label: "沙漠" },
+      { color: "#C4A87A", label: "戈壁" },
+      { color: "#A09080", label: "裸地" },
+      // 草地类覆盖
+      { color: "#7A9E8A", label: "苔原" },
+      { color: "#A8D068", label: "草原" },
+      { color: "#6A9A58", label: "灌木丛" },
+      // 森林类覆盖
+      { color: "#3E6850", label: "针叶林" },
+      { color: "#3A7048", label: "阔叶林" },
+      { color: "#1A5030", label: "雨林" },
+      // 湿地类覆盖
+      { color: "#3D5A45", label: "沼泽" },
+      { color: "#3A5840", label: "红树林" },
     ],
   },
   terrain_type: {
     title: "地形分类",
-    subtitle: "纯海拔分类",
+    subtitle: "35级海拔分类",
     items: [
-      { color: "#00050f", label: "海沟", range: "< -6000m" },
-      { color: "#001f3f", label: "深海", range: "-6000 ~ -3000m" },
-      { color: "#0074D9", label: "浅海", range: "-3000 ~ -200m" },
-      { color: "#7FDBFF", label: "海岸", range: "-200 ~ 0m" },
-      { color: "#66BB6A", label: "平原", range: "0 ~ 200m" },
-      { color: "#FDD835", label: "丘陵", range: "200 ~ 1000m" },
-      { color: "#A1887F", label: "山地", range: "1000 ~ 3000m" },
-      { color: "#BDBDBD", label: "高山", range: "3000 ~ 5000m" },
-      { color: "#FFFFFF", label: "极高山", range: "> 5000m" },
+      // 海洋10级（显示关键节点）
+      { color: "#050a12", label: "超深海沟", range: "< -8000m" },
+      { color: "#081425", label: "深海沟", range: "-8000 ~ -6000m" },
+      { color: "#12294a", label: "深海盆地", range: "-4000 ~ -2500m" },
+      { color: "#235080", label: "大陆坡深部", range: "-1500 ~ -800m" },
+      { color: "#3a7db3", label: "大陆架深部", range: "-400 ~ -150m" },
+      { color: "#5dade2", label: "近岸浅水", range: "-50 ~ 0m" },
+      // 陆地低海拔8级
+      { color: "#3d6b4a", label: "潮间带", range: "0 ~ 10m" },
+      { color: "#589264", label: "低海拔平原", range: "80 ~ 150m" },
+      { color: "#72ab76", label: "缓坡丘陵", range: "300 ~ 500m" },
+      { color: "#94c088", label: "高丘陵", range: "750 ~ 1000m" },
+      // 陆地中海拔8级
+      { color: "#b5c58e", label: "低高原", range: "1300 ~ 1600m" },
+      { color: "#ccbb86", label: "亚山麓", range: "1900 ~ 2200m" },
+      { color: "#bf9a6a", label: "低山", range: "2600 ~ 3000m" },
+      { color: "#9f7a50", label: "中山", range: "3500 ~ 4000m" },
+      // 高海拔9级
+      { color: "#8d6c47", label: "中高山", range: "4000 ~ 4500m" },
+      { color: "#6e6a5e", label: "雪线区", range: "5000 ~ 5500m" },
+      { color: "#8a8e94", label: "永久冰雪", range: "6000 ~ 6500m" },
+      { color: "#b5bcc6", label: "极高山", range: "7000 ~ 7500m" },
+      { color: "#f0f4f8", label: "极地之巅", range: "> 8000m" },
     ],
   },
   elevation: {
     title: "海拔高度",
-    subtitle: "相对海平面",
+    subtitle: "35级连续色阶",
     items: [
-      { color: "#1a0033", label: "深海沟", range: "-8000m" },
-      { color: "#000066", label: "深海", range: "-6000m" },
-      { color: "#0066ff", label: "浅海", range: "-2000m" },
-      { color: "#00ccff", label: "近海", range: "-500m" },
-      { color: "#00ff99", label: "海平面", range: "0m" },
-      { color: "#66ff66", label: "低地", range: "+500m" },
-      { color: "#ffff00", label: "丘陵", range: "+2000m" },
-      { color: "#ff9900", label: "山地", range: "+4000m" },
-      { color: "#cc9999", label: "高山", range: "+6000m" },
-      { color: "#ffffff", label: "极高山", range: "+8000m" },
+      // 海洋
+      { color: "#050a12", label: "超深海", range: "< -8000m" },
+      { color: "#0c1e38", label: "深海", range: "-4000m" },
+      { color: "#2d6699", label: "大陆坡", range: "-800m" },
+      { color: "#5dade2", label: "近岸", range: "0m" },
+      // 陆地低
+      { color: "#4e855b", label: "平原", range: "+80m" },
+      { color: "#72ab76", label: "丘陵", range: "+500m" },
+      // 陆地中
+      { color: "#a6c48e", label: "台地", range: "+1000m" },
+      { color: "#c9ab78", label: "山麓", range: "+2200m" },
+      { color: "#9f7a50", label: "中山", range: "+4000m" },
+      // 高山
+      { color: "#6e6a5e", label: "雪线", range: "+5000m" },
+      { color: "#9ea4ac", label: "冰川", range: "+6500m" },
+      { color: "#f0f4f8", label: "极巅", range: "> +8000m" },
     ],
   },
   biodiversity: {
     title: "生物热力",
     subtitle: "物种多样性分布",
     items: [
-      { color: "#081d58", label: "极低", range: "0-10%" },
-      { color: "#225ea8", label: "低", range: "10-25%" },
-      { color: "#41b6c4", label: "中等", range: "25-50%" },
-      { color: "#c7e9b4", label: "较高", range: "50-70%" },
-      { color: "#fd8d3c", label: "高", range: "70-90%" },
-      { color: "#e31a1c", label: "极高", range: "90-100%" },
+      { color: "#1a237e", label: "极低", range: "0-10%" },
+      { color: "#1565c0", label: "低", range: "10-30%" },
+      { color: "#00acc1", label: "中低", range: "30-50%" },
+      { color: "#66bb6a", label: "中等", range: "50-70%" },
+      { color: "#9ccc65", label: "较高", range: "70-80%" },
+      { color: "#ffb300", label: "高", range: "80-90%" },
+      { color: "#e53935", label: "极高", range: "90-100%" },
     ],
   },
   climate: {
     title: "气候带",
     subtitle: "温度分布",
     items: [
-      { color: "#e0f3ff", label: "极地", range: "< -5°C" },
-      { color: "#a8d8ea", label: "寒带", range: "-5 ~ 5°C" },
-      { color: "#66bb6a", label: "温带", range: "5 ~ 15°C" },
-      { color: "#fdd835", label: "亚热带", range: "15 ~ 20°C" },
-      { color: "#ff6f00", label: "热带", range: "> 20°C" },
+      { color: "#b3e5fc", label: "极地", range: "< -10°C" },
+      { color: "#81d4fa", label: "寒带", range: "-10 ~ 0°C" },
+      { color: "#4caf50", label: "温带", range: "0 ~ 15°C" },
+      { color: "#ffc107", label: "亚热带", range: "15 ~ 25°C" },
+      { color: "#ff5722", label: "热带", range: "> 25°C" },
     ],
   },
   suitability: {
     title: "生存适宜度",
     subtitle: "选中物种",
     items: [
-      { color: "#00ff00", label: "极高", range: "0.8 - 1.0" },
-      { color: "#76ff03", label: "高", range: "0.6 - 0.8" },
-      { color: "#ffff00", label: "中", range: "0.4 - 0.6" },
+      { color: "#4caf50", label: "极高", range: "0.8 - 1.0" },
+      { color: "#8bc34a", label: "高", range: "0.6 - 0.8" },
+      { color: "#ffc107", label: "中", range: "0.4 - 0.6" },
       { color: "#ff9800", label: "低", range: "0.2 - 0.4" },
       { color: "#f44336", label: "极低", range: "0 - 0.2" },
     ],
@@ -175,15 +214,15 @@ export function MapLegend({ viewMode, seaLevel = 0, temperature = 15, visible = 
                 </div>
               )}
               <div className="legend-item-v2">
-                <div className="legend-indicator" style={{ backgroundColor: "#22c55e" }} />
+                <div className="legend-indicator" style={{ backgroundColor: "#2e7d32" }} />
                 <span className="legend-label-v2">多物种 (5+)</span>
               </div>
               <div className="legend-item-v2">
-                <div className="legend-indicator" style={{ backgroundColor: "#86efac" }} />
+                <div className="legend-indicator" style={{ backgroundColor: "#66bb6a" }} />
                 <span className="legend-label-v2">少量物种 (2-4)</span>
               </div>
               <div className="legend-item-v2">
-                <div className="legend-indicator" style={{ backgroundColor: "#fbbf24" }} />
+                <div className="legend-indicator" style={{ backgroundColor: "#f9a825" }} />
                 <span className="legend-label-v2">单一物种</span>
               </div>
             </div>

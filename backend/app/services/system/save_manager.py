@@ -9,9 +9,11 @@ from typing import Any, TYPE_CHECKING
 from ...models.species import Species
 from ...models.environment import MapState, MapTile, HabitatPopulation
 from ...models.history import TurnLog
+from ...models.genus import Genus
 from ...repositories.species_repository import species_repository
 from ...repositories.environment_repository import environment_repository
 from ...repositories.history_repository import history_repository
+from ...repositories.genus_repository import genus_repository
 
 if TYPE_CHECKING:
     from .embedding import EmbeddingService
@@ -149,6 +151,7 @@ class SaveManager:
         map_state = environment_repository.get_state()
         habitats = environment_repository.list_habitats()
         history_logs = history_repository.list_turns(limit=1000)
+        genus_list = genus_repository.list_all()
         
         # 保存数据（包含完整地图）
         save_data = {
@@ -160,9 +163,10 @@ class SaveManager:
             "map_state": map_state.model_dump(mode="json") if map_state else None,
             "history_logs": [log.model_dump(mode="json") for log in history_logs],
             "history_count": len(history_logs),
+            "genus_list": [g.model_dump(mode="json") for g in genus_list],
         }
         
-        print(f"[存档管理器] 保存数据: {len(species_list)} 物种, {len(map_tiles)} 地块, {len(habitats)} 栖息地, {len(history_logs)} 历史记录")
+        print(f"[存档管理器] 保存数据: {len(species_list)} 物种, {len(map_tiles)} 地块, {len(habitats)} 栖息地, {len(history_logs)} 历史记录, {len(genus_list)} 属")
         
         (save_dir / "game_state.json").write_text(
             json.dumps(save_data, ensure_ascii=False, indent=2),
@@ -172,7 +176,12 @@ class SaveManager:
         # ========== 保存 Embedding 数据 ==========
         if self._embedding_service and species_list:
             try:
-                descriptions = [sp.description for sp in species_list]
+                # 使用统一的描述文本构建方法，确保缓存key一致
+                from .embedding import EmbeddingService
+                descriptions = [
+                    EmbeddingService.build_species_text(sp, include_traits=True, include_names=True)
+                    for sp in species_list
+                ]
                 embedding_data = self._embedding_service.export_embeddings(descriptions)
                 embedding_data["species_count"] = len(species_list)
                 embedding_data["saved_at"] = datetime.now().isoformat()
@@ -253,6 +262,7 @@ class SaveManager:
         environment_repository.clear_state()
         species_repository.clear_state()
         history_repository.clear_state()
+        genus_repository.clear_state()
 
         # 恢复物种数据到数据库
         restored_species = []
@@ -291,13 +301,25 @@ class SaveManager:
                 log = TurnLog(**log_data)
                 history_repository.log_turn(log)
         
+        # 恢复属数据（Genus）
+        if save_data.get("genus_list"):
+            print(f"[存档管理器] 恢复 {len(save_data['genus_list'])} 个属...")
+            for genus_data in save_data["genus_list"]:
+                genus = Genus(**genus_data)
+                genus_repository.upsert(genus)
+        
         # ========== 恢复 Embedding 数据 ==========
         embeddings_loaded = False
         embeddings_path = save_dir / "embeddings.json"
         if embeddings_path.exists() and self._embedding_service:
             try:
                 embedding_data = json.loads(embeddings_path.read_text(encoding="utf-8"))
-                descriptions = [sp.description for sp in restored_species]
+                # 使用统一的描述文本构建方法，确保缓存key一致
+                from .embedding import EmbeddingService
+                descriptions = [
+                    EmbeddingService.build_species_text(sp, include_traits=True, include_names=True)
+                    for sp in restored_species
+                ]
                 imported = self._embedding_service.import_embeddings(embedding_data, descriptions)
                 embeddings_loaded = imported > 0
                 print(f"[存档管理器] 已恢复 {imported} 个 embedding 向量")

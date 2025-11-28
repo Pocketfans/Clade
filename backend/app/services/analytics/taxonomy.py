@@ -6,6 +6,11 @@
 3. 为类群生成名称和定义特征
 4. 维护分类树结构，支持增量更新
 
+【v2.0 优化】
+- 使用批量 embedding 接口
+- 支持大规模物种（10000+）
+- 利用 EmbeddingService 的向量存储
+
 【算法】
 - 第一层（门级）：K-means 聚类，k=3~5
 - 第二层（纲级）：层次聚类，自动确定类数
@@ -148,12 +153,41 @@ class TaxonomyService:
         
         logger.info(f"开始构建分类树: {len(species_list)} 个物种")
         
-        # 1. 获取所有物种的 embedding
-        descriptions = [sp.description for sp in species_list]
-        vectors = np.array(self.embeddings.embed(descriptions))
+        # 1. 批量获取所有物种的 embedding
+        # 【优化】优先从索引获取已存在的向量
         species_codes = [sp.lineage_code for sp in species_list]
+        indexed_vectors, indexed_codes = self.embeddings.get_species_vectors(species_codes)
         
-        logger.info(f"已获取 {len(vectors)} 个 embedding 向量，维度: {vectors.shape[1]}")
+        # 构建代码到向量的映射
+        code_to_vector = dict(zip(indexed_codes, indexed_vectors))
+        
+        # 收集需要新生成向量的物种
+        vectors_list = []
+        missing_species = []
+        missing_indices = []
+        
+        for i, sp in enumerate(species_list):
+            if sp.lineage_code in code_to_vector:
+                vectors_list.append(code_to_vector[sp.lineage_code])
+            else:
+                vectors_list.append(None)
+                missing_species.append(sp)
+                missing_indices.append(i)
+        
+        # 对未索引的物种生成向量
+        if missing_species:
+            from ..system.embedding import EmbeddingService
+            descriptions = [
+                EmbeddingService.build_species_text(sp, include_traits=True, include_names=True)
+                for sp in missing_species
+            ]
+            new_vectors = self.embeddings.embed(descriptions)
+            for i, idx in enumerate(missing_indices):
+                vectors_list[idx] = new_vectors[i]
+        
+        vectors = np.array(vectors_list, dtype=np.float32)
+        
+        logger.info(f"已获取 {len(vectors)} 个 embedding 向量，维度: {vectors.shape[1]}（{len(indexed_codes)} 个来自索引）")
         
         # 2. 第一层聚类：域/门级大类
         domain_clades = self._cluster_top_level(

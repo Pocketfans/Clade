@@ -14,9 +14,11 @@ from ...repositories.species_repository import species_repository
 from ...schemas.responses import BranchingEvent
 from .gene_library import GeneLibraryService
 from .genetic_distance import GeneticDistanceCalculator
-from .trait_config import TraitConfig
+from .trait_config import TraitConfig, PlantTraitConfig
 from .trophic import TrophicLevelCalculator
 from .speciation_rules import SpeciationRules, speciation_rules  # 【新增】规则引擎
+from .plant_evolution import plant_evolution_service, PLANT_MILESTONES  # 【植物演化】
+from .plant_competition import plant_competition_calculator  # 【植物竞争】
 from ...core.config import get_settings
 
 # 获取配置
@@ -90,6 +92,16 @@ class SpeciationService:
         self._tile_population_cache.clear()
         self._speciation_candidates.clear()
         self._evolution_hints.clear()
+    
+    def clear_all_caches(self) -> None:
+        """清空所有缓存（存档切换时调用）
+        
+        【重要】切换存档时必须调用此方法，否则旧存档的
+        延迟分化请求可能会影响新存档。
+        """
+        self.clear_tile_cache()
+        self._deferred_requests.clear()
+        self._tile_adjacency.clear()
     
     def set_evolution_hints(self, hints: dict[str, dict]) -> None:
         """设置演化提示（由 EmbeddingIntegrationService 提供）
@@ -240,10 +252,44 @@ class SpeciationService:
                 is_isolated  # 地理/生态隔离直接满足条件
             )
             
+            # 【新增】植物专用分化条件
+            is_plant = PlantTraitConfig.is_plant(species)
+            plant_milestone_ready = False
+            if is_plant:
+                # 检查植物是否接近里程碑
+                milestone_progress = species.morphology_stats.get("milestone_progress", 0.0)
+                next_milestone = plant_evolution_service.get_next_milestone(species)
+                
+                if next_milestone:
+                    is_met, readiness, _ = plant_evolution_service.check_milestone_requirements(
+                        species, next_milestone.id
+                    )
+                    
+                    # 如果里程碑条件满足，强制触发分化（阶段升级）
+                    if is_met:
+                        has_pressure = True
+                        plant_milestone_ready = True
+                        speciation_type = f"里程碑演化：{next_milestone.name}"
+                        logger.info(
+                            f"[植物里程碑] {species.common_name} 触发里程碑分化：{next_milestone.name}"
+                        )
+                    # 如果接近里程碑（readiness > 80%），增加分化概率
+                    elif readiness > 0.8:
+                        speciation_pressure += 0.1 * readiness
+                        logger.debug(
+                            f"[植物里程碑进度] {species.common_name} 接近里程碑 {next_milestone.name} "
+                            f"(准备度 {readiness:.0%})"
+                        )
+            
             # 自然辐射演化（繁荣物种分化）
             if not has_pressure:
                 pop_factor = min(1.0, survivors / (min_population * 3))
                 radiation_chance = 0.03 + (pop_factor * 0.05) + (speciation_pressure * 0.2)
+                
+                # 【新增】植物辐射演化条件略有不同
+                if is_plant:
+                    # 植物更容易通过种群扩张触发辐射演化
+                    radiation_chance += 0.02  # 植物基础辐射概率略高
                 
                 if survivors > min_population * 1.5 and random.random() < radiation_chance:
                     has_pressure = True
@@ -324,6 +370,17 @@ class SpeciationService:
             if result.niche_overlap > 0.4:
                 speciation_bonus += 0.08
                 speciation_type = "协同演化"
+            
+            # 【新增】动植物协同演化检测
+            coevolution_result = self._detect_coevolution(species, mortality_results)
+            if coevolution_result["has_coevolution"]:
+                speciation_bonus += coevolution_result["bonus"]
+                if speciation_type == "生态隔离":  # 只在没有更强触发时更新类型
+                    speciation_type = coevolution_result["type"]
+                logger.debug(
+                    f"[协同演化] {species.common_name}: {coevolution_result['type']} "
+                    f"(+{coevolution_result['bonus']:.0%})"
+                )
             
             # 【修复】将累积分化压力加入概率计算
             # 每回合满足条件但未分化的物种，下回合分化概率+10%
@@ -682,7 +739,8 @@ class SpeciationService:
                 batch_entries, average_pressure, pressure_summary, 
                 map_changes, major_events
             )
-            batch_results = await self._call_batch_ai(batch_payload, stream_callback)
+            # 【混合模式】传入entries用于判断是否为植物批次
+            batch_results = await self._call_batch_ai(batch_payload, stream_callback, batch_entries)
             return self._parse_batch_results(batch_results, batch_entries)
         
         # 【优化】间隔并行执行批次，每3秒启动一个，最多同时2个
@@ -711,25 +769,49 @@ class SpeciationService:
         for res, entry in zip(results, active_batch):
             ctx = entry["ctx"]  # 从entry中提取ctx
             
+            # 【优化】检查是否需要使用规则fallback
+            retry_count = entry.get("_retry_count", 0)
+            use_fallback = False
+            
             if isinstance(res, Exception):
                 logger.error(f"[分化AI异常] {res}")
-                self._queue_deferred_request(entry)
-                continue
+                if retry_count >= 2:
+                    use_fallback = True
+                    logger.info(f"[分化] 重试{retry_count}次后AI仍失败，使用规则fallback")
+                else:
+                    self._queue_deferred_request(entry)
+                    continue
 
             ai_content = res
-            if not isinstance(ai_content, dict):
+            if not use_fallback and not isinstance(ai_content, dict):
                 logger.warning(f"[分化警告] AI返回的content不是dict类型: {type(ai_content)}, 内容: {ai_content}")
-                self._queue_deferred_request(entry)
-                continue
+                if retry_count >= 2:
+                    use_fallback = True
+                else:
+                    self._queue_deferred_request(entry)
+                    continue
 
             required_fields = ["latin_name", "common_name", "description"]
-            if any(not ai_content.get(field) for field in required_fields):
+            if not use_fallback and any(not ai_content.get(field) for field in required_fields):
                 logger.warning(
                     "[分化警告] AI返回缺少必要字段: %s",
                     {field: ai_content.get(field) for field in required_fields},
                 )
-                self._queue_deferred_request(entry)
-                continue
+                if retry_count >= 2:
+                    use_fallback = True
+                else:
+                    self._queue_deferred_request(entry)
+                    continue
+            
+            # 【新增】使用规则fallback生成内容
+            if use_fallback:
+                ai_content = self._generate_rule_based_fallback(
+                    parent=ctx["parent"],
+                    new_code=ctx["new_code"],
+                    survivors=ctx["population"],
+                    speciation_type=ctx["speciation_type"],
+                    average_pressure=average_pressure,
+                )
 
             logger.info(
                 "[分化AI返回] latin_name: %s, common_name: %s, description长度: %s",
@@ -782,6 +864,16 @@ class SpeciationService:
                 if genus:
                     self.gene_library_service.inherit_dormant_genes(ctx["parent"], new_species, genus)
                     species_repository.upsert(new_species)
+            
+            # 【植物演化】主动检查并触发里程碑
+            milestone_result = self._check_and_trigger_plant_milestones(new_species, turn_index)
+            if milestone_result:
+                # 里程碑触发后需要重新保存物种
+                species_repository.upsert(new_species)
+                logger.info(
+                    f"[植物里程碑] {new_species.common_name} 触发里程碑: "
+                    f"{milestone_result.get('milestone_name', 'unknown')}"
+                )
             
             species_repository.log_event(
                 LineageEvent(
@@ -851,8 +943,49 @@ class SpeciationService:
             num_isolation_regions = payload.get('num_isolation_regions', 1)
             is_geographic_isolation = payload.get('is_geographic_isolation', False)
             
+            # 【植物演化】为植物物种添加专有上下文
+            parent_species = ctx['parent']
+            is_plant = PlantTraitConfig.is_plant(parent_species)
+            plant_context = ""
+            
+            if is_plant:
+                # 获取植物演化阶段信息
+                life_form_stage = getattr(parent_species, 'life_form_stage', 0)
+                growth_form = getattr(parent_species, 'growth_form', 'aquatic')
+                stage_name = PlantTraitConfig.get_stage_name(life_form_stage)
+                
+                # 获取里程碑提示
+                milestone_hints = plant_evolution_service.get_milestone_hints(parent_species)
+                
+                # 获取植物特质摘要
+                traits = parent_species.abstract_traits or {}
+                plant_trait_summary = ", ".join([
+                    f"{k}={v:.1f}" for k, v in traits.items()
+                    if k in ["光合效率", "根系发达度", "保水能力", "木质化程度", "种子化程度", "多细胞程度"]
+                ])
+                
+                # 【新增】获取竞争上下文
+                # 从entries中收集所有父代物种作为species_list
+                all_parent_species = [e["ctx"]["parent"] for e in entries]
+                competition_context = plant_competition_calculator.format_competition_context(
+                    parent_species, all_parent_species
+                )
+                
+                plant_context = f"""
+- 【🌱植物演化信息】:
+  - 当前阶段: {life_form_stage} ({stage_name})
+  - 生长形式: {growth_form}
+  - 植物特质: {plant_trait_summary or '无'}
+  - 里程碑提示:
+{milestone_hints}
+- {competition_context}
+- 【植物阶段约束⚠️】:
+  - 阶段只能升级1级（{life_form_stage} → {life_form_stage + 1}）
+  - 登陆条件(阶段2→3): 保水能力>=5.0, 耐旱性>=4.0
+  - 成为树木条件: 木质化程度>=7.0, 阶段>=5"""
+            
             species_info = f"""
-【物种 {idx + 1}】
+【物种 {idx + 1}】{'🌱植物' if is_plant else '🦎动物'}
 - request_id: {idx}
 - 父系编码: {payload.get('parent_lineage')}
 - 学名: {payload.get('latin_name')}
@@ -868,7 +1001,7 @@ class SpeciationService:
 - 子代编号: 第{payload.get('offspring_index', 1)}个（共{payload.get('total_offspring', 1)}个）
 - 【属性预算】: {trait_budget}
 - 【器官约束⚠️必须遵守current_stage】:
-{organ_constraints}
+{organ_constraints}{plant_context}
 - 【地块背景】: {tile_context[:150]}
 - 区域死亡率: {region_mortality:.1%}（{region_pressure_level}）
 - 死亡率梯度: {mortality_gradient:.1%}
@@ -890,15 +1023,42 @@ class SpeciationService:
     async def _call_batch_ai(
         self, 
         payload: dict, 
-        stream_callback: Callable[[str], Awaitable[None] | None] | None
+        stream_callback: Callable[[str], Awaitable[None] | None] | None,
+        entries: list[dict] | None = None
     ) -> dict:
-        """调用批量分化 AI 接口（非流式，更稳定）"""
+        """调用批量分化 AI 接口（非流式，更稳定）
+        
+        【混合模式】
+        - 如果批次全是植物，使用 plant_speciation prompt
+        - 否则使用通用 speciation_batch prompt
+        
+        Args:
+            payload: 请求参数
+            stream_callback: 流式回调（目前不使用）
+            entries: 原始entries列表，用于判断是否为植物批次
+        """
         # 【优化】使用非流式调用，避免流式传输卡住
         # 【修复】添加硬超时保护，防止无限等待
         import asyncio
+        
+        # 【植物混合模式】检测是否为纯植物批次
+        prompt_name = "speciation_batch"  # 默认
+        if entries:
+            is_all_plants = all(
+                PlantTraitConfig.is_plant(e["ctx"]["parent"]) for e in entries
+            )
+            if is_all_plants:
+                prompt_name = "plant_speciation"
+                # 为植物批次添加器官类别信息
+                if entries:
+                    first_parent = entries[0]["ctx"]["parent"]
+                    current_stage = getattr(first_parent, 'life_form_stage', 0)
+                    payload["organ_categories_info"] = plant_evolution_service.get_organ_category_info_for_prompt(current_stage)
+                logger.debug(f"[分化批量] 使用植物专用Prompt，批次大小: {len(entries)}")
+        
         try:
             response = await asyncio.wait_for(
-                self.router.ainvoke("speciation_batch", payload),
+                self.router.ainvoke(prompt_name, payload),
                 timeout=120  # 批量请求给更长的超时（120秒）
             )
         except asyncio.TimeoutError:
@@ -992,10 +1152,114 @@ class SpeciationService:
         raise NotImplementedError("Use process_async instead")
 
     def _queue_deferred_request(self, entry: dict[str, Any]) -> None:
-        """将失败的AI请求放回队列，供下一回合重试。"""
+        """将失败的AI请求放回队列，供下一回合重试。
+        
+        【优化】添加重试计数，超过阈值时使用规则fallback
+        """
         if len(self._deferred_requests) >= self.max_deferred_requests:
             return
+        
+        # 增加重试计数
+        retry_count = entry.get("_retry_count", 0) + 1
+        entry["_retry_count"] = retry_count
+        
+        # 如果重试超过3次，不再排队（会在处理时使用fallback）
+        if retry_count > 3:
+            logger.warning(f"[分化] 请求重试超过3次，将使用规则fallback: {entry.get('ctx', {}).get('new_code', 'unknown')}")
+            return
+        
         self._deferred_requests.append(entry)
+    
+    def _generate_rule_based_fallback(
+        self,
+        parent: 'Species',
+        new_code: str,
+        survivors: int,
+        speciation_type: str,
+        average_pressure: float,
+    ) -> dict:
+        """【优化】当AI持续失败时，使用规则生成新物种内容
+        
+        这确保即使AI完全不可用，物种分化仍能进行。
+        
+        Args:
+            parent: 父系物种
+            new_code: 新物种编码
+            survivors: 存活数
+            speciation_type: 分化类型
+            average_pressure: 平均压力
+            
+        Returns:
+            可直接用于 _create_species 的内容字典
+        """
+        import random
+        
+        # ========== 1. 生成名称 ==========
+        # 基于父系名称变化
+        parent_latin = parent.latin_name or "Species unknown"
+        latin_parts = parent_latin.split()
+        genus = latin_parts[0] if latin_parts else "Genus"
+        
+        # 生成种加词后缀
+        suffixes = ["minor", "major", "robustus", "gracilis", "fortis", "novus", "primus", "adaptus"]
+        new_species_name = f"{genus} {random.choice(suffixes)}"
+        
+        # 中文俗名：父系名 + 变异后缀
+        parent_common = parent.common_name or "未知物种"
+        chinese_suffixes = ["变种", "亚种", "新型", "适应型", "进化型"]
+        new_common_name = f"{parent_common[:4]}{random.choice(chinese_suffixes)}"
+        
+        # ========== 2. 生成特质变化 ==========
+        # 基于压力和分化类型生成合理的特质变化
+        trait_changes = {}
+        
+        if speciation_type == "地理隔离":
+            # 地理隔离：温度适应分化
+            trait_changes["耐寒性"] = f"+{random.uniform(0.5, 1.5):.1f}"
+            trait_changes["繁殖速度"] = f"-{random.uniform(0.3, 0.8):.1f}"
+        elif speciation_type == "极端环境特化":
+            # 极端环境：强化环境耐受
+            if average_pressure > 5:
+                trait_changes["耐热性"] = f"+{random.uniform(0.8, 1.5):.1f}"
+                trait_changes["运动能力"] = f"-{random.uniform(0.5, 1.0):.1f}"
+            else:
+                trait_changes["耐旱性"] = f"+{random.uniform(0.5, 1.2):.1f}"
+                trait_changes["社会性"] = f"-{random.uniform(0.3, 0.6):.1f}"
+        else:
+            # 一般分化
+            trait_changes["运动能力"] = f"+{random.uniform(0.3, 0.8):.1f}"
+            trait_changes["繁殖速度"] = f"-{random.uniform(0.2, 0.5):.1f}"
+        
+        # ========== 3. 生成描述 ==========
+        description = (
+            f"从{parent.common_name}分化而来的新物种，"
+            f"在{speciation_type}压力下演化出独特的适应性。"
+            f"继承了祖先的基本形态特征，但已发展出细微差异。"
+            f"栖息于{parent.habitat_type or '未知'}环境，"
+            f"与母种形成生态位分化。"
+        )
+        
+        # ========== 4. 返回完整内容 ==========
+        logger.info(f"[规则Fallback] 为 {new_code} 生成规则基础的物种内容")
+        
+        return {
+            "latin_name": new_species_name,
+            "common_name": new_common_name,
+            "description": description,
+            "habitat_type": parent.habitat_type,
+            "trophic_level": parent.trophic_level,
+            "diet_type": parent.diet_type,
+            "prey_species": list(parent.prey_species) if parent.prey_species else [],
+            "prey_preferences": dict(parent.prey_preferences) if parent.prey_preferences else {},
+            "key_innovations": [f"{speciation_type}适应"],
+            "trait_changes": trait_changes,
+            "morphology_changes": {"body_length_cm": random.uniform(0.9, 1.1)},
+            "event_description": f"因{speciation_type}从{parent.common_name}分化",
+            "speciation_type": speciation_type,
+            "reason": f"在{speciation_type}条件下的自然选择结果",
+            "organ_evolution": [],
+            "_is_rule_fallback": True,  # 标记为规则生成
+        }
 
     def _next_lineage_code(self, parent_code: str, existing_codes: set[str]) -> str:
         """生成单个子代编码（保留用于向后兼容）"""
@@ -1271,6 +1535,71 @@ class SpeciationService:
             new_prey_preferences = {}
             new_diet_type = "autotroph"
         
+        # 【新增】处理植物演化系统字段
+        new_life_form_stage = getattr(parent, 'life_form_stage', 0)
+        new_growth_form = getattr(parent, 'growth_form', 'aquatic')
+        new_achieved_milestones = list(getattr(parent, 'achieved_milestones', []) or [])
+        
+        if new_trophic < 2.0:
+            # 植物物种，检查AI是否返回了植物字段
+            parent_stage = getattr(parent, 'life_form_stage', 0)
+            ai_life_form_stage = ai_payload.get("life_form_stage")
+            
+            if ai_life_form_stage is not None:
+                try:
+                    proposed_stage = int(ai_life_form_stage)
+                    # 范围钳制 (0-6)
+                    proposed_stage = max(0, min(6, proposed_stage))
+                    
+                    # 【植物演化】阶段验证：不允许跳级，最多升级1级
+                    if proposed_stage > parent_stage + 1:
+                        logger.warning(
+                            f"[植物演化修正] {new_code}: AI返回阶段{proposed_stage}跳级过大"
+                            f"(父代阶段{parent_stage})，修正为{parent_stage + 1}"
+                        )
+                        new_life_form_stage = parent_stage + 1
+                    elif proposed_stage < parent_stage:
+                        # 不允许退化阶段
+                        logger.warning(
+                            f"[植物演化修正] {new_code}: AI返回阶段{proposed_stage}低于父代"
+                            f"(父代阶段{parent_stage})，保持父代阶段"
+                        )
+                        new_life_form_stage = parent_stage
+                    else:
+                        new_life_form_stage = proposed_stage
+                        
+                except (ValueError, TypeError):
+                    pass
+            
+            ai_growth_form = ai_payload.get("growth_form")
+            if ai_growth_form in ["aquatic", "moss", "herb", "shrub", "tree"]:
+                # 【植物演化】验证生长形式与阶段是否匹配
+                if PlantTraitConfig.validate_growth_form(ai_growth_form, new_life_form_stage):
+                    new_growth_form = ai_growth_form
+                else:
+                    valid_forms = PlantTraitConfig.get_valid_growth_forms(new_life_form_stage)
+                    if valid_forms:
+                        new_growth_form = valid_forms[0]
+                        logger.warning(
+                            f"[植物演化修正] {new_code}: 生长形式{ai_growth_form}与阶段{new_life_form_stage}不匹配，"
+                            f"修正为{new_growth_form}"
+                        )
+            
+            # 检查是否触发了新里程碑
+            ai_milestone = ai_payload.get("milestone_triggered")
+            if ai_milestone and ai_milestone not in new_achieved_milestones:
+                # 验证里程碑是否真的可以触发
+                if ai_milestone in PLANT_MILESTONES:
+                    milestone = PLANT_MILESTONES[ai_milestone]
+                    if milestone.from_stage is not None and milestone.from_stage != parent_stage:
+                        logger.warning(
+                            f"[植物里程碑修正] {new_code}: 里程碑{ai_milestone}需要阶段{milestone.from_stage}，"
+                            f"当前父代阶段{parent_stage}，忽略此里程碑"
+                        )
+                    else:
+                        new_achieved_milestones.append(ai_milestone)
+                        logger.info(f"[植物分化] {new_code} 触发里程碑: {ai_milestone}")
+        
         # 不再继承 ecological_vector，让系统基于 description 自动计算 embedding
         return Species(
             lineage_code=new_code,
@@ -1294,6 +1623,10 @@ class SpeciationService:
             diet_type=new_diet_type,
             prey_species=new_prey_species,
             prey_preferences=new_prey_preferences,
+            # 植物演化系统字段
+            life_form_stage=new_life_form_stage,
+            growth_form=new_growth_form,
+            achieved_milestones=new_achieved_milestones,
         )
     
     def _inherit_habitat_distribution(
@@ -1582,6 +1915,132 @@ class SpeciationService:
             "clusters": clusters,
             "best_cluster": best_cluster,
         }
+    
+    def _detect_coevolution(
+        self,
+        species: 'Species',
+        mortality_results: list,
+    ) -> dict:
+        """【新增】检测动植物协同演化关系
+        
+        识别以下协同演化模式：
+        1. 食草压力驱动的防御演化（植物）
+        2. 植物防御驱动的捕食者特化（动物）
+        3. 传粉/散布互惠关系的雏形
+        
+        Args:
+            species: 当前物种
+            mortality_results: 死亡率结果列表
+            
+        Returns:
+            {has_coevolution, bonus, type, partner_codes}
+        """
+        result = {
+            "has_coevolution": False,
+            "bonus": 0.0,
+            "type": "无协同演化",
+            "partner_codes": [],
+        }
+        
+        is_plant = PlantTraitConfig.is_plant(species)
+        
+        # 收集所有物种
+        all_species = [r.species for r in mortality_results]
+        plants = [s for s in all_species if PlantTraitConfig.is_plant(s)]
+        animals = [s for s in all_species if not PlantTraitConfig.is_plant(s)]
+        
+        if is_plant:
+            # ===== 植物的协同演化检测 =====
+            
+            # 检测食草压力驱动的防御演化
+            herbivores = [
+                a for a in animals 
+                if 2.0 <= a.trophic_level < 2.5 and 
+                   getattr(a, 'diet_type', '') in ['herbivore', 'omnivore']
+            ]
+            
+            # 检查是否被食草动物捕食
+            predator_codes = []
+            for herbivore in herbivores:
+                prey_list = getattr(herbivore, 'prey_species', []) or []
+                if species.lineage_code in prey_list:
+                    predator_codes.append(herbivore.lineage_code)
+            
+            if predator_codes:
+                # 被食草动物捕食 → 驱动防御演化
+                defense_traits = species.abstract_traits
+                has_defense = (
+                    defense_traits.get("化学防御", 0) > 5.0 or 
+                    defense_traits.get("物理防御", 0) > 5.0
+                )
+                
+                if has_defense:
+                    result["has_coevolution"] = True
+                    result["bonus"] = 0.12
+                    result["type"] = "食草-防御军备竞赛"
+                    result["partner_codes"] = predator_codes
+                else:
+                    # 有压力但尚未发展防御 → 小幅促进分化
+                    result["has_coevolution"] = True
+                    result["bonus"] = 0.06
+                    result["type"] = "食草压力适应"
+                    result["partner_codes"] = predator_codes
+            
+            # 检测潜在的传粉关系（高阶段植物 + 小型动物）
+            if getattr(species, 'life_form_stage', 0) >= 5:  # 裸子植物及以上
+                potential_pollinators = [
+                    a for a in animals
+                    if a.morphology_stats.get("body_length_cm", 100) < 10 and
+                       a.trophic_level >= 2.0
+                ]
+                if potential_pollinators:
+                    result["has_coevolution"] = True
+                    result["bonus"] = max(result["bonus"], 0.08)
+                    if result["type"] == "无协同演化":
+                        result["type"] = "潜在传粉互惠"
+                    result["partner_codes"].extend([p.lineage_code for p in potential_pollinators[:2]])
+        
+        else:
+            # ===== 动物的协同演化检测 =====
+            
+            # 检测食草动物对植物防御的适应
+            if 2.0 <= species.trophic_level < 2.5:
+                prey_list = getattr(species, 'prey_species', []) or []
+                defended_plants = []
+                
+                for plant in plants:
+                    if plant.lineage_code in prey_list:
+                        defense = max(
+                            plant.abstract_traits.get("化学防御", 0),
+                            plant.abstract_traits.get("物理防御", 0)
+                        )
+                        if defense > 5.0:
+                            defended_plants.append(plant.lineage_code)
+                
+                if defended_plants:
+                    result["has_coevolution"] = True
+                    result["bonus"] = 0.10
+                    result["type"] = "突破植物防御特化"
+                    result["partner_codes"] = defended_plants
+            
+            # 检测捕食者对猎物的协同演化
+            if species.trophic_level >= 2.5:
+                prey_list = getattr(species, 'prey_species', []) or []
+                fast_prey = []
+                
+                for other in all_species:
+                    if other.lineage_code in prey_list:
+                        speed = other.abstract_traits.get("运动能力", 0)
+                        if speed > 7.0:
+                            fast_prey.append(other.lineage_code)
+                
+                if fast_prey:
+                    result["has_coevolution"] = True
+                    result["bonus"] = 0.08
+                    result["type"] = "捕食者-猎物军备竞赛"
+                    result["partner_codes"] = fast_prey
+        
+        return result
     
     def _find_connected_clusters(self, tile_ids: set[int]) -> list[set[int]]:
         """使用并查集找出连通的地块群
@@ -2003,6 +2462,75 @@ class SpeciationService:
         
         return "重大环境事件"
     
+    def _check_and_trigger_plant_milestones(
+        self,
+        species: Species,
+        turn_index: int
+    ) -> dict | None:
+        """【植物演化】主动检查并触发满足条件的里程碑
+        
+        在物种创建后调用，检查是否满足里程碑条件并自动触发。
+        
+        Args:
+            species: 新创建的物种
+            turn_index: 当前回合
+            
+        Returns:
+            触发的里程碑结果，如果没有触发则返回 None
+        """
+        # 仅处理植物物种
+        if not PlantTraitConfig.is_plant(species):
+            return None
+        
+        # 获取下一个可能的里程碑
+        next_milestone = plant_evolution_service.get_next_milestone(species)
+        if not next_milestone:
+            return None
+        
+        # 检查里程碑条件
+        is_met, readiness, unmet = plant_evolution_service.check_milestone_requirements(
+            species, next_milestone.id
+        )
+        
+        if not is_met:
+            # 条件未满足，记录日志但不触发
+            if readiness >= 0.8:
+                logger.debug(
+                    f"[植物里程碑] {species.common_name} 接近触发 '{next_milestone.name}' "
+                    f"(准备度: {readiness:.0%}, 未满足: {unmet})"
+                )
+            return None
+        
+        # 条件满足，触发里程碑
+        result = plant_evolution_service.trigger_milestone(
+            species, next_milestone.id, turn_index
+        )
+        
+        if result.get("success"):
+            logger.info(
+                f"[植物里程碑] ✅ {species.common_name} 成功触发里程碑 '{next_milestone.name}'"
+            )
+            
+            # 记录里程碑事件
+            species_repository.log_event(
+                LineageEvent(
+                    lineage_code=species.lineage_code,
+                    event_type="milestone",
+                    payload={
+                        "milestone_id": next_milestone.id,
+                        "milestone_name": next_milestone.name,
+                        "turn": turn_index,
+                        "stage_change": result.get("stage_change"),
+                        "new_organs": result.get("new_organs"),
+                        "achievement": result.get("achievement"),
+                    },
+                )
+            )
+            
+            return result
+        
+        return None
+    
     def _generate_tile_context(
         self,
         assigned_tiles: set[int],
@@ -2310,8 +2838,9 @@ class SpeciationService:
     ) -> dict:
         """继承父代器官并应用渐进式器官进化
         
-        支持两种格式（优先使用新格式）：
-        - organ_evolution: 新的渐进式进化格式（推荐）
+        支持三种格式（优先级从高到低）：
+        - organ_changes: 【新】植物混合模式格式（支持自定义器官）
+        - organ_evolution: 渐进式进化格式（动物）
         - structural_innovations: 旧格式（向后兼容）
         
         Args:
@@ -2331,6 +2860,15 @@ class SpeciationService:
                 organs[category]["evolution_stage"] = 4  # 旧数据默认完善
             if "evolution_progress" not in organs[category]:
                 organs[category]["evolution_progress"] = 1.0
+        
+        # 【植物混合模式】优先处理 organ_changes 格式
+        if PlantTraitConfig.is_plant(parent):
+            organ_changes = ai_payload.get("organ_changes", [])
+            if organ_changes and isinstance(organ_changes, list):
+                organs = self._process_plant_organ_changes(
+                    organs, organ_changes, parent, turn_index
+                )
+                return organs  # 植物使用专用处理，跳过动物逻辑
         
         # 2. 优先使用新的 organ_evolution 格式
         organ_evolution = ai_payload.get("organ_evolution", [])
@@ -2446,6 +2984,188 @@ class SpeciationService:
                 logger.info(
                     f"[器官演化-兼容] 新器官原基: {category} → {organ_type} (阶段1)"
                 )
+        
+        return organs
+    
+    def _process_plant_organ_changes(
+        self,
+        organs: dict,
+        organ_changes: list,
+        parent: Species,
+        turn_index: int
+    ) -> dict:
+        """【植物混合模式】处理植物的器官变化
+        
+        支持：
+        1. 里程碑必须器官（固定名称）
+        2. 参考器官（预定义）
+        3. 自定义器官（LLM创意）
+        
+        Args:
+            organs: 继承的器官字典
+            organ_changes: AI返回的器官变化列表
+            parent: 父代物种
+            turn_index: 当前回合
+            
+        Returns:
+            更新后的器官字典（含植物专用结构）
+        """
+        from .plant_evolution import (
+            plant_evolution_service, 
+            PLANT_ORGANS, 
+            PLANT_ORGAN_CATEGORIES,
+            MILESTONE_REQUIRED_ORGANS
+        )
+        
+        current_stage = getattr(parent, 'life_form_stage', 0)
+        
+        # 初始化或继承植物器官
+        plant_organs = getattr(parent, 'plant_organs', None)
+        if plant_organs is None:
+            plant_organs = {}
+        else:
+            plant_organs = dict(plant_organs)  # 深拷贝
+            for cat, cat_organs in plant_organs.items():
+                if isinstance(cat_organs, dict):
+                    plant_organs[cat] = dict(cat_organs)
+        
+        for change in organ_changes:
+            if not isinstance(change, dict):
+                continue
+            
+            category = change.get("category", "")
+            change_type = change.get("change_type", "new")
+            organ_name = change.get("organ_name", "")
+            
+            # 参数可能是新格式的 parameters 或旧格式的 parameter+delta
+            parameters = change.get("parameters", {})
+            if not parameters:
+                # 兼容旧格式
+                param_name = change.get("parameter", "")
+                delta = change.get("delta", 0)
+                if param_name:
+                    parameters = {param_name: delta}
+            
+            # 验证类别是否有效
+            if category not in PLANT_ORGAN_CATEGORIES:
+                logger.warning(f"[植物器官] 未知类别 {category}，跳过")
+                continue
+            
+            cat_config = PLANT_ORGAN_CATEGORIES[category]
+            min_stage = cat_config.get("min_stage", 0)
+            
+            # 验证阶段限制
+            if current_stage < min_stage:
+                logger.warning(
+                    f"[植物器官] {organ_name} 需要阶段{min_stage}，当前阶段{current_stage}，跳过"
+                )
+                continue
+            
+            # 检查是否是里程碑必须器官
+            is_milestone_organ, milestone_id = plant_evolution_service.is_milestone_required_organ(organ_name)
+            
+            if change_type == "new":
+                # 新增器官
+                if category not in plant_organs:
+                    plant_organs[category] = {}
+                
+                # 使用验证系统获取修正后的参数
+                valid, reason, corrected_params = plant_evolution_service.validate_custom_organ(
+                    category, organ_name, parameters, current_stage
+                )
+                
+                if valid:
+                    plant_organs[category][organ_name] = {
+                        **corrected_params,
+                        "acquired_turn": turn_index,
+                        "is_custom": organ_name not in PLANT_ORGANS.get(category, {}),
+                    }
+                    
+                    # 里程碑器官特殊标记
+                    if is_milestone_organ:
+                        plant_organs[category][organ_name]["milestone_required"] = True
+                        plant_organs[category][organ_name]["milestone_id"] = milestone_id
+                    
+                    organ_type = "自定义" if plant_organs[category][organ_name]["is_custom"] else "参考"
+                    logger.info(
+                        f"[植物器官] 新增{organ_type}器官: {organ_name} ({category})"
+                    )
+                else:
+                    logger.warning(f"[植物器官] 验证失败: {reason}")
+            
+            elif change_type == "enhance":
+                # 增强现有器官
+                if category in plant_organs and organ_name in plant_organs[category]:
+                    existing = plant_organs[category][organ_name]
+                    
+                    # 应用参数增强
+                    param_ranges = cat_config.get("param_ranges", {})
+                    for param, delta in parameters.items():
+                        current_val = existing.get(param, 0)
+                        new_val = current_val + delta
+                        
+                        # 范围钳制
+                        if param in param_ranges:
+                            min_val, max_val = param_ranges[param]
+                            new_val = max(min_val, min(max_val, new_val))
+                        
+                        existing[param] = new_val
+                    
+                    existing["modified_turn"] = turn_index
+                    logger.info(f"[植物器官] 增强器官: {organ_name} ({category})")
+                else:
+                    logger.warning(
+                        f"[植物器官] 增强失败: 器官 {organ_name} 不存在于 {category}"
+                    )
+            
+            elif change_type == "degrade":
+                # 退化器官
+                if category in plant_organs and organ_name in plant_organs[category]:
+                    # 里程碑器官不能退化
+                    if is_milestone_organ:
+                        logger.warning(
+                            f"[植物器官] 里程碑器官 {organ_name} 不能退化"
+                        )
+                        continue
+                    
+                    existing = plant_organs[category][organ_name]
+                    existing["is_degraded"] = True
+                    existing["degraded_turn"] = turn_index
+                    logger.info(f"[植物器官] 退化器官: {organ_name} ({category})")
+        
+        # 将植物器官合并到通用器官字典中
+        # 同时保持与动物器官系统的兼容性
+        for category, cat_organs in plant_organs.items():
+            if category not in organs:
+                organs[category] = {}
+            
+            # 找到该类别中最高效的器官作为主器官
+            if cat_organs:
+                best_organ = None
+                best_value = -1
+                
+                for name, data in cat_organs.items():
+                    if data.get("is_degraded"):
+                        continue
+                    
+                    # 获取主要参数值作为排序依据
+                    cat_config = PLANT_ORGAN_CATEGORIES.get(category, {})
+                    main_param = (cat_config.get("required_params") or ["efficiency"])[0]
+                    value = data.get(main_param, 0)
+                    
+                    if value > best_value:
+                        best_value = value
+                        best_organ = name
+                
+                if best_organ:
+                    organs[category]["type"] = best_organ
+                    organs[category]["parameters"] = dict(cat_organs[best_organ])
+                    organs[category]["evolution_stage"] = 4  # 植物器官默认完善
+                    organs[category]["evolution_progress"] = 1.0
+                    organs[category]["is_active"] = True
+        
+        # 保存完整的植物器官到隐藏字段（供后续使用）
+        organs["_plant_organs"] = plant_organs
         
         return organs
     
@@ -2926,8 +3646,10 @@ class SpeciationService:
                     level: vec for level, vec in enumerate(ref_vectors)
                 }
             
-            # 获取物种描述的embedding
-            species_vec = self._embedding_service.embed([species.description], require_real=False)[0]
+            # 获取物种描述的embedding（使用统一的描述构建方法）
+            from ..system.embedding import EmbeddingService
+            species_text = EmbeddingService.build_species_text(species, include_traits=True, include_names=False)
+            species_vec = self._embedding_service.embed([species_text], require_real=False)[0]
             
             # 计算与各等级参考的余弦相似度
             import numpy as np

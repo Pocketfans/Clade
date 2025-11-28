@@ -90,6 +90,15 @@ class Species(SQLModel, table=True):
     is_suppressed: bool = Field(default=False)
     # 压制剩余回合数
     suppression_turns: int = Field(default=0)
+    
+    # ========== 植物演化系统 ==========
+    # 植物生命形式阶段（仅当 trophic_level < 2.0 时有效）
+    # 0=原核光合生物, 1=单细胞真核, 2=群体藻类, 3=苔藓, 4=蕨类, 5=裸子植物, 6=被子植物
+    life_form_stage: int = Field(default=0)
+    # 生长形式: aquatic(水生), moss(苔藓), herb(草本), shrub(灌木), tree(乔木)
+    growth_form: str = Field(default="aquatic")
+    # 已达成的演化里程碑
+    achieved_milestones: list[str] = Field(default=[], sa_column=Column(JSON))
 
 class PopulationSnapshot(SQLModel, table=True):
     __tablename__ = "population_snapshots"

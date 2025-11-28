@@ -56,6 +56,12 @@ class GenusRepository:
                 session.add(genus)
                 session.commit()
 
+    def clear_state(self) -> None:
+        """清除所有属数据（用于存档切换时隔离数据）"""
+        from sqlalchemy import text
+        with session_scope() as session:
+            session.exec(text("DELETE FROM genus"))
+
 
 genus_repository = GenusRepository()
 

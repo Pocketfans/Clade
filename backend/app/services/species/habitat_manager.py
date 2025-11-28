@@ -126,6 +126,14 @@ class HabitatManager:
         """清空迁徙冷却缓存（新游戏时调用）"""
         self._migration_cooldown.clear()
     
+    def clear_all_caches(self) -> None:
+        """清空所有缓存（存档切换时调用，确保数据隔离）"""
+        self._migration_cooldown.clear()
+        self._prey_distribution_cache.clear()
+        self._species_cache.clear()
+        self._tile_coords_cache.clear()
+        self._species_distribution_cache.clear()
+    
     def update_prey_distribution_cache(
         self, 
         all_species: list[Species],

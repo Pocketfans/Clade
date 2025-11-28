@@ -16,12 +16,23 @@ import random
 from typing import Sequence, Callable, Awaitable
 
 from ...models.species import Species
-from .trait_config import TraitConfig
+from .trait_config import TraitConfig, PlantTraitConfig
 from ...ai.model_router import ModelRouter, staggered_gather
 from ...ai.prompts.species import SPECIES_PROMPTS
 from ...core.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# 【新增】植物压力类型映射（环境压力 → 植物压力类型）
+ENVIRONMENT_TO_PLANT_PRESSURE = {
+    "temperature": None,  # 温度使用共享特质
+    "drought": "drought",
+    "humidity": "drought",  # 负值时映射到干旱
+    "light": "light_reduction",
+    "nutrient": "nutrient_poor",
+    "herbivory": "herbivory",  # 食草压力
+    "competition": "competition",
+}
 
 # 获取配置
 _settings = get_settings()
@@ -50,6 +61,7 @@ class AdaptationService:
         turn_index: int,
         pressures: Sequence = None,  # 新增：ParsedPressure 列表
         stream_callback: Callable[[str], Awaitable[None] | None] | None = None,
+        mortality_results: Sequence = None,  # 【新增】死亡率结果，用于提取植物压力
     ) -> list[dict]:
         """应用适应性变化（渐进演化+退化+描述同步+LLM智能适应）(Async)
         
@@ -58,10 +70,23 @@ class AdaptationService:
             environment_pressure: 当前环境压力
             turn_index: 当前回合数
             pressures: ParsedPressure 列表，用于提供上下文
+            mortality_results: 死亡率结果列表，用于提取植物竞争压力等
             
         Returns:
             变化记录列表
         """
+        # 【新增】构建物种压力映射（从死亡率结果中提取）
+        species_pressure_cache: dict[str, dict] = {}
+        if mortality_results:
+            for result in mortality_results:
+                if hasattr(result, 'plant_competition_pressure'):
+                    species_pressure_cache[result.species.lineage_code] = {
+                        "plant_competition": getattr(result, 'plant_competition_pressure', 0.0),
+                        "herbivory": getattr(result, 'herbivory_pressure', 0.0),
+                        "light_competition": getattr(result, 'light_competition', 0.0),
+                        "nutrient_competition": getattr(result, 'nutrient_competition', 0.0),
+                    }
+        self._species_pressure_cache = species_pressure_cache
         adaptation_events = []
         description_update_tasks = []
         species_to_update = []
@@ -288,7 +313,12 @@ class AdaptationService:
         pressure_context: str,
         stream_callback: Callable[[str], Awaitable[None] | None] | None
     ) -> dict:
-        """创建描述更新的AI任务（非流式，更稳定）"""
+        """创建描述更新的AI任务（非流式，更稳定）
+        
+        【改进】植物使用专用的描述更新Prompt
+        """
+        is_plant = PlantTraitConfig.is_plant(species)
+        
         # 构建 trait diffs 文本
         high_traits = [
             f"{k}: {v:.1f}" 
@@ -298,13 +328,53 @@ class AdaptationService:
         
         trait_diffs = f"显著特征: {', '.join(high_traits)}\n近期变化: {json.dumps(recent_changes, ensure_ascii=False)}"
         
-        prompt = SPECIES_PROMPTS["species_description_update"].format(
-            latin_name=species.latin_name,
-            common_name=species.common_name,
-            old_description=species.description,
-            trait_diffs=trait_diffs,
-            pressure_context=pressure_context
-        )
+        if is_plant:
+            # 【新增】使用植物专用Prompt
+            life_form_stage = getattr(species, 'life_form_stage', 0)
+            growth_form = getattr(species, 'growth_form', 'aquatic')
+            stage_name = PlantTraitConfig.get_stage_name(life_form_stage)
+            
+            # 构建植物器官摘要
+            plant_organs_summary = ""
+            if hasattr(species, 'plant_organs') and species.plant_organs:
+                organs_lines = []
+                for category, organ_data in species.plant_organs.items():
+                    if organ_data:
+                        organ_name = organ_data.get('name', category)
+                        organs_lines.append(f"- {category}: {organ_name}")
+                plant_organs_summary = "\n".join(organs_lines) if organs_lines else "无专用器官"
+            else:
+                plant_organs_summary = "无专用器官"
+            
+            # 获取植物竞争压力上下文
+            cached_pressures = getattr(self, '_species_pressure_cache', {}).get(species.lineage_code, {})
+            plant_context_lines = []
+            if cached_pressures.get("plant_competition", 0) > 0.1:
+                plant_context_lines.append(f"植物竞争压力: {cached_pressures['plant_competition']:.0%}")
+            if cached_pressures.get("herbivory", 0) > 0.1:
+                plant_context_lines.append(f"食草动物压力: {cached_pressures['herbivory']:.0%}")
+            plant_context = "\n".join(plant_context_lines) if plant_context_lines else ""
+            
+            prompt = SPECIES_PROMPTS["plant_description_update"].format(
+                latin_name=species.latin_name,
+                common_name=species.common_name,
+                life_form_stage_name=stage_name,
+                growth_form=growth_form,
+                old_description=species.description,
+                trait_diffs=trait_diffs,
+                pressure_context=pressure_context,
+                plant_context=plant_context,
+                plant_organs_summary=plant_organs_summary,
+            )
+        else:
+            # 动物使用原有Prompt
+            prompt = SPECIES_PROMPTS["species_description_update"].format(
+                latin_name=species.latin_name,
+                common_name=species.common_name,
+                old_description=species.description,
+                trait_diffs=trait_diffs,
+                pressure_context=pressure_context
+            )
 
         # 【优化】使用非流式调用，避免流式传输卡住
         # 【修复】添加硬超时保护，防止无限等待
@@ -333,7 +403,13 @@ class AdaptationService:
         turn_index: int,
         generations: float = 1000.0,
     ) -> tuple[dict, float]:
-        """渐进演化
+        """渐进演化（支持动物和植物）
+        
+        【改进】
+        - 区分动物和植物使用不同的特质-压力映射
+        - 植物使用 PlantTraitConfig.PLANT_TRAIT_PRESSURE_MAPPING
+        - 动物使用 TraitConfig.TRAIT_PRESSURE_MAPPING
+        
         Returns: (changes_dict, drift_score)
         """
         changes = {}
@@ -341,33 +417,74 @@ class AdaptationService:
         limits = TraitConfig.get_trophic_limits(species.trophic_level)
         current_total = sum(species.abstract_traits.values())
         
+        # 【新增】判断是否为植物
+        is_plant = PlantTraitConfig.is_plant(species)
+        
         # ========== 【世代感知模型】增强突变强度计算 ==========
-        # 基于代数的演化速度修正（对数尺度）
-        # 1000代 -> log10(1000)=3 -> 0.375
-        # 10万代 -> log10(100000)=5 -> 0.625
-        # 1亿代 -> log10(1e8)=8 -> 1.0
         generation_factor = math.log10(max(10, generations)) / _settings.generation_scale_factor
-        
-        # 计算选择压力强度（高压力下有益突变更容易固定）
         pressure_intensity = sum(abs(p) for p in environment_pressure.values()) / max(1, len(environment_pressure))
-        selection_factor = 1.0 + (min(pressure_intensity / 10.0, 1.0) * 0.5)  # 最多1.5倍
-        
-        # 综合突变强度
+        selection_factor = 1.0 + (min(pressure_intensity / 10.0, 1.0) * 0.5)
         mutation_strength = generation_factor * selection_factor
         
         logger.debug(
-            f"[突变强度] {species.common_name}: {generations:.0f}代, "
-            f"generation_factor={generation_factor:.3f}, selection={selection_factor:.3f}, "
-            f"总强度={mutation_strength:.3f}"
+            f"[突变强度] {'🌱' if is_plant else '🦎'} {species.common_name}: {generations:.0f}代, "
+            f"突变强度={mutation_strength:.3f}"
         )
         
+        # 【新增】植物额外压力：优先从死亡率结果缓存获取，否则从环境压力推断
+        plant_extra_pressures = {}
+        if is_plant:
+            # 优先使用缓存的植物压力信息（来自死亡率计算）
+            cached_pressures = getattr(self, '_species_pressure_cache', {}).get(species.lineage_code, {})
+            if cached_pressures:
+                # 将缓存的压力值转换为触发阈值格式
+                if cached_pressures.get("plant_competition", 0) > 0.1:
+                    plant_extra_pressures["competition"] = cached_pressures["plant_competition"] * 20  # 转换为0-10尺度
+                if cached_pressures.get("herbivory", 0) > 0.1:
+                    plant_extra_pressures["herbivory"] = cached_pressures["herbivory"] * 15
+                if cached_pressures.get("light_competition", 0) > 0.1:
+                    plant_extra_pressures["light_reduction"] = cached_pressures["light_competition"] * 15
+                if cached_pressures.get("nutrient_competition", 0) > 0.1:
+                    plant_extra_pressures["nutrient_poor"] = cached_pressures["nutrient_competition"] * 15
+            
+            # 从环境压力补充推断（回退方案）
+            for env_key, env_value in environment_pressure.items():
+                if "drought" in env_key.lower() or (env_key == "humidity" and env_value < -3):
+                    if "drought" not in plant_extra_pressures:
+                        plant_extra_pressures["drought"] = abs(env_value)
+                if "light" in env_key.lower():
+                    if "light_reduction" not in plant_extra_pressures:
+                        plant_extra_pressures["light_reduction"] = abs(env_value)
+                if "nutrient" in env_key.lower() or "resource" in env_key.lower():
+                    if "nutrient_poor" not in plant_extra_pressures:
+                        plant_extra_pressures["nutrient_poor"] = abs(env_value)
+                if "predator" in env_key.lower() or "herbiv" in env_key.lower():
+                    if "herbivory" not in plant_extra_pressures:
+                        plant_extra_pressures["herbivory"] = abs(env_value)
+                if "competition" in env_key.lower():
+                    if "competition" not in plant_extra_pressures:
+                        plant_extra_pressures["competition"] = abs(env_value)
+        
         for trait_name, current_value in species.abstract_traits.items():
-            mapping = TraitConfig.get_pressure_mapping(trait_name)
+            # 【改进】根据物种类型选择不同的映射
+            if is_plant:
+                mapping = PlantTraitConfig.get_plant_pressure_mapping(trait_name)
+                if not mapping:
+                    # 回退到共享特质的通用映射
+                    mapping = TraitConfig.get_pressure_mapping(trait_name)
+            else:
+                mapping = TraitConfig.get_pressure_mapping(trait_name)
+            
             if not mapping:
                 continue
             
             pressure_type, pressure_direction = mapping
-            pressure_value = environment_pressure.get(pressure_type, 0.0)
+            
+            # 【改进】对植物，优先使用植物额外压力
+            if is_plant and pressure_type in plant_extra_pressures:
+                pressure_value = plant_extra_pressures[pressure_type]
+            else:
+                pressure_value = environment_pressure.get(pressure_type, 0.0)
             
             should_evolve = False
             if pressure_direction == "hot" and pressure_value > 6.0:
@@ -380,9 +497,6 @@ class AdaptationService:
                 should_evolve = True
             
             if should_evolve and random.random() < self.gradual_evolution_rate:
-                # ========== 【世代感知模型】应用突变强度 ==========
-                # 基础幅度 0.1-0.3，乘以突变强度
-                # 上限3.0（防止单次变化过大）
                 base_delta = random.uniform(0.1, 0.3)
                 delta = min(3.0, base_delta * mutation_strength)
                 new_value = current_value + delta
@@ -392,12 +506,77 @@ class AdaptationService:
                     changes[trait_name] = f"+{delta:.2f}"
                     current_total += delta
                     drift_score += abs(delta)
+                    
+                    # 【新增】植物特质变化的权衡代价
+                    if is_plant:
+                        tradeoff_traits = PlantTraitConfig.get_trait_tradeoffs(trait_name)
+                        if tradeoff_traits and random.random() < 0.5:  # 50%概率触发权衡
+                            tradeoff_trait = random.choice(tradeoff_traits)
+                            if tradeoff_trait in species.abstract_traits:
+                                tradeoff_delta = delta * random.uniform(0.3, 0.6)
+                                old_val = species.abstract_traits[tradeoff_trait]
+                                new_val = max(0.0, old_val - tradeoff_delta)
+                                species.abstract_traits[tradeoff_trait] = round(new_val, 2)
+                                changes[tradeoff_trait] = f"-{tradeoff_delta:.2f}"
+                                current_total -= tradeoff_delta
+                                logger.debug(
+                                    f"[植物权衡] {species.common_name}: {trait_name}↑ → {tradeoff_trait}↓"
+                                )
+                    
                     logger.debug(f"[渐进演化] {species.common_name} {trait_name} +{delta:.2f} (压力{pressure_value:.1f})")
                     
                     if trait_name in ["耐热性", "耐极寒"]:
                         species.morphology_stats["metabolic_rate"] = species.morphology_stats.get("metabolic_rate", 1.0) * 1.02
         
+        # 【新增】植物阶段进度累积
+        if is_plant and changes:
+            self._accumulate_plant_stage_progress(species, changes, turn_index)
+        
         return changes, drift_score
+    
+    def _accumulate_plant_stage_progress(
+        self,
+        species: Species,
+        changes: dict,
+        turn_index: int
+    ) -> None:
+        """【新增】植物阶段进度累积
+        
+        当植物的关键特质增加时，累积向更高阶段发展的进度
+        """
+        from .plant_evolution import PLANT_MILESTONES, plant_evolution_service
+        
+        current_stage = getattr(species, 'life_form_stage', 0)
+        if current_stage >= 6:  # 已达到最高阶段
+            return
+        
+        # 查找下一个阶段的里程碑
+        next_milestone = plant_evolution_service.get_next_milestone(species)
+        if not next_milestone or next_milestone.from_stage != current_stage:
+            return
+        
+        # 检查变化是否有助于里程碑
+        requirements = next_milestone.requirements
+        progress_boost = 0.0
+        
+        for trait_name, required_value in requirements.items():
+            if trait_name in changes:
+                change_str = changes[trait_name]
+                if change_str.startswith("+"):
+                    change_value = float(change_str[1:])
+                    current_value = species.abstract_traits.get(trait_name, 0)
+                    # 如果朝着目标进步，累积进度
+                    if current_value < required_value:
+                        progress_boost += change_value / required_value * 0.1
+        
+        if progress_boost > 0:
+            # 记录进度（可以在后续回合检查是否满足条件）
+            current_progress = species.morphology_stats.get("milestone_progress", 0.0)
+            species.morphology_stats["milestone_progress"] = min(1.0, current_progress + progress_boost)
+            logger.debug(
+                f"[植物阶段进度] {species.common_name}: "
+                f"向 '{next_milestone.name}' 进度 +{progress_boost:.1%}"
+            )
     
     def _apply_organ_drift(
         self,
@@ -406,6 +585,8 @@ class AdaptationService:
     ) -> tuple[dict, float]:
         """器官参数漂移：纯数值的微调
         
+        【改进】支持植物专用的器官压力映射
+        
         不改变器官类型，只改变 parameters 中的数值 (efficiency, speed, range, strength等)。
         
         Returns: (changes_dict, drift_score)
@@ -413,16 +594,34 @@ class AdaptationService:
         changes = {}
         drift_score = 0.0
         
-        # 定义可漂移的参数白名单
-        DRIFTABLE_PARAMS = {"efficiency", "speed", "range", "strength", "defense", "rate", "cost"}
+        # 【新增】判断是否为植物
+        is_plant = PlantTraitConfig.is_plant(species)
         
-        # 定义压力驱动的参数倾向 (Pressure -> Target Param to Increase)
-        PRESSURE_MAP = {
+        # 定义可漂移的参数白名单
+        ANIMAL_DRIFTABLE_PARAMS = {"efficiency", "speed", "range", "strength", "defense", "rate", "cost"}
+        PLANT_DRIFTABLE_PARAMS = {"efficiency", "capacity", "rate", "density", "resistance", "production", "absorption"}
+        
+        DRIFTABLE_PARAMS = PLANT_DRIFTABLE_PARAMS if is_plant else ANIMAL_DRIFTABLE_PARAMS
+        
+        # 【改进】定义压力驱动的参数倾向
+        ANIMAL_PRESSURE_MAP = {
             "predation": ["speed", "defense", "range"],
             "scarcity": ["efficiency", "rate"],
             "competition": ["strength", "efficiency"],
-            "temperature": ["efficiency"], # 极端温度下需要更高效的代谢
+            "temperature": ["efficiency"],
         }
+        
+        # 【新增】植物专用压力映射
+        PLANT_PRESSURE_MAP = {
+            "drought": ["efficiency", "capacity", "resistance"],     # 干旱 → 提高效率/储水能力
+            "light": ["efficiency", "rate", "density"],             # 光照变化 → 提高光合效率
+            "nutrient": ["absorption", "efficiency"],                # 养分压力 → 提高吸收效率
+            "herbivory": ["resistance", "production"],               # 食草压力 → 提高防御
+            "competition": ["efficiency", "density", "rate"],        # 竞争 → 提高生长速度
+            "temperature": ["resistance", "efficiency"],
+        }
+        
+        PRESSURE_MAP = PLANT_PRESSURE_MAP if is_plant else ANIMAL_PRESSURE_MAP
         
         # 找出当前的主要压力
         active_pressures = [k for k, v in environment_pressure.items() if abs(v) > 4.0]

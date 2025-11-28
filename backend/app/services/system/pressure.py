@@ -95,14 +95,35 @@ class PressureEscalationService:
         count = kind_counts[dominant_kind]
         
         # 根据主导压力类型生成描述
+        # 【优化】扩展压力描述，支持更多事件类型
         kind_descriptions = {
+            # 气候相关
             "temperature": "极端温度波动引发大规模气候异常",
             "humidity": "湿度剧变导致水循环失衡",
             "drought": "持续干旱引发大陆级缺水危机",
             "flood": "频繁洪水泛滥，低地栖息地大面积淹没",
+            
+            # 地质相关
             "volcano": "火山活动频发，火山灰遮蔽阳光",
+            "volcanic": "大规模火山喷发，火山冬天降临",
+            "tectonic": "构造运动剧烈，地形格局重塑",
+            "sea_level": "海平面剧变，海岸线大幅移动",
+            
+            # 生态相关
             "predator": "顶级捕食者爆发，食物链严重失衡",
             "competitor": "物种间竞争白热化，资源枯竭",
+            "disease": "瘟疫横行，种群大规模衰亡",
+            "wildfire": "野火连绵，大片栖息地化为焦土",
+            
+            # 化学/大气相关
+            "oxygen": "大气氧含量剧变，呼吸危机蔓延",
+            "acidity": "环境酸化加剧，钙质生物濒临灭绝",
+            "sulfide": "硫化物泛滥，毒气笼罩大地",
+            "uv_radiation": "臭氧层破损，紫外辐射灼伤生命",
+            
+            # 资源相关
+            "resource_decline": "初级生产力崩溃，食物链底层瓦解",
+            "resource_boost": "资源繁盛期，生物大爆发在即",
         }
         
         base_desc = kind_descriptions.get(dominant_kind, "环境压力持续累积")

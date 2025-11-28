@@ -10,7 +10,6 @@ import { ContextDrawer } from "./components/layout/ContextDrawer";
 // 现有组件 (复用)
 import { MainMenu, type StartPayload } from "./components/MainMenu";
 import { CanvasMapPanel, type CanvasMapPanelHandle, type CameraState } from "./components/CanvasMapPanel";
-import { ThreeMapPanel } from "./components/ThreeMapPanel";
 import { SpeciesPanel } from "./components/SpeciesPanel";
 import { TileDetailPanel } from "./components/TileDetailPanel";
 import type { ViewMode } from "./components/MapViewSelector";
@@ -32,6 +31,21 @@ import { TurnSummaryModal } from "./components/TurnSummaryModal";
 import { MapHistoryView } from "./components/MapHistoryView";
 import { LogPanel } from "./components/LogPanel";
 import { MapLegend } from "./components/MapLegend";
+
+// AI 增强组件
+import { AIAssistantPanel } from "./components/AIAssistantPanel";
+import { AIEnhancedTimeline } from "./components/AIEnhancedTimeline";
+
+// 成就与提示系统
+import { AchievementsPanel } from "./components/AchievementsPanel";
+import { GameHintsPanel, AchievementNotification } from "./components/GameHintsPanel";
+
+// 杂交与能量
+import { HybridizationPanel } from "./components/HybridizationPanel";
+import { dispatchEnergyChanged } from "./components/EnergyBar";
+
+// 界面增强效果
+import { AmbientEffects } from "./components/AmbientEffects";
 
 // API 与类型
 import type {
@@ -179,7 +193,6 @@ export default function App() {
 
   // --- UI State ---
   const [viewMode, setViewMode] = useState<ViewMode>("terrain");
-  const [renderMode, setRenderMode] = useState<"2d" | "3d">("2d"); // 新增渲染模式
   const [overlay, setOverlay] = useState<OverlayView>("none");
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("none");
   
@@ -199,6 +212,12 @@ export default function App() {
   const [showTurnSummary, setShowTurnSummary] = useState(false); // 新增：回合总结
   const [showMapHistory, setShowMapHistory] = useState(false); // 新增：地图历史
   const [showLogPanel, setShowLogPanel] = useState(false); // 新增：日志面板
+  const [showAIAssistant, setShowAIAssistant] = useState(false); // AI 助手面板
+  const [showAITimeline, setShowAITimeline] = useState(false); // AI 增强年鉴
+  const [showAchievements, setShowAchievements] = useState(false); // 成就面板
+  const [showHints, setShowHints] = useState(true); // 智能提示面板（默认显示）
+  const [showHybridization, setShowHybridization] = useState(false); // 杂交面板
+  const [pendingAchievement, setPendingAchievement] = useState<{name: string; icon: string; description: string; rarity: string} | null>(null);
 
   // Working Data
   const [pendingPressures, setPendingPressures] = useState<PressureDraft[]>([]);
@@ -499,6 +518,12 @@ export default function App() {
         console.log("🎉 [演化] 回合", latestReport.turn_index, "完成");
         setCurrentTurnIndex(latestReport.turn_index + 1); // 更新回合数（下一回合）
         setShowTurnSummary(true); // 显示回合总结模态窗
+        
+        // 检查成就解锁
+        checkPendingAchievements();
+        
+        // 刷新能量状态
+        dispatchEnergyChanged();
       }
     } catch (error: any) {
       console.error("❌ [演化] 推演失败:", error);
@@ -533,6 +558,31 @@ export default function App() {
       setLoading(false);
     }
   }
+
+  // 检查成就解锁 (必须在早期返回之前定义)
+  const checkPendingAchievements = useCallback(async () => {
+    try {
+      const response = await fetch("/api/achievements/pending");
+      const data = await response.json();
+      if (data.events && data.events.length > 0) {
+        // 显示第一个未通知的成就
+        const event = data.events[0];
+        setPendingAchievement(event.achievement);
+      }
+    } catch (e) {
+      console.error("检查成就失败:", e);
+    }
+  }, []);
+
+  // 记录探索行为（用于成就）(必须在早期返回之前定义)
+  const recordExploration = useCallback(async (feature: string) => {
+    try {
+      await fetch(`/api/achievements/exploration/${feature}`, { method: "POST" });
+      checkPendingAchievements();
+    } catch (e) {
+      console.error("记录探索失败:", e);
+    }
+  }, [checkPendingAchievements]);
 
   // --- Render: Scene Switching ---
 
@@ -628,7 +678,11 @@ export default function App() {
     showLedger ||
     showTurnSummary || // 新增
     showMapHistory || // 新增
-    showLogPanel
+    showLogPanel ||
+    showAIAssistant || // AI 助手
+    showAITimeline || // AI 增强年鉴
+    showAchievements || // 成就面板
+    showHybridization // 杂交面板
   );
 
   // 3. Modals Layer
@@ -639,6 +693,46 @@ export default function App() {
       <>
         {/* 日志面板 */}
         {showLogPanel && <LogPanel onClose={() => setShowLogPanel(false)} />}
+        
+        {/* AI 助手面板 */}
+        {showAIAssistant && (
+          <AIAssistantPanel onClose={() => setShowAIAssistant(false)} />
+        )}
+        
+        {/* AI 增强年鉴 */}
+        {showAITimeline && (
+          <AIEnhancedTimeline 
+            reports={reports} 
+            onClose={() => setShowAITimeline(false)} 
+          />
+        )}
+
+        {/* 成就面板 */}
+        {showAchievements && (
+          <AchievementsPanel onClose={() => setShowAchievements(false)} />
+        )}
+
+        {/* 杂交面板 */}
+        {showHybridization && (
+          <HybridizationPanel 
+            onClose={() => setShowHybridization(false)} 
+            onSuccess={() => {
+              // 刷新物种列表和地图
+              refreshSpeciesList();
+              refreshMap();
+              // 触发能量刷新
+              dispatchEnergyChanged();
+            }}
+          />
+        )}
+
+        {/* 成就解锁通知 */}
+        {pendingAchievement && (
+          <AchievementNotification 
+            achievement={pendingAchievement}
+            onClose={() => setPendingAchievement(null)}
+          />
+        )}
 
         {/* 推演进度提示 - 最高优先级 */}
         {loading && <TurnProgressOverlay message="AI 正在分析生态系统变化..." showDetails={true} />}
@@ -680,9 +774,10 @@ export default function App() {
             />
         )}
         {overlay === "chronicle" && (
-          <FullscreenOverlay title="演化年鉴" onClose={() => setOverlay("none")}>
-            <HistoryTimeline reports={reports} variant="overlay" />
-          </FullscreenOverlay>
+          <AIEnhancedTimeline 
+            reports={reports} 
+            onClose={() => setOverlay("none")} 
+          />
         )}
         {overlay === "niche" && (
           <FullscreenOverlay title="生态位对比" onClose={() => setOverlay("none")}>
@@ -795,31 +890,28 @@ export default function App() {
   };
 
   return (
+    <>
+    {/* 全局氛围效果 */}
+    <AmbientEffects 
+      showScanlines={false} 
+      showCorners={true} 
+      showParticles={true}
+      showGlow={true}
+      particleCount={8}
+    />
     <GameLayout
       mapLayer={
         <>
-          {renderMode === "3d" ? (
-            <ThreeMapPanel
-              map={mapData}
-              onRefresh={refreshMap}
-              selectedTile={selectedTile}
-              onSelectTile={handleTileSelect}
-              viewMode={viewMode}
-              onViewModeChange={handleViewModeChange}
-              highlightSpeciesId={selectedSpeciesId}
-            />
-          ) : (
-            <CanvasMapPanel
-              ref={mapPanelRef}
-              map={mapData}
-              onRefresh={refreshMap}
-              selectedTile={selectedTile}
-              onSelectTile={handleTileSelect}
-              viewMode={viewMode}
-              onViewModeChange={handleViewModeChange}
-              highlightSpeciesId={selectedSpeciesId}
-            />
-          )}
+          <CanvasMapPanel
+            ref={mapPanelRef}
+            map={mapData}
+            onRefresh={refreshMap}
+            selectedTile={selectedTile}
+            onSelectTile={handleTileSelect}
+            viewMode={viewMode}
+            onViewModeChange={handleViewModeChange}
+            highlightSpeciesId={selectedSpeciesId}
+          />
           <MapLegend 
             viewMode={viewMode} 
             seaLevel={latestReport?.sea_level ?? 0}
@@ -876,21 +968,36 @@ export default function App() {
         <LensBar
           currentMode={viewMode}
           onModeChange={handleViewModeChange}
-          onToggleGenealogy={() => setOverlay("genealogy")}
+          onToggleGenealogy={() => { setOverlay("genealogy"); recordExploration("genealogy"); }}
           onToggleHistory={() => setOverlay("chronicle")}
-          onToggleNiche={() => setOverlay("niche")}
-          onToggleFoodWeb={() => setOverlay("foodweb")}
+          onToggleNiche={() => { setOverlay("niche"); recordExploration("niche"); }}
+          onToggleFoodWeb={() => { setOverlay("foodweb"); recordExploration("foodweb"); }}
           onOpenTrends={() => setShowTrends(true)}
           onOpenMapHistory={() => setShowMapHistory(true)}
           onOpenLogs={() => setShowLogPanel(true)}
           onCreateSpecies={() => setShowCreateSpecies(true)}
-          is3D={renderMode === "3d"}
-          onToggle3D={() => setRenderMode(m => m === "3d" ? "2d" : "3d")}
+          onOpenHybridization={() => setShowHybridization(true)}
+          onOpenAIAssistant={() => setShowAIAssistant(true)}
+          onOpenAchievements={() => setShowAchievements(true)}
+          onToggleHints={() => setShowHints(!showHints)}
+          showHints={showHints}
         />
       }
       drawer={renderDrawerContent()}
       modals={hasActiveModal ? renderModals() : null}
+      extras={
+        <>
+          {/* 智能提示面板 */}
+          {showHints && scene === "game" && (
+            <GameHintsPanel 
+              onSelectSpecies={handleSpeciesSelect}
+              refreshTrigger={speciesRefreshTrigger}
+            />
+          )}
+        </>
+      }
     />
+    </>
   );
 }
 

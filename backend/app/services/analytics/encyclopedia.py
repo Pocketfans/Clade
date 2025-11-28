@@ -6,6 +6,11 @@
 3. 演化解释 - 解释物种为什么这样演化
 4. 智能提示 - 为玩家提供游戏建议
 
+【v2.0 优化】
+- 使用 EmbeddingService 的向量索引，支持大规模物种
+- 批量操作接口，减少 API 调用
+- 增量索引更新
+
 【用途】
 - 百科搜索：用户输入"会飞的捕食者"找到相关物种
 - 问答：用户问"为什么这个物种有毒刺？"获得解释
@@ -17,13 +22,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Sequence
 
-import numpy as np
-
 from ...ai.prompts.embedding import EMBEDDING_PROMPTS
+from ..system.species_cache import get_species_cache
 
 if TYPE_CHECKING:
     from ...models.species import Species
     from ..system.embedding import EmbeddingService
+    from ..system.vector_store import SearchResult as VectorSearchResult
     from ...ai.model_router import ModelRouter
     from .taxonomy import TaxonomyResult
     from .narrative_engine import NarrativeEngine, EventRecord
@@ -77,6 +82,11 @@ class EncyclopediaService:
     """智能百科服务
     
     提供语义搜索、问答、解释等功能
+    
+    【v2.0 优化】
+    - 使用 EmbeddingService 的向量索引功能
+    - 批量操作，支持大规模物种
+    - 增量更新索引
     """
 
     # 预定义的游戏概念（用于搜索）
@@ -119,64 +129,66 @@ class EncyclopediaService:
         self.embeddings = embedding_service
         self.router = router
         
-        # 索引
-        self._species_index: dict[str, tuple[np.ndarray, 'Species']] = {}
-        self._concept_index: dict[str, tuple[np.ndarray, dict]] = {}
-        self._event_index: dict[int, tuple[np.ndarray, dict]] = {}
+        # 概念索引已初始化标记
+        self._concepts_initialized = False
+    
+    @property
+    def _species_cache(self):
+        """使用全局物种缓存（避免维护冗余缓存）"""
+        return get_species_cache()
+
+    def _ensure_concepts_indexed(self) -> None:
+        """确保概念已索引（延迟初始化）"""
+        if self._concepts_initialized:
+            return
         
-        # 初始化概念索引
-        self._init_concept_index()
+        try:
+            # 批量索引概念
+            self.embeddings.index_concepts(self.GAME_CONCEPTS)
+            self._concepts_initialized = True
+            logger.info(f"[Encyclopedia] 概念索引初始化完成: {len(self.GAME_CONCEPTS)} 个")
+        except Exception as e:
+            logger.warning(f"[Encyclopedia] 概念索引初始化失败: {e}")
 
-    def _init_concept_index(self) -> None:
-        """初始化游戏概念索引"""
-        for name, info in self.GAME_CONCEPTS.items():
-            text = f"{name}. {info['description']}"
-            try:
-                vec = np.array(self.embeddings.embed_single(text))
-                self._concept_index[name] = (vec, {"name": name, **info})
-            except Exception as e:
-                logger.warning(f"初始化概念 {name} 失败: {e}")
-
+    def update_species_cache(self, species_list: Sequence['Species']) -> None:
+        """通知本服务物种列表已更新
+        
+        【优化】物种数据由全局 SpeciesCacheManager 统一管理，
+        此方法只确保概念索引已初始化。
+        """
+        # 确保概念索引已初始化（首次调用时）
+        self._ensure_concepts_indexed()
+    
     def build_species_index(self, species_list: Sequence['Species']) -> None:
-        """构建物种搜索索引"""
-        self._species_index.clear()
+        """构建物种搜索索引（完整版本，包含索引更新）
         
-        for sp in species_list:
-            # 构建丰富的搜索文本
-            search_text = f"{sp.common_name} {sp.latin_name}. {sp.description}"
-            
-            # 添加特征信息
-            traits = []
-            for trait, value in sp.abstract_traits.items():
-                if value > 7:
-                    traits.append(f"高{trait}")
-                elif value < 3:
-                    traits.append(f"低{trait}")
-            if traits:
-                search_text += f" 特征: {', '.join(traits)}"
-            
-            try:
-                vec = np.array(self.embeddings.embed_single(search_text))
-                self._species_index[sp.lineage_code] = (vec, sp)
-            except Exception as e:
-                logger.warning(f"索引物种 {sp.lineage_code} 失败: {e}")
+        注意：如果通过 EmbeddingIntegrationService 调用，
+        应该使用 update_species_cache 方法以避免重复索引。
+        """
+        # 更新物种缓存
+        self.update_species_cache(species_list)
         
-        logger.info(f"物种索引构建完成: {len(self._species_index)} 个物种")
+        # 使用 EmbeddingService 的索引功能（支持增量更新）
+        count = self.embeddings.index_species(species_list)
+        if count > 0:
+            logger.info(f"[Encyclopedia] 物种索引更新: {count} 个（总计 {len(species_list)} 个）")
 
     def add_events_to_index(self, events: list['EventRecord']) -> None:
-        """添加事件到索引"""
+        """添加事件到索引（批量操作）"""
+        events_to_index = []
         for event in events:
-            if event.embedding is not None:
-                self._event_index[event.id] = (
-                    event.embedding,
-                    {
-                        "id": event.id,
-                        "title": event.title,
-                        "description": event.description,
-                        "turn_index": event.turn_index,
-                        "event_type": event.event_type
-                    }
-                )
+            events_to_index.append({
+                "id": event.id,
+                "title": event.title,
+                "description": event.description,
+                "metadata": {
+                    "turn_index": event.turn_index,
+                    "event_type": event.event_type
+                }
+            })
+        
+        if events_to_index:
+            self.embeddings.index_events_batch(events_to_index)
 
     def search(
         self,
@@ -185,7 +197,7 @@ class EncyclopediaService:
         top_k: int = 10,
         threshold: float = 0.0
     ) -> list[SearchResult]:
-        """语义搜索
+        """语义搜索（使用向量索引）
         
         Args:
             query: 搜索查询
@@ -199,65 +211,55 @@ class EncyclopediaService:
         if search_types is None:
             search_types = ["species", "event", "concept"]
         
-        query_vec = np.array(self.embeddings.embed_single(query))
-        query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-8)
-        
         results = []
         
-        # 搜索物种
+        # 搜索物种（使用向量索引）
         if "species" in search_types:
-            for code, (vec, species) in self._species_index.items():
-                vec_norm = vec / (np.linalg.norm(vec) + 1e-8)
-                similarity = float(np.dot(query_norm, vec_norm))
-                
-                if similarity >= threshold:
-                    results.append(SearchResult(
-                        result_type="species",
-                        id=code,
-                        title=species.common_name,
-                        description=species.description[:200],
-                        similarity=similarity,
-                        metadata={
-                            "latin_name": species.latin_name,
-                            "status": species.status,
-                            "trophic_level": species.trophic_level
-                        }
-                    ))
+            species_results = self.embeddings.search_species(query, top_k, threshold)
+            for r in species_results:
+                species = self._species_cache.get(r.id)
+                results.append(SearchResult(
+                    result_type="species",
+                    id=r.id,
+                    title=r.metadata.get("common_name", r.id),
+                    description=species.description[:200] if species else "",
+                    similarity=r.score,
+                    metadata={
+                        "latin_name": r.metadata.get("latin_name", ""),
+                        "status": r.metadata.get("status", ""),
+                        "trophic_level": r.metadata.get("trophic_level", 0)
+                    }
+                ))
         
-        # 搜索事件
+        # 搜索事件（使用向量索引）
         if "event" in search_types:
-            for event_id, (vec, event_info) in self._event_index.items():
-                vec_norm = vec / (np.linalg.norm(vec) + 1e-8)
-                similarity = float(np.dot(query_norm, vec_norm))
-                
-                if similarity >= threshold:
-                    results.append(SearchResult(
-                        result_type="event",
-                        id=event_id,
-                        title=event_info["title"],
-                        description=event_info["description"][:200],
-                        similarity=similarity,
-                        metadata={
-                            "turn_index": event_info["turn_index"],
-                            "event_type": event_info["event_type"]
-                        }
-                    ))
+            event_results = self.embeddings.search_events(query, top_k, threshold)
+            for r in event_results:
+                results.append(SearchResult(
+                    result_type="event",
+                    id=r.id,
+                    title=r.metadata.get("title", ""),
+                    description=r.metadata.get("description", "")[:200],
+                    similarity=r.score,
+                    metadata={
+                        "turn_index": r.metadata.get("turn_index", 0),
+                        "event_type": r.metadata.get("event_type", "")
+                    }
+                ))
         
-        # 搜索概念
+        # 搜索概念（使用向量索引）
         if "concept" in search_types:
-            for name, (vec, concept_info) in self._concept_index.items():
-                vec_norm = vec / (np.linalg.norm(vec) + 1e-8)
-                similarity = float(np.dot(query_norm, vec_norm))
-                
-                if similarity >= threshold:
-                    results.append(SearchResult(
-                        result_type="concept",
-                        id=name,
-                        title=name,
-                        description=concept_info["description"][:200],
-                        similarity=similarity,
-                        metadata={"keywords": concept_info.get("keywords", [])}
-                    ))
+            self._ensure_concepts_indexed()
+            concept_results = self.embeddings.search_concepts(query, top_k, threshold)
+            for r in concept_results:
+                results.append(SearchResult(
+                    result_type="concept",
+                    id=r.id,
+                    title=r.id,
+                    description=r.metadata.get("description", "")[:200],
+                    similarity=r.score,
+                    metadata={"keywords": r.metadata.get("keywords", [])}
+                ))
         
         # 按相似度排序
         results.sort(key=lambda x: x.similarity, reverse=True)
@@ -288,7 +290,7 @@ class EncyclopediaService:
         context_parts = []
         for result in search_results:
             if result.result_type == "species":
-                species = self._species_index.get(result.id, (None, None))[1]
+                species = self._species_cache.get(result.id)
                 if species:
                     context_parts.append(f"【物种: {species.common_name}】\n{species.description}")
             elif result.result_type == "concept":
@@ -538,16 +540,11 @@ class EncyclopediaService:
         species_b: 'Species'
     ) -> dict[str, Any]:
         """对比两个物种"""
-        # 获取 embedding
-        vec_a = self._species_index.get(species_a.lineage_code, (None, None))[0]
-        vec_b = self._species_index.get(species_b.lineage_code, (None, None))[0]
-        
-        # 计算相似度
-        similarity = 0.0
-        if vec_a is not None and vec_b is not None:
-            norm_a = vec_a / (np.linalg.norm(vec_a) + 1e-8)
-            norm_b = vec_b / (np.linalg.norm(vec_b) + 1e-8)
-            similarity = float(np.dot(norm_a, norm_b))
+        # 使用 EmbeddingService 计算相似度
+        similarity = self.embeddings.get_species_similarity(
+            species_a.lineage_code, 
+            species_b.lineage_code
+        )
         
         # 对比特征
         trait_diff = {}
@@ -599,9 +596,11 @@ class EncyclopediaService:
 
     def get_index_stats(self) -> dict[str, Any]:
         """获取索引统计"""
+        index_stats = self.embeddings.get_index_stats()
         return {
-            "species_count": len(self._species_index),
-            "event_count": len(self._event_index),
-            "concept_count": len(self._concept_index),
+            "species_count": index_stats.get("species", {}).get("size", 0),
+            "event_count": index_stats.get("events", {}).get("size", 0),
+            "concept_count": index_stats.get("concepts", {}).get("size", 0),
+            "species_cache_count": len(self._species_cache),
         }
 

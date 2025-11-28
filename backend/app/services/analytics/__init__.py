@@ -6,6 +6,10 @@ from .evolution_predictor import EvolutionPredictor, PressureVectorLibrary, Evol
 from .narrative_engine import NarrativeEngine, EventRecord, Era, NarrativeResult
 from .encyclopedia import EncyclopediaService, SearchResult, QAResponse, EvolutionExplanation, GameHint
 from .embedding_integration import EmbeddingIntegrationService
+from .achievements import AchievementService, AchievementDefinition, AchievementProgress, ACHIEVEMENTS
+from .game_hints import GameHintsService, GameHint as GameHintModel, HintType, HintPriority
+from .report_builder import ReportBuilder
+from .report_builder_v2 import ReportBuilderV2
 
 __all__ = [
     # 原有服务
@@ -32,4 +36,17 @@ __all__ = [
     "GameHint",
     # 集成服务
     "EmbeddingIntegrationService",
+    # 成就系统
+    "AchievementService",
+    "AchievementDefinition",
+    "AchievementProgress",
+    "ACHIEVEMENTS",
+    # 智能提示
+    "GameHintsService",
+    "GameHintModel",
+    "HintType",
+    "HintPriority",
+    # 报告生成
+    "ReportBuilder",
+    "ReportBuilderV2",
 ]

@@ -296,11 +296,11 @@ class ModelRouter:
         """Sync invocation (blocking)"""
         req = self._prepare_request(capability, payload)
         if req["is_local"]:
-            print(f"[ModelRouter] Local mode: {req['result']}")
+            logger.debug(f"[ModelRouter] Local mode: {req['result']}")
             return req["result"]
             
         try:
-            print(f"[ModelRouter] Sync invoke {capability} (provider={req['meta']['provider']})")
+            logger.debug(f"[ModelRouter] Sync invoke {capability} (provider={req['meta']['provider']})")
             response = httpx.post(
                 req["url"],
                 json=req["body"],

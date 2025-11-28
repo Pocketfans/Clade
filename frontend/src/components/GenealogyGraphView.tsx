@@ -12,23 +12,23 @@ interface Props {
 
 // Enhanced Colors
 const COLORS = {
-  ALIVE: 0x22c55e,       // Green
-  EXTINCT: 0xef4444,     // Red
-  BACKGROUND: 0x4b5563,  // Gray
-  PRODUCER: 0x10b981,    // Emerald
-  HERBIVORE: 0xfbbf24,   // Amber
-  CARNIVORE: 0xf43f5e,   // Rose
-  OMNIVORE: 0xf97316,    // Orange
+  ALIVE: 0x22c55e,
+  EXTINCT: 0xef4444,
+  BACKGROUND: 0x4b5563,
+  PRODUCER: 0x10b981,
+  HERBIVORE: 0xfbbf24,
+  CARNIVORE: 0xf43f5e,
+  OMNIVORE: 0xf97316,
   DEFAULT: 0xffffff,
-  SELECTED: 0x3b82f6,    // Blue
-  SUBSPECIES: 0x8b5cf6,  // Violet
-  HYBRID: 0xd946ef,      // Fuchsia
+  SELECTED: 0x3b82f6,
+  SUBSPECIES: 0x8b5cf6,
+  HYBRID: 0xd946ef,
   TEXT_MAIN: 0xffffff,
   TEXT_SUB: 0x9ca3af,
-  LINK_NORMAL: 0x475569, // Slate-600
-  LINK_ACTIVE: 0x94a3b8, // Slate-400
-  ROOT_GOLD: 0xfbbf24,   // Gold for root
-  ROOT_GLOW: 0xf59e0b,   // Amber glow
+  LINK_NORMAL: 0x475569,
+  LINK_ACTIVE: 0x94a3b8,
+  ROOT_GOLD: 0xfbbf24,
+  ROOT_GLOW: 0xf59e0b,
   COLLAPSE_BTN: 0x64748b,
   COLLAPSE_BTN_HOVER: 0x94a3b8,
 };
@@ -73,7 +73,6 @@ interface FlowParticle {
   color: number;
 }
 
-// ROOT常量
 const ROOT_NAME = "始祖物种";
 const ROOT_CODE = "ROOT";
 
@@ -89,7 +88,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [pixiReady, setPixiReady] = useState(false);
   
-  // 折叠状态管理
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
 
   const cameraRef = useRef({ x: 100, y: 300, zoom: 0.8 }); 
@@ -101,7 +99,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
   const nodeVisualsRef = useRef<Map<string, NodeVisual>>(new Map());
   const linkVisualsRef = useRef<LinkVisual[]>([]);
 
-  // 切换折叠状态
   const toggleCollapse = useCallback((lineageCode: string) => {
     setCollapsedNodes(prev => {
       const newSet = new Set(prev);
@@ -114,7 +111,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
     });
   }, []);
 
-  // 重置视图
   const resetView = useCallback(() => {
     if (stageRef.current) {
       cameraRef.current = { x: 100, y: 300, zoom: 0.8 };
@@ -123,7 +119,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
     }
   }, []);
 
-  // 缩放控制
   const zoomIn = useCallback(() => {
     if (stageRef.current) {
       const newZoom = Math.min(5, cameraRef.current.zoom * 1.2);
@@ -140,12 +135,10 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
     }
   }, []);
 
-  // 展开全部
   const expandAll = useCallback(() => {
     setCollapsedNodes(new Set());
   }, []);
 
-  // 折叠全部
   const collapseAll = useCallback(() => {
     const nodesWithChildren = nodes.filter(n => 
       nodes.some(c => c.parent_code === n.lineage_code)
@@ -166,7 +159,7 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
       
       try {
         await app.init({ 
-          background: '#0a0f1a', 
+          background: '#080c15', 
           resizeTo: container,
           antialias: true,
           resolution: window.devicePixelRatio || 1,
@@ -288,7 +281,7 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
     };
   }, []);
 
-  // Animation Logic - 保持不变
+  // Animation Logic
   const updateNodeAnimations = (delta: number) => {
       const lerp = 0.15 * delta; 
       const magneticStrength = 0.15;
@@ -433,7 +426,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
     gridLayer.addChild(gridG);
     stage.addChild(gridLayer);
 
-    // 过滤出需要显示的节点（考虑折叠状态）
     const visibleNodes = getVisibleNodes(nodes, collapsedNodes);
     
     const root = buildHierarchy(visibleNodes, nodes);
@@ -454,14 +446,12 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
     stage.addChild(particleLayer);
     stage.addChild(nodesLayer);
     
-    // 预计算哪些节点有子节点
     const childrenCount = new Map<string, number>();
     nodes.forEach(n => {
       const parentCode = n.parent_code || ROOT_CODE;
       childrenCount.set(parentCode, (childrenCount.get(parentCode) || 0) + 1);
     });
 
-    // 创建节点
     descendants.forEach(node => {
         const isRoot = node.data.lineage_code === ROOT_CODE;
         const hasChildren = (childrenCount.get(node.data.lineage_code) || 0) > 0;
@@ -508,7 +498,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         const innerGroup = new Container();
         
         if (isRoot) {
-            // 特殊的始祖物种节点样式
             const rootGlow = new Graphics();
             rootGlow.roundRect(-72, -25, 144, 50, 12);
             rootGlow.fill({ color: COLORS.ROOT_GOLD, alpha: 0.15 });
@@ -525,7 +514,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
             rootBorder.stroke({ width: 2, color: COLORS.ROOT_GOLD, alpha: 0.8 });
             innerGroup.addChild(rootBorder);
             
-            // 装饰线条
             const deco1 = new Graphics();
             deco1.moveTo(-50, -15);
             deco1.lineTo(-30, -15);
@@ -550,7 +538,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
             nameText.position.set(0, 0);
             innerGroup.addChild(nameText);
             
-            // 添加小图标
             const icon = new Graphics();
             icon.moveTo(0, -8);
             icon.lineTo(4, -4);
@@ -563,7 +550,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
             innerGroup.addChild(icon);
             
         } else {
-            // 普通节点样式
             const mask = new Graphics();
             mask.roundRect(-70, -22, 140, 44, 10);
             mask.fill(0xffffff);
@@ -572,12 +558,10 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
             bg.rect(-70, -22, 140, 44);
             bg.fill({ color: 0x151c2c, alpha: 0.95 }); 
             
-            // 左侧角色指示条
             const indicator = new Graphics();
             indicator.rect(-70, -22, 6, 44);
             indicator.fill({ color: roleColor });
             
-            // 如果有被折叠的子节点，显示计数徽章
             if (isCollapsed && hiddenChildCount > 0) {
                 const badge = new Graphics();
                 badge.circle(60, -15, 10);
@@ -616,7 +600,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
             });
             innerGroup.addChild(border);
             
-            // 状态指示灯
             const statusDot = new Graphics();
             statusDot.circle(55, 0, 4);
             statusDot.fill({ color: isAlive ? COLORS.ALIVE : COLORS.EXTINCT, alpha: isAlive ? 1 : 0.6 });
@@ -662,7 +645,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         
         nodeContainer.addChild(innerGroup);
         
-        // 折叠/展开按钮 (仅对有子节点的非根节点显示)
         let collapseBtn: Container | undefined;
         if (hasChildren && !isRoot) {
             collapseBtn = new Container();
@@ -676,16 +658,13 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
             btnBg.stroke({ width: 1, color: COLORS.COLLAPSE_BTN, alpha: 0.6 });
             collapseBtn.addChild(btnBg);
             
-            // 图标: + 或 -
             const btnIcon = new Graphics();
             if (isCollapsed) {
-                // + 图标
                 btnIcon.moveTo(-4, 0);
                 btnIcon.lineTo(4, 0);
                 btnIcon.moveTo(0, -4);
                 btnIcon.lineTo(0, 4);
             } else {
-                // - 图标
                 btnIcon.moveTo(-4, 0);
                 btnIcon.lineTo(4, 0);
             }
@@ -735,7 +714,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         });
     });
 
-    // 创建连线
     const createLink = (sourceCode: string, targetCode: string, isSubspecies: boolean, isExtinct: boolean, isHybrid = false) => {
         const linkG = new Graphics();
         const color = isSubspecies ? COLORS.SUBSPECIES : (isHybrid ? COLORS.HYBRID : COLORS.LINK_NORMAL);
@@ -756,7 +734,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         linksLayer.addChild(linkG);
         linkVisualsRef.current.push(linkVis);
         
-        // 添加流动粒子
         if (!isExtinct) {
             const pG = new Graphics();
             pG.circle(0, 0, 2.5);
@@ -780,7 +757,6 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         createLink(source.data.lineage_code, target.data.lineage_code, isSubspecies, isExtinct);
     });
     
-    // 处理杂交关系连线
     descendants.forEach(node => {
         if (node.data.hybrid_parent_codes && node.data.hybrid_parent_codes.length >= 2) {
              const p0Code = node.data.hybrid_parent_codes[0];
@@ -802,7 +778,7 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
           const isHovered = code === hoveredNode?.lineage_code;
           const isRoot = code === ROOT_CODE;
           
-          if (isRoot) return; // 根节点不响应选中/悬浮
+          if (isRoot) return;
           
           if (isSelected) {
               vis.targetLift = -8; 
@@ -827,12 +803,12 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
   }, [selectedNode, hoveredNode, nodes]);
 
   return (
-    <div ref={containerRef} className="genealogy-container">
-      {/* 背景渐变 */}
-      <div className="genealogy-bg" />
+    <div ref={containerRef} className="graph-container">
+      {/* 渐变背景 */}
+      <div className="graph-bg" />
       
       {/* Canvas容器 */}
-      <div ref={canvasContainerRef} className="genealogy-canvas" />
+      <div ref={canvasContainerRef} className="graph-canvas" />
       
       {/* 控制面板 */}
       <ControlPanel
@@ -852,41 +828,15 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
       {/* 图例 */}
       <Legend />
       
-      <style>{`
-        .genealogy-container {
-          width: 100%;
-          height: 100%;
-          position: relative;
-          overflow: hidden;
-          background: #0a0f1a;
-        }
-        
-        .genealogy-bg {
-          position: absolute;
-          inset: 0;
-          background: radial-gradient(ellipse at 30% 20%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
-                      radial-gradient(ellipse at 70% 80%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
-                      linear-gradient(180deg, #0a0f1a 0%, #0f172a 100%);
-          pointer-events: none;
-        }
-        
-        .genealogy-canvas {
-          width: 100%;
-          height: 100%;
-          position: absolute;
-          top: 0;
-          left: 0;
-        }
-      `}</style>
+      <style>{graphStyles}</style>
     </div>
   );
 }
 
-// 获取可见节点（考虑折叠）
+// 获取可见节点
 function getVisibleNodes(nodes: LineageNode[], collapsed: Set<string>): LineageNode[] {
   const hidden = new Set<string>();
   
-  // 递归标记被折叠的后代
   const markHidden = (parentCode: string) => {
     nodes.forEach(n => {
       if (n.parent_code === parentCode && !hidden.has(n.lineage_code)) {
@@ -901,7 +851,6 @@ function getVisibleNodes(nodes: LineageNode[], collapsed: Set<string>): LineageN
   return nodes.filter(n => !hidden.has(n.lineage_code));
 }
 
-// 获取被隐藏的后代数量
 function getHiddenDescendantCount(parentCode: string, allNodes: LineageNode[], collapsed: Set<string>): number {
   let count = 0;
   const countChildren = (code: string) => {
@@ -918,7 +867,6 @@ function getHiddenDescendantCount(parentCode: string, allNodes: LineageNode[], c
   return count;
 }
 
-// 构建层级结构
 function buildHierarchy(visibleNodes: LineageNode[], allNodes: LineageNode[]): d3.HierarchyNode<LineageNode> {
   if (visibleNodes.length === 0) return d3.hierarchy({} as LineageNode);
   
@@ -932,7 +880,6 @@ function buildHierarchy(visibleNodes: LineageNode[], allNodes: LineageNode[]): d
     return d3.hierarchy(visibleNodes[0], n => visibleNodes.filter(c => c.parent_code === n.lineage_code));
   }
   
-  // 始终创建虚拟根节点 "始祖物种"
   const virtualRoot: LineageNode = { 
     lineage_code: ROOT_CODE, 
     common_name: ROOT_NAME,
@@ -1016,94 +963,47 @@ const ControlPanel = ({ onZoomIn, onZoomOut, onReset, onExpandAll, onCollapseAll
   onCollapseAll: () => void;
 }) => (
   <div className="control-panel">
-    <div className="control-group">
-      <button onClick={onZoomIn} title="放大">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="11" cy="11" r="8"/>
-          <path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/>
-        </svg>
-      </button>
-      <button onClick={onZoomOut} title="缩小">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="11" cy="11" r="8"/>
-          <path d="M21 21l-4.35-4.35M8 11h6"/>
-        </svg>
-      </button>
-      <button onClick={onReset} title="重置视图">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-          <path d="M3 3v5h5"/>
-        </svg>
-      </button>
+    <div className="control-section">
+      <span className="section-label">缩放</span>
+      <div className="control-buttons">
+        <button onClick={onZoomIn} title="放大">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="8"/>
+            <path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/>
+          </svg>
+        </button>
+        <button onClick={onZoomOut} title="缩小">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="8"/>
+            <path d="M21 21l-4.35-4.35M8 11h6"/>
+          </svg>
+        </button>
+        <button onClick={onReset} title="重置视图">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+            <path d="M3 3v5h5"/>
+          </svg>
+        </button>
+      </div>
     </div>
     <div className="control-divider" />
-    <div className="control-group">
-      <button onClick={onExpandAll} title="展开全部">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M18 15l-6-6-6 6"/>
-          <path d="M18 9l-6-6-6 6"/>
-        </svg>
-      </button>
-      <button onClick={onCollapseAll} title="折叠全部">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M6 9l6 6 6-6"/>
-          <path d="M6 15l6 6 6-6"/>
-        </svg>
-      </button>
+    <div className="control-section">
+      <span className="section-label">节点</span>
+      <div className="control-buttons">
+        <button onClick={onExpandAll} title="展开全部">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 15l-6-6-6 6"/>
+            <path d="M18 9l-6-6-6 6"/>
+          </svg>
+        </button>
+        <button onClick={onCollapseAll} title="折叠全部">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M6 9l6 6 6-6"/>
+            <path d="M6 15l6 6 6-6"/>
+          </svg>
+        </button>
+      </div>
     </div>
-    <style>{`
-      .control-panel {
-        position: absolute;
-        top: 16px;
-        left: 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        padding: 8px;
-        background: rgba(15, 23, 42, 0.9);
-        border: 1px solid rgba(148, 163, 184, 0.15);
-        border-radius: 12px;
-        backdrop-filter: blur(8px);
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-      }
-      
-      .control-group {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-      
-      .control-divider {
-        height: 1px;
-        background: rgba(148, 163, 184, 0.2);
-        margin: 4px 0;
-      }
-      
-      .control-panel button {
-        width: 36px;
-        height: 36px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: rgba(30, 41, 59, 0.8);
-        border: 1px solid rgba(148, 163, 184, 0.1);
-        border-radius: 8px;
-        color: #94a3b8;
-        cursor: pointer;
-        transition: all 0.2s ease;
-      }
-      
-      .control-panel button:hover {
-        background: rgba(59, 130, 246, 0.2);
-        border-color: rgba(59, 130, 246, 0.4);
-        color: #e2e8f0;
-        transform: scale(1.05);
-      }
-      
-      .control-panel button:active {
-        transform: scale(0.95);
-      }
-    `}</style>
   </div>
 );
 
@@ -1114,192 +1014,104 @@ const StatsBar = ({ nodes, collapsedCount }: { nodes: LineageNode[]; collapsedCo
   
   return (
     <div className="stats-bar">
-      <div className="stat-item">
-        <span className="stat-dot alive" />
-        <span className="stat-label">存活</span>
-        <span className="stat-value">{aliveCount}</span>
-      </div>
-      <div className="stat-item">
-        <span className="stat-dot extinct" />
-        <span className="stat-label">灭绝</span>
-        <span className="stat-value">{extinctCount}</span>
-      </div>
-      <div className="stat-item">
-        <span className="stat-dot total" />
-        <span className="stat-label">总计</span>
-        <span className="stat-value">{nodes.length}</span>
-      </div>
-      {collapsedCount > 0 && (
-        <div className="stat-item collapsed">
-          <span className="stat-label">已折叠</span>
-          <span className="stat-value">{collapsedCount}</span>
+      <div className="stats-container">
+        <div className="stat-item alive">
+          <div className="stat-dot" />
+          <span className="stat-label">存活</span>
+          <span className="stat-value">{aliveCount}</span>
         </div>
-      )}
-      <style>{`
-        .stats-bar {
-          position: absolute;
-          top: 16px;
-          left: 50%;
-          transform: translateX(-50%);
-          display: flex;
-          gap: 20px;
-          padding: 10px 20px;
-          background: rgba(15, 23, 42, 0.85);
-          border: 1px solid rgba(148, 163, 184, 0.12);
-          border-radius: 24px;
-          backdrop-filter: blur(8px);
-          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
-        }
-        
-        .stat-item {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-        }
-        
-        .stat-dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-        }
-        
-        .stat-dot.alive {
-          background: #22c55e;
-          box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
-        }
-        
-        .stat-dot.extinct {
-          background: #ef4444;
-          box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
-        }
-        
-        .stat-dot.total {
-          background: #3b82f6;
-          box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
-        }
-        
-        .stat-label {
-          color: #94a3b8;
-          font-size: 12px;
-        }
-        
-        .stat-value {
-          color: #f1f5f9;
-          font-size: 14px;
-          font-weight: 600;
-          font-feature-settings: 'tnum';
-        }
-        
-        .stat-item.collapsed {
-          padding-left: 12px;
-          border-left: 1px solid rgba(148, 163, 184, 0.2);
-        }
-      `}</style>
+        <div className="stat-divider" />
+        <div className="stat-item extinct">
+          <div className="stat-dot" />
+          <span className="stat-label">灭绝</span>
+          <span className="stat-value">{extinctCount}</span>
+        </div>
+        <div className="stat-divider" />
+        <div className="stat-item total">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="3" y="3" width="7" height="7"/>
+            <rect x="14" y="3" width="7" height="7"/>
+            <rect x="14" y="14" width="7" height="7"/>
+            <rect x="3" y="14" width="7" height="7"/>
+          </svg>
+          <span className="stat-label">总计</span>
+          <span className="stat-value">{nodes.length}</span>
+        </div>
+        {collapsedCount > 0 && (
+          <>
+            <div className="stat-divider" />
+            <div className="stat-item collapsed">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+              <span className="stat-label">已折叠</span>
+              <span className="stat-value">{collapsedCount}</span>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 };
 
 // Tooltip组件
 const Tooltip = ({ node, pos }: { node: LineageNode, pos: {x:number, y:number} }) => (
-    <div style={{
-      position: "fixed",
-      left: `${pos.x + 20}px`,
-      top: `${pos.y}px`,
-      background: "rgba(10, 15, 26, 0.98)",
-      padding: "14px 16px",
-      borderRadius: "12px",
-      border: "1px solid rgba(59, 130, 246, 0.25)",
-      backdropFilter: "blur(12px)",
-      zIndex: 1000,
-      pointerEvents: "none",
-      minWidth: "220px",
-      boxShadow: "0 12px 28px -4px rgba(0, 0, 0, 0.6), 0 0 20px rgba(59, 130, 246, 0.1)"
-    }}>
-      <div style={{ 
-        color: "#f8fafc", 
-        fontWeight: "700", 
-        fontSize: "15px", 
-        marginBottom: "4px",
-        letterSpacing: "-0.01em"
-      }}>
-        {node.common_name || "未知物种"}
+    <div className="tooltip" style={{ left: `${pos.x + 20}px`, top: `${pos.y}px` }}>
+      <div className="tooltip-header">
+        <span className="tooltip-name">{node.common_name || "未知物种"}</span>
+        <span className={`tooltip-status ${node.state}`}>
+          {node.state === 'alive' ? '存活' : '灭绝'}
+        </span>
       </div>
-      <div style={{ 
-        color: "#64748b", 
-        fontSize: "12px", 
-        fontFamily: "JetBrains Mono, Monaco, Consolas, monospace", 
-        marginBottom: "12px",
-        padding: "4px 8px",
-        background: "rgba(30, 41, 59, 0.5)",
-        borderRadius: "4px",
-        display: "inline-block"
-      }}>
-        {node.lineage_code}
+      <div className="tooltip-code">{node.lineage_code}</div>
+      <div className="tooltip-tags">
+        <span className="tooltip-tag" style={{ 
+          background: `${getNodeColorStr(node)}20`,
+          borderColor: `${getNodeColorStr(node)}50`,
+          color: getNodeColorStr(node)
+        }}>
+          {getRoleName(node.ecological_role)}
+        </span>
+        <span className="tooltip-tag rank">{getRankName(node.taxonomic_rank)}</span>
       </div>
-      <div style={{ display: "flex", gap: "8px", marginBottom: "12px", flexWrap: "wrap" }}>
-        <Badge text={node.state === 'alive' ? '存活' : '灭绝'} color={node.state === 'alive' ? "#22c55e" : "#ef4444"} />
-        <Badge text={getRoleName(node.ecological_role)} color={getNodeColorHexStr(node)} outline />
-        <Badge text={getRankName(node.taxonomic_rank)} color="#8b5cf6" outline />
-      </div>
-      <div style={{ 
-        display: "grid", 
-        gridTemplateColumns: "1fr 1fr", 
-        gap: "8px 16px", 
-        fontSize: "12px", 
-        color: "#94a3b8",
-        padding: "10px",
-        background: "rgba(30, 41, 59, 0.3)",
-        borderRadius: "8px"
-      }}>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <span>分类等级</span>
-            <span style={{ color: "#e2e8f0" }}>{getRankName(node.taxonomic_rank)}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <span>后代数量</span>
-            <span style={{ color: "#e2e8f0" }}>{node.descendant_count || 0}</span>
-          </div>
+      <div className="tooltip-stats">
+        <div className="tooltip-stat">
+          <span className="stat-key">后代</span>
+          <span className="stat-val">{node.descendant_count || 0}</span>
+        </div>
+        <div className="tooltip-stat">
+          <span className="stat-key">诞生</span>
+          <span className="stat-val">T{node.birth_turn + 1}</span>
+        </div>
       </div>
     </div>
 );
 
-const Badge = ({ text, color, outline }: { text: string, color: string, outline?: boolean }) => (
-    <span style={{
-        padding: "3px 8px",
-        borderRadius: "6px",
-        fontSize: "11px",
-        fontWeight: "600",
-        backgroundColor: outline ? "transparent" : color + "20",
-        border: `1px solid ${outline ? color + "60" : "transparent"}`,
-        color: color,
-        letterSpacing: "0.02em"
-    }}>
-        {text}
-    </span>
-);
-
+// 图例组件
 const Legend = () => (
-    <div className="legend-panel">
-        <div className="legend-title">
+    <div className="legend">
+        <div className="legend-header">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="12" r="10"/>
             <path d="M12 16v-4M12 8h.01"/>
           </svg>
-          图例
+          <span>图例</span>
         </div>
-        <div className="legend-section">
-          <div className="legend-subtitle">状态</div>
+        
+        <div className="legend-group">
+          <div className="legend-title">状态</div>
           <div className="legend-item">
-            <div className="legend-dot" style={{ background: "#22c55e", boxShadow: "0 0 6px rgba(34, 197, 94, 0.5)" }} />
+            <div className="legend-dot alive" />
             <span>存活 Alive</span>
           </div>
           <div className="legend-item">
-            <div className="legend-dot" style={{ background: "#ef4444", boxShadow: "0 0 6px rgba(239, 68, 68, 0.5)" }} />
+            <div className="legend-dot extinct" />
             <span>灭绝 Extinct</span>
           </div>
         </div>
-        <div className="legend-section">
-          <div className="legend-subtitle">生态角色</div>
+        
+        <div className="legend-group">
+          <div className="legend-title">生态角色</div>
           <div className="legend-item">
             <div className="legend-bar" style={{ background: "#10b981" }} />
             <span>生产者</span>
@@ -1317,100 +1129,22 @@ const Legend = () => (
             <span>杂食动物</span>
           </div>
         </div>
-        <div className="legend-section">
-          <div className="legend-subtitle">连线类型</div>
+        
+        <div className="legend-group">
+          <div className="legend-title">连线类型</div>
           <div className="legend-item">
             <div className="legend-line solid" />
             <span>演化谱系</span>
           </div>
           <div className="legend-item">
-            <div className="legend-line dashed" style={{ borderColor: "#d946ef" }} />
+            <div className="legend-line dashed purple" />
             <span>杂交关系</span>
           </div>
           <div className="legend-item">
-            <div className="legend-line dashed" style={{ borderColor: "#8b5cf6" }} />
+            <div className="legend-line dashed violet" />
             <span>亚种分支</span>
           </div>
         </div>
-        <style>{`
-          .legend-panel {
-            position: absolute;
-            bottom: 16px;
-            right: 16px;
-            background: rgba(10, 15, 26, 0.92);
-            border: 1px solid rgba(148, 163, 184, 0.12);
-            border-radius: 12px;
-            padding: 14px 16px;
-            font-size: 12px;
-            color: #94a3b8;
-            backdrop-filter: blur(12px);
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-            min-width: 160px;
-          }
-          
-          .legend-title {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-weight: 700;
-            color: #f1f5f9;
-            font-size: 13px;
-            margin-bottom: 12px;
-            padding-bottom: 8px;
-            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
-          }
-          
-          .legend-section {
-            margin-bottom: 10px;
-          }
-          
-          .legend-section:last-child {
-            margin-bottom: 0;
-          }
-          
-          .legend-subtitle {
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: #64748b;
-            margin-bottom: 6px;
-          }
-          
-          .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 3px 0;
-          }
-          
-          .legend-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            flex-shrink: 0;
-          }
-          
-          .legend-bar {
-            width: 4px;
-            height: 16px;
-            border-radius: 2px;
-            flex-shrink: 0;
-          }
-          
-          .legend-line {
-            width: 24px;
-            height: 0;
-            flex-shrink: 0;
-          }
-          
-          .legend-line.solid {
-            border-top: 2px solid #475569;
-          }
-          
-          .legend-line.dashed {
-            border-top: 2px dashed #8b5cf6;
-          }
-        `}</style>
     </div>
 );
 
@@ -1430,11 +1164,12 @@ function getRankName(rank: string): string {
     species: '物种',
     subspecies: '亚种',
     genus: '属',
+    hybrid: '杂交种',
   };
   return names[rank] || rank;
 }
 
-function getNodeColorHexStr(node: LineageNode): string {
+function getNodeColorStr(node: LineageNode): string {
   if (node.tier === "background") return "#4b5563";
   switch (node.ecological_role) {
     case "producer": return "#10b981";
@@ -1444,3 +1179,374 @@ function getNodeColorHexStr(node: LineageNode): string {
     default: return "#ffffff";
   }
 }
+
+// 样式
+const graphStyles = `
+  .graph-container {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+    background: #080c15;
+  }
+  
+  .graph-bg {
+    position: absolute;
+    inset: 0;
+    background: 
+      radial-gradient(ellipse at 20% 30%, rgba(34, 197, 94, 0.06) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 70%, rgba(59, 130, 246, 0.06) 0%, transparent 50%),
+      radial-gradient(ellipse at 50% 50%, rgba(139, 92, 246, 0.04) 0%, transparent 60%),
+      linear-gradient(180deg, #080c15 0%, #0f172a 100%);
+    pointer-events: none;
+  }
+  
+  .graph-canvas {
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
+
+  /* 控制面板 */
+  .control-panel {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+    background: linear-gradient(145deg, rgba(15, 23, 42, 0.95) 0%, rgba(10, 15, 26, 0.95) 100%);
+    border: 1px solid rgba(59, 130, 246, 0.15);
+    border-radius: 16px;
+    backdrop-filter: blur(12px);
+    box-shadow: 
+      0 8px 32px rgba(0, 0, 0, 0.4),
+      0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  }
+  
+  .control-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .section-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: rgba(148, 163, 184, 0.6);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding-left: 4px;
+  }
+  
+  .control-buttons {
+    display: flex;
+    gap: 6px;
+  }
+  
+  .control-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.2), transparent);
+    margin: 2px 0;
+  }
+  
+  .control-panel button {
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    color: #94a3b8;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  .control-panel button:hover {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: rgba(59, 130, 246, 0.3);
+    color: #e2e8f0;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
+  }
+  
+  .control-panel button:active {
+    transform: translateY(0);
+  }
+
+  /* 统计栏 */
+  .stats-bar {
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+  
+  .stats-container {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 24px;
+    background: linear-gradient(145deg, rgba(15, 23, 42, 0.92) 0%, rgba(10, 15, 26, 0.92) 100%);
+    border: 1px solid rgba(59, 130, 246, 0.12);
+    border-radius: 20px;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  }
+  
+  .stat-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  
+  .stat-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  
+  .stat-item.alive .stat-dot {
+    background: #22c55e;
+    box-shadow: 0 0 12px rgba(34, 197, 94, 0.5);
+  }
+  
+  .stat-item.extinct .stat-dot {
+    background: #ef4444;
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.5);
+  }
+  
+  .stat-item.total {
+    color: #60a5fa;
+  }
+  
+  .stat-item.collapsed {
+    color: #a78bfa;
+  }
+  
+  .stat-label {
+    color: rgba(148, 163, 184, 0.7);
+    font-size: 0.8rem;
+  }
+  
+  .stat-value {
+    color: #f1f5f9;
+    font-size: 1rem;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  
+  .stat-divider {
+    width: 1px;
+    height: 20px;
+    background: rgba(148, 163, 184, 0.15);
+  }
+
+  /* Tooltip */
+  .tooltip {
+    position: fixed;
+    background: linear-gradient(145deg, rgba(10, 15, 26, 0.98) 0%, rgba(15, 23, 42, 0.98) 100%);
+    padding: 16px 18px;
+    border-radius: 14px;
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    backdrop-filter: blur(16px);
+    z-index: 1000;
+    pointer-events: none;
+    min-width: 200px;
+    box-shadow: 
+      0 20px 40px -8px rgba(0, 0, 0, 0.6),
+      0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+      0 0 30px rgba(59, 130, 246, 0.08);
+  }
+  
+  .tooltip-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  
+  .tooltip-name {
+    font-size: 1rem;
+    font-weight: 700;
+    color: #f8fafc;
+    letter-spacing: -0.01em;
+  }
+  
+  .tooltip-status {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 6px;
+  }
+  
+  .tooltip-status.alive {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+  }
+  
+  .tooltip-status.extinct {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+  }
+  
+  .tooltip-code {
+    font-size: 0.8rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: #64748b;
+    padding: 5px 10px;
+    background: rgba(30, 41, 59, 0.5);
+    border-radius: 6px;
+    display: inline-block;
+    margin-bottom: 12px;
+  }
+  
+  .tooltip-tags {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  
+  .tooltip-tag {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid;
+  }
+  
+  .tooltip-tag.rank {
+    background: rgba(139, 92, 246, 0.15);
+    border-color: rgba(139, 92, 246, 0.3);
+    color: #a78bfa;
+  }
+  
+  .tooltip-stats {
+    display: flex;
+    gap: 16px;
+    padding: 10px 12px;
+    background: rgba(30, 41, 59, 0.4);
+    border-radius: 8px;
+  }
+  
+  .tooltip-stat {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  
+  .stat-key {
+    font-size: 0.75rem;
+    color: rgba(148, 163, 184, 0.7);
+  }
+  
+  .stat-val {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #e2e8f0;
+  }
+
+  /* 图例 */
+  .legend {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    background: linear-gradient(145deg, rgba(10, 15, 26, 0.95) 0%, rgba(15, 23, 42, 0.95) 100%);
+    border: 1px solid rgba(59, 130, 246, 0.12);
+    border-radius: 14px;
+    padding: 16px 18px;
+    font-size: 0.8rem;
+    color: #94a3b8;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    min-width: 150px;
+  }
+  
+  .legend-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    color: #f1f5f9;
+    font-size: 0.85rem;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(59, 130, 246, 0.15);
+  }
+  
+  .legend-group {
+    margin-bottom: 12px;
+  }
+  
+  .legend-group:last-child {
+    margin-bottom: 0;
+  }
+  
+  .legend-title {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: rgba(148, 163, 184, 0.5);
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0;
+    font-size: 0.75rem;
+  }
+  
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  
+  .legend-dot.alive {
+    background: #22c55e;
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+  }
+  
+  .legend-dot.extinct {
+    background: #ef4444;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+  }
+  
+  .legend-bar {
+    width: 5px;
+    height: 18px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  
+  .legend-line {
+    width: 28px;
+    height: 0;
+    flex-shrink: 0;
+  }
+  
+  .legend-line.solid {
+    border-top: 2.5px solid #475569;
+  }
+  
+  .legend-line.dashed {
+    border-top: 2px dashed #8b5cf6;
+  }
+  
+  .legend-line.dashed.purple {
+    border-color: #d946ef;
+  }
+  
+  .legend-line.dashed.violet {
+    border-color: #8b5cf6;
+  }
+`;

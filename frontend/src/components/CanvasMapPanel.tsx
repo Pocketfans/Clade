@@ -285,28 +285,44 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
               const pos = layout.positions.get(tileId);
               if (!pos || info.density <= 0.05) continue;
               
-              // Determine color based on type
-              let baseColor = 0x2d6a4f; // default
+              // Determine color based on type - 30种覆盖物颜色
+              let baseColor = 0x3a7048; // 默认阔叶林绿
               
               switch(info.type) {
-                  case 'rainforest': baseColor = 0x004d00; break; // Deep dark green
-                  case 'forest': baseColor = 0x228b22; break; // Forest green
-                  case 'taiga': baseColor = 0x2f4f4f; break; // Dark slate gray/green
-                  case 'savanna': baseColor = 0x9acd32; break; // Yellow green
-                  case 'grassland': baseColor = 0x7cfc00; break; // Lawn green
-                  case 'tundra': baseColor = 0x8fbc8f; break; // Dark sea green (greyish)
-                  case 'swamp': baseColor = 0x556b2f; break; // Dark olive green
-                  case 'scrub': baseColor = 0x808000; break; // Olive
-                  case 'grass': baseColor = 0x7cfc00; break; // Fallback
-                  case 'mixed': baseColor = 0x556b2f; break;
-                  default: baseColor = 0x228b22;
+                  // 森林类 (7种)
+                  case 'rainforest': baseColor = 0x1a5030; break;   // 雨林 - 墨绿
+                  case 'evergreen': baseColor = 0x2a6040; break;    // 常绿林 - 深绿
+                  case 'forest': baseColor = 0x3a7048; break;       // 阔叶林 - 森林绿
+                  case 'mixed': baseColor = 0x4a8058; break;        // 混合林 - 中绿
+                  case 'taiga': baseColor = 0x3e6850; break;        // 针叶林 - 冷杉绿
+                  case 'moss_forest': baseColor = 0x4a7858; break;  // 苔藓林 - 苔绿
+                  case 'cloud_forest': baseColor = 0x3a6858; break; // 云雾林 - 雾林蓝绿
+                  
+                  // 草地类 (6种)
+                  case 'savanna': baseColor = 0xc8d060; break;      // 稀树草原 - 黄绿
+                  case 'grassland': baseColor = 0xa8d068; break;    // 草原 - 明亮草绿
+                  case 'meadow': baseColor = 0x90c878; break;       // 草甸 - 草甸绿
+                  case 'alpine_meadow': baseColor = 0x8cb878; break;// 高山草甸 - 冷草绿
+                  case 'tundra': baseColor = 0x7a9e8a; break;       // 苔原 - 灰绿
+                  case 'scrub': baseColor = 0x6a9a58; break;        // 灌木丛 - 灌木绿
+                  
+                  // 湿地类 (5种)
+                  case 'swamp': baseColor = 0x3d5a45; break;        // 沼泽 - 深沼泽绿
+                  case 'wetland': baseColor = 0x4a6a50; break;      // 湿地 - 湿地绿
+                  case 'peatland': baseColor = 0x5a5a48; break;     // 泥炭地 - 泥炭褐绿
+                  case 'mangrove': baseColor = 0x3a5840; break;     // 红树林 - 红树林绿
+                  
+                  // 草地默认
+                  case 'grass': baseColor = 0xa8d068; break;        // 草地 - 草绿
+                  default: baseColor = 0x4caf50;                     // 标准绿
               }
               
-              // Number of blobs based on density
-              // Rainforest gets more blobs
+              // Number of blobs based on density and vegetation type
               let blobMultiplier = 5;
-              if (info.type === 'rainforest') blobMultiplier = 8;
-              if (info.type === 'savanna' || info.type === 'scrub') blobMultiplier = 3;
+              if (info.type === 'rainforest' || info.type === 'cloud_forest') blobMultiplier = 8;
+              else if (info.type === 'evergreen' || info.type === 'forest') blobMultiplier = 7;
+              else if (info.type === 'savanna' || info.type === 'scrub' || info.type === 'tundra') blobMultiplier = 3;
+              else if (info.type === 'grassland' || info.type === 'meadow') blobMultiplier = 4;
               
               const blobs = Math.ceil(info.density * blobMultiplier); // 1-8 blobs per tile
               
@@ -329,10 +345,13 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
                   
                   sprite.tint = baseColor;
                   
-                  // Alpha: Rainforest is denser
+                  // Alpha: varies by vegetation type
                   let alphaBase = 0.6;
-                  if (info.type === 'rainforest') alphaBase = 0.8;
-                  if (info.type === 'savanna') alphaBase = 0.5;
+                  if (info.type === 'rainforest' || info.type === 'cloud_forest') alphaBase = 0.85;
+                  else if (info.type === 'evergreen' || info.type === 'swamp') alphaBase = 0.75;
+                  else if (info.type === 'forest' || info.type === 'mixed') alphaBase = 0.70;
+                  else if (info.type === 'savanna' || info.type === 'tundra') alphaBase = 0.50;
+                  else if (info.type === 'scrub' || info.type === 'meadow') alphaBase = 0.55;
                   
                   sprite.alpha = alphaBase + info.density * 0.2; 
                   
@@ -382,11 +401,11 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
         indicator.scale.set(scale);
         
         if (speciesCount >= 5) {
-          indicator.tint = 0x22c55e; // 绿色 - 生物多样性高
+          indicator.tint = 0x2e7d32; // 深翠绿 - 生物多样性高
         } else if (speciesCount >= 2) {
-          indicator.tint = 0x86efac; // 浅绿色
+          indicator.tint = 0x66bb6a; // 明亮绿色 - 中等多样性
         } else {
-          indicator.tint = 0xfbbf24; // 黄色 - 单一物种
+          indicator.tint = 0xf9a825; // 琥珀黄 - 单一物种
         }
         indicator.alpha = 0.7;
         
@@ -589,11 +608,11 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
           sprite.scale.set(1.0); // 稍微放大
         } else {
           if (speciesCount >= 5) {
-            sprite.tint = 0x22c55e;
+            sprite.tint = 0x2e7d32; // 深翠绿 - 生物多样性高
           } else if (speciesCount >= 2) {
-            sprite.tint = 0x86efac;
+            sprite.tint = 0x66bb6a; // 明亮绿色 - 中等多样性
           } else {
-            sprite.tint = 0xfbbf24;
+            sprite.tint = 0xf9a825; // 琥珀黄 - 单一物种
           }
           sprite.alpha = 0.7;
           const scale = Math.min(1.2, 0.5 + speciesCount * 0.1);
