@@ -1513,19 +1513,41 @@ class SpeciationService:
         common = ai_payload.get("common_name")
         description = ai_payload.get("description")
         
-        # 如果AI未返回名称或描述，使用回退逻辑
-        if not latin or not common or not description or len(str(description).strip()) < 80:
-            logger.warning(f"[分化警告] AI返回不完整，使用回退命名: latin={latin}, common={common}")
+        # 【修复】放宽description长度要求：30字即可接受（很多有效描述在50-80字）
+        # 只有完全缺失或极短时才触发回退
+        min_desc_length = 30
+        
+        # 分别检查和回退每个字段
+        needs_fallback_name = not latin or not common
+        needs_fallback_desc = not description or len(str(description).strip()) < min_desc_length
+        
+        if needs_fallback_name or needs_fallback_desc:
+            if needs_fallback_name:
+                logger.info(f"[分化] 名称不完整，使用回退命名: latin={latin}, common={common}")
+            if needs_fallback_desc:
+                logger.debug(f"[分化] 描述过短({len(str(description or '').strip())}字 < {min_desc_length}字)，补充描述")
+            
             # 回退到规则命名
             if not latin:
                 latin = self._fallback_latin_name(parent.latin_name, ai_payload)
             if not common:
                 common = self._fallback_common_name(parent.common_name, ai_payload)
-            if not description or len(str(description).strip()) < 80:
+            
+            # 【优化】描述补充逻辑：保留AI返回的内容并追加
+            if needs_fallback_desc:
                 key_innovations = ai_payload.get("key_innovations", [])
                 innovations_text = "，演化出" + "、".join(key_innovations) if key_innovations else ""
-                description = f"{parent.description}在环境压力{average_pressure:.1f}下发生适应性变化{innovations_text}。"
-                if len(description) < 120:
+                base_desc = str(description or "").strip()
+                
+                if len(base_desc) > 10:
+                    # AI返回了部分描述，追加补充
+                    description = f"{base_desc}。作为{parent.common_name}的后代{innovations_text}。"
+                else:
+                    # 完全没有描述，使用父系描述
+                    description = f"{parent.description}在环境压力{average_pressure:.1f}下发生适应性变化{innovations_text}。"
+                
+                # 确保描述不会过短
+                if len(description) < 50:
                     description = parent.description
         
         # 【防重名】检查并处理重名情况
