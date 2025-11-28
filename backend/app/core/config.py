@@ -66,11 +66,11 @@ class Settings(BaseSettings):
     # 分化冷却期（回合数）：分化后多少回合内不能再次分化
     speciation_cooldown_turns: int = Field(default=1, alias="SPECIATION_COOLDOWN_TURNS")
     # 物种密度软上限：超过此数量后分化概率开始衰减
-    species_soft_cap: int = Field(default=50, alias="SPECIES_SOFT_CAP")
-    # 基础分化概率（0-1）- 50万年/回合尺度下应更高
-    base_speciation_rate: float = Field(default=0.35, alias="BASE_SPECIATION_RATE")
+    species_soft_cap: int = Field(default=60, alias="SPECIES_SOFT_CAP")
+    # 基础分化概率（0-1）- 50万年/回合尺度下应很高
+    base_speciation_rate: float = Field(default=0.50, alias="BASE_SPECIATION_RATE")
     # 最大子种数量
-    max_offspring_count: int = Field(default=5, alias="MAX_OFFSPRING_COUNT")
+    max_offspring_count: int = Field(default=6, alias="MAX_OFFSPRING_COUNT")
     
     # ========== 遗传距离与基因交流平衡参数 ==========
     # 时间分化分母（N回合达到最大时间距离）：30表示30回合(1500万年)完全分化

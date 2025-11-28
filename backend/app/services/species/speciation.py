@@ -218,12 +218,16 @@ class SpeciationService:
             resource_pressure = result.resource_pressure
             
             # 条件1：计算该物种的动态分化门槛
-            # 【平衡优化v3】降低种群门槛系数从1.6到1.3，更容易触发分化
+            # 【平衡优化v4】直接使用基础门槛，不再乘以系数
             base_threshold = self._calculate_speciation_threshold(species)
-            min_population = int(base_threshold * 1.3)
+            min_population = base_threshold  # 去掉1.3倍系数
             
             # 【改进】使用候选地块的种群，而非全局种群
             if candidate_population < min_population:
+                logger.debug(
+                    f"[分化跳过-种群不足] {species.common_name}: "
+                    f"种群{candidate_population:,} < 门槛{min_population:,}"
+                )
                 continue
             
             # 条件2：演化潜力（放宽门槛 + 累积压力补偿）
@@ -241,20 +245,31 @@ class SpeciationService:
                 )
                 continue
             
-            # 【平衡优化v3】进一步放宽分化条件，符合50万年尺度的生物学预期
-            # 演化潜力≥0.25（原0.35），或累积分化压力≥0.15（原0.2）
-            # 生物学依据：50万年足够产生显著的遗传分化
-            if evo_potential < 0.25 and speciation_pressure < 0.15:
+            # 【平衡优化v4】几乎所有物种都有分化潜力
+            # 演化潜力≥0.15 或 累积分化压力≥0.10
+            # 生物学依据：50万年尺度下，几乎任何物种都会产生遗传分化
+            if evo_potential < 0.15 and speciation_pressure < 0.10:
+                logger.debug(
+                    f"[分化跳过-潜力不足] {species.common_name}: "
+                    f"演化潜力{evo_potential:.2f} < 0.15, 累积压力{speciation_pressure:.2f} < 0.10"
+                )
                 continue
             
+            # 记录通过初步检查的物种
+            logger.info(
+                f"[分化候选] {species.common_name}: "
+                f"种群={candidate_population:,}, 门槛={min_population:,}, "
+                f"演化潜力={evo_potential:.2f}, 累积压力={speciation_pressure:.2f}"
+            )
+            
             # 条件3：压力或资源饱和
-            # 【改进】地理隔离本身就是强分化条件
-            # 【平衡优化v3】进一步降低压力阈值
-            # 生物学依据：即使轻微的环境压力也能在50万年内驱动分化
+            # 【平衡优化v4】大幅降低压力阈值，让分化更容易发生
+            # 生物学依据：50万年尺度下，任何环境变化都足以驱动分化
             has_pressure = (
-                (0.8 <= average_pressure <= 15.0) or  # 降低到0.8（原1.2）
-                (resource_pressure > 0.5) or           # 降低到0.5（原0.7）
-                is_isolated  # 地理/生态隔离直接满足条件
+                (average_pressure >= 0.3) or  # 极低阈值，几乎任何压力都算
+                (resource_pressure > 0.3) or  # 资源压力阈值也降低
+                is_isolated or                # 地理/生态隔离
+                (evo_potential >= 0.4)        # 高演化潜力本身就是分化驱动力
             )
             
             # 【新增】植物专用分化条件
@@ -287,20 +302,19 @@ class SpeciationService:
                         )
             
             # 自然辐射演化（繁荣物种分化）
-            # 【平衡优化v3】大幅提高辐射演化概率，体现50万年时间尺度下的适应性辐射
-            # 生物学依据：寒武纪大爆发等事件表明，有利条件下物种分化非常迅速
+            # 【平衡优化v4】进一步提高辐射演化概率
+            # 生物学依据：50万年足够让任何繁荣物种产生分化
             if not has_pressure:
-                pop_factor = min(1.0, survivors / (min_population * 2.0))  # 降低阈值
-                # 基础概率提高到0.12，加上种群因子最高可达0.25
-                radiation_chance = 0.12 + (pop_factor * 0.13) + (speciation_pressure * 0.30)
+                pop_factor = min(1.0, survivors / min_population)  # 去掉2.0倍要求
+                # 基础概率提高到0.25，加上种群因子最高可达0.45
+                radiation_chance = 0.25 + (pop_factor * 0.20) + (speciation_pressure * 0.35)
                 
-                # 【新增】植物辐射演化条件略有不同
+                # 植物辐射演化更容易
                 if is_plant:
-                    # 植物更容易通过种群扩张触发辐射演化（光合生物的生态位分化更容易）
-                    radiation_chance += 0.05
+                    radiation_chance += 0.08
                 
-                # 降低种群门槛到1.1倍
-                if survivors > min_population * 1.1 and random.random() < radiation_chance:
+                # 只要种群达到门槛就有机会
+                if survivors >= min_population and random.random() < radiation_chance:
                     has_pressure = True
                     speciation_type = "辐射演化"
                     logger.info(f"[辐射演化] {species.common_name} 触发辐射演化 (候选种群:{survivors:,}, 概率:{radiation_chance:.1%})")
@@ -395,18 +409,29 @@ class SpeciationService:
             # 每回合满足条件但未分化的物种，下回合分化概率+10%
             speciation_chance = base_chance + speciation_bonus + speciation_pressure
             
-            if random.random() > speciation_chance:
+            # 记录分化概率计算详情
+            logger.info(
+                f"[分化概率] {species.common_name}: "
+                f"基础={base_chance:.1%} + 加成={speciation_bonus:.1%} + 累积={speciation_pressure:.1%} "
+                f"= 总概率{speciation_chance:.1%} (类型:{speciation_type})"
+            )
+            
+            roll = random.random()
+            if roll > speciation_chance:
                 # 【平衡优化v3】分化失败时累积压力提升更快（0.08），上限提高（0.4）
-                # 这样需要5回合达到上限，模拟演化压力的持续积累
-                # 生物学依据：持续的选择压力会加速遗传分化
                 new_pressure = min(0.4, speciation_pressure + 0.08)
                 species.morphology_stats["speciation_pressure"] = new_pressure
                 species_repository.upsert(species)
-                logger.debug(
-                    f"[分化累积] {species.common_name} 分化失败, "
+                logger.info(
+                    f"[分化失败] {species.common_name}: 掷骰{roll:.2f} > 概率{speciation_chance:.1%}, "
                     f"累积压力: {speciation_pressure:.1%} → {new_pressure:.1%}"
                 )
                 continue
+            
+            # 分化成功！
+            logger.info(
+                f"[分化成功!] {species.common_name}: 掷骰{roll:.2f} <= 概率{speciation_chance:.1%}"
+            )
             
             # 分化成功，重置累积压力，并记录分化时间（用于冷却期计算）
             species.morphology_stats["speciation_pressure"] = 0.0
