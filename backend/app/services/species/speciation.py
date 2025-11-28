@@ -240,15 +240,17 @@ class SpeciationService:
                 )
                 continue
             
-            # 放宽条件：演化潜力≥0.5，或累积分化压力≥0.3
-            if evo_potential < 0.5 and speciation_pressure < 0.3:
+            # 【平衡优化v2】放宽分化条件，让演化更活跃
+            # 演化潜力≥0.35（原0.5），或累积分化压力≥0.2（原0.3）
+            if evo_potential < 0.35 and speciation_pressure < 0.2:
                 continue
             
             # 条件3：压力或资源饱和
             # 【改进】地理隔离本身就是强分化条件
+            # 【平衡优化v2】降低压力阈值，让更多情况触发分化
             has_pressure = (
-                (1.5 <= average_pressure <= 15.0) or 
-                (resource_pressure > 0.8) or
+                (1.2 <= average_pressure <= 15.0) or  # 原1.5
+                (resource_pressure > 0.7) or           # 原0.8
                 is_isolated  # 地理/生态隔离直接满足条件
             )
             
@@ -282,16 +284,19 @@ class SpeciationService:
                         )
             
             # 自然辐射演化（繁荣物种分化）
+            # 【平衡优化v2】提高辐射演化概率，让和平时期也有分化
             if not has_pressure:
-                pop_factor = min(1.0, survivors / (min_population * 3))
-                radiation_chance = 0.03 + (pop_factor * 0.05) + (speciation_pressure * 0.2)
+                pop_factor = min(1.0, survivors / (min_population * 2.5))  # 原3
+                # 基础概率从0.03提高到0.06，让辐射演化更频繁
+                radiation_chance = 0.06 + (pop_factor * 0.08) + (speciation_pressure * 0.25)
                 
                 # 【新增】植物辐射演化条件略有不同
                 if is_plant:
                     # 植物更容易通过种群扩张触发辐射演化
-                    radiation_chance += 0.02  # 植物基础辐射概率略高
+                    radiation_chance += 0.03  # 植物基础辐射概率略高（原0.02）
                 
-                if survivors > min_population * 1.5 and random.random() < radiation_chance:
+                # 降低种群门槛从1.5倍到1.2倍
+                if survivors > min_population * 1.2 and random.random() < radiation_chance:
                     has_pressure = True
                     speciation_type = "辐射演化"
                     logger.info(f"[辐射演化] {species.common_name} 触发辐射演化 (候选种群:{survivors:,}, 概率:{radiation_chance:.1%})")

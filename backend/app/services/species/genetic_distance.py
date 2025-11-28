@@ -132,13 +132,21 @@ class GeneticDistanceCalculator:
     def _time_divergence(self, sp1: Species, sp2: Species) -> float:
         """基于分化时间估算遗传距离
         
-        假设每50回合遗传距离增加0.1
+        【平衡优化】加速时间分化积累，让50万年/回合的尺度更合理：
+        - 默认40回合（2000万年）达到最大时间距离
+        - 这符合现实中许多物种群的辐射演化时间尺度
+        - 例：达尔文雀在~200万年内分化出13种
         """
+        from ...core.config import get_settings
+        _settings = get_settings()
+        
         common_ancestor_turn = self._find_common_ancestor_turn(sp1, sp2)
         current_turn = max(sp1.created_turn, sp2.created_turn)
         
         divergence_turns = current_turn - common_ancestor_turn
-        time_distance = min(1.0, divergence_turns / 500)
+        # 使用配置的时间分化分母（默认40，原本是500）
+        time_scale = _settings.time_divergence_scale
+        time_distance = min(1.0, divergence_turns / time_scale)
         
         return time_distance
     
@@ -298,6 +306,10 @@ class GeneticDistanceCalculator:
                 organ_diff_matrix[j, i] = organ_diff_matrix[i, j]
         
         # ============ 计算时间差异（需要逐对）============
+        from ...core.config import get_settings
+        _settings = get_settings()
+        time_scale = _settings.time_divergence_scale  # 默认40，原本是500
+        
         time_diff_matrix = np.zeros((n, n))
         for i in range(n):
             for j in range(i + 1, n):
@@ -307,7 +319,7 @@ class GeneticDistanceCalculator:
                 )
                 current_turn = max(created_turns[i], created_turns[j])
                 divergence = current_turn - common_turn
-                time_diff_matrix[i, j] = min(1.0, divergence / 500)
+                time_diff_matrix[i, j] = min(1.0, divergence / time_scale)
                 time_diff_matrix[j, i] = time_diff_matrix[i, j]
         
         # ============ 组合距离（根据是否有embedding调整权重）============

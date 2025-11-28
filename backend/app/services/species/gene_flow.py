@@ -4,12 +4,18 @@
 - 只有在同一地块或相邻地块的物种才能发生基因流动
 - 地块重叠程度影响基因流动强度
 - 完全地理隔离的物种无法基因交流
+
+【平衡优化v2】调整阈值让分化更快独立：
+- 降低遗传距离阈值（0.4→0.28），更快停止基因交流
+- 放宽地理隔离判断（0.05→0.12），适度重叠仍可隔离
+- 增加基础流速，让有交流时效果更明显
 """
 from __future__ import annotations
 
 import logging
 from typing import Sequence
 
+from ...core.config import get_settings
 from ...models.genus import Genus
 from ...models.species import Species
 from ...models.environment import HabitatPopulation
@@ -78,6 +84,11 @@ class GeneFlowService:
         - 只有栖息地重叠的物种才能发生基因流动
         - 重叠程度影响基因流动强度
         
+        【平衡优化v2】使用配置参数：
+        - 遗传距离阈值从0.4降到0.28，更快停止交流促进分化
+        - 地理重叠阈值从0.05升到0.12，放宽隔离判断
+        - 基础流速从0.02升到0.03，有交流时效果更显著
+        
         Args:
             genus: 属对象（包含遗传距离矩阵）
             species_list: 该属下的物种列表
@@ -85,6 +96,10 @@ class GeneFlowService:
         Returns:
             发生基因流动的物种对数量
         """
+        _settings = get_settings()
+        distance_threshold = _settings.gene_flow_distance_threshold  # 默认0.28
+        overlap_threshold = _settings.gene_flow_overlap_threshold    # 默认0.12
+        
         flow_count = 0
         
         # 构建栖息地缓存
@@ -92,27 +107,27 @@ class GeneFlowService:
         
         for i, sp1 in enumerate(species_list):
             for sp2 in species_list[i+1:]:
-                # 1. 检查遗传距离
+                # 1. 检查遗传距离（使用配置阈值）
                 distance_key = self._make_distance_key(sp1.lineage_code, sp2.lineage_code)
                 distance = genus.genetic_distances.get(distance_key, 0.5)
                 
-                if distance > 0.4:
+                if distance > distance_threshold:
                     continue
                 
-                # 2. 【新增】检查地理重叠
+                # 2. 检查地理重叠（使用配置阈值）
                 habitat_overlap = self._calculate_habitat_overlap(sp1, sp2)
                 
-                # 完全地理隔离：无基因流动
-                if habitat_overlap < 0.05:
+                # 地理隔离：无基因流动
+                if habitat_overlap < overlap_threshold:
                     logger.debug(
                         f"[基因流动] {sp1.common_name} 与 {sp2.common_name} "
-                        f"地理隔离（重叠={habitat_overlap:.2f}），跳过"
+                        f"地理隔离（重叠={habitat_overlap:.2f}<{overlap_threshold}），跳过"
                     )
                     continue
                 
                 # 3. 计算基因流动速率
-                # 基础速率 × 地理重叠因子
-                base_rate = 0.02 * (1.0 - distance / 0.4)
+                # 基础速率提高到0.03，让有交流时效果更明显
+                base_rate = 0.03 * (1.0 - distance / distance_threshold)
                 flow_rate = base_rate * habitat_overlap
                 
                 self._apply_flow_between(sp1, sp2, flow_rate)

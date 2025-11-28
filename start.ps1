@@ -319,16 +319,29 @@ if ($portBackend -or $portFrontend) {
 Write-Host ""
 Write-Status $lang.start ($lang.startingBackend -f $BACKEND_PORT) $cWarning
 
-$be = "Set-Location '$scriptDir\backend'; & .\venv\Scripts\Activate.ps1; python -m uvicorn app.main:app --reload --host 0.0.0.0 --port $BACKEND_PORT"
-Start-Process powershell -ArgumentList "-NoExit", "-Command", $be
+# 处理带空格的路径
+$backendPath = "$scriptDir\backend"
+$beCmd = @"
+cd '$backendPath'
+& '.\venv\Scripts\Activate.ps1'
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port $BACKEND_PORT
+"@
+Start-Process powershell -ArgumentList "-NoExit", "-Command", $beCmd
 
 Start-Sleep -Seconds 4
 
 Write-Status $lang.start ($lang.startingFrontend -f $FRONTEND_PORT) $cWarning
 
-# 设置环境变量传递给前端
-$fe = "Set-Location '$scriptDir\frontend'; `$env:BACKEND_PORT='$BACKEND_PORT'; `$env:FRONTEND_PORT='$FRONTEND_PORT'; npm run dev -- --port $FRONTEND_PORT"
-Start-Process powershell -ArgumentList "-NoExit", "-Command", $fe
+# 设置环境变量传递给前端（处理带空格的路径）
+$frontendPath = "$scriptDir\frontend"
+# 使用 -File 或分开命令避免转义问题
+$feCmd = @"
+cd '$frontendPath'
+`$env:BACKEND_PORT='$BACKEND_PORT'
+`$env:FRONTEND_PORT='$FRONTEND_PORT'
+npm run dev -- --port $FRONTEND_PORT
+"@
+Start-Process powershell -ArgumentList "-NoExit", "-Command", $feCmd
 
 # ==================== Step 6: Complete ====================
 Write-Step "6/6" $lang.step6

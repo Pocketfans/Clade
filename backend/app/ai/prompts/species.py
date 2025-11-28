@@ -694,5 +694,86 @@ marine | deep_sea | coastal | freshwater | amphibious | terrestrial | aerial
 {{
     "new_description": "更新后的植物学描述..."
 }}
+""",
+
+    # ==================== 杂交物种生成Prompt ====================
+    "hybridization": """你是演化生物学家，负责为物种杂交生成新物种的详细数据。
+
+**必须返回纯JSON格式。**
+
+=== 杂交亲本信息 ===
+【亲本A】
+代码：{parent1_lineage}
+学名：{parent1_latin_name} ({parent1_common_name})
+栖息地：{parent1_habitat}
+营养级：T{parent1_trophic:.1f}
+描述：{parent1_description}
+
+【亲本B】
+代码：{parent2_lineage}
+学名：{parent2_latin_name} ({parent2_common_name})
+栖息地：{parent2_habitat}
+营养级：T{parent2_trophic:.1f}
+描述：{parent2_description}
+
+=== 杂交背景 ===
+遗传距离：{genetic_distance:.2f}（0=完全相同，1=完全不同）
+预期可育性：{fertility:.0%}
+杂交种编码：{hybrid_code}
+
+=== 杂交物种命名规则 ===
+1. **拉丁学名**：使用 "Genus × epithet" 格式
+   - 属名继承自亲本A
+   - 种加词应反映杂交特征，可组合双亲种加词的词根
+   - 例如：亲本 "Protoflagella marina" × "Protoflagella thermalis" → "Protoflagella × maritherm"
+   
+2. **中文俗名**：简洁明了，体现杂交特征
+   - 格式：[核心特征]杂交种 或 [亲本简称]杂种
+   - 例如："海热杂交鞭毛虫" 或 "鞭毛杂交种"
+   - 不要太长，最多8个字
+
+=== 杂交遗传规则 ===
+1. **杂交优势**：某些特质可能超过双亲（但需权衡）
+2. **中间型**：大多数特质取双亲平均值±小幅波动
+3. **隐性表达**：部分隐性特质可能在杂交种中表达
+4. **权衡代价**：杂交优势必须伴随某些特质的下降
+5. **营养级**：继承双亲中较高者±0.3
+
+=== 输出格式 ===
+{{
+    "latin_name": "Genus × epithet（杂交种学名）",
+    "common_name": "简洁的中文俗名（最多8字）",
+    "description": "100-150字，描述杂交种的形态特征、遗传来源、杂交优势和生态位",
+    "habitat_type": "从双亲栖息地中选择或取交集",
+    "trophic_level": 双亲较高者±0.3,
+    "diet_type": "继承双亲食性",
+    "key_traits": ["2-3个杂交优势特征"],
+    "trait_balance": {{
+        "优势特质": "+数值（杂交优势）",
+        "代价特质": "-数值（权衡代价）"
+    }},
+    "hybrid_description": "30-50字的杂交事件描述"
+}}
+
+=== 示例 ===
+亲本A：海洋鞭毛虫（耐盐性高）
+亲本B：热泉鞭毛虫（耐热性高）
+{{
+    "latin_name": "Protoflagella × halotherm",
+    "common_name": "海热杂交虫",
+    "description": "海洋鞭毛虫与热泉鞭毛虫的杂交后代，继承了双亲的环境耐受特征。具有较高的耐盐性和耐热性，能够在热泉口附近的高盐度热水中生存。但繁殖速度较双亲均有所下降，杂交优势主要体现在环境适应范围的扩大上。",
+    "habitat_type": "marine",
+    "trophic_level": 2.0,
+    "diet_type": "herbivore",
+    "key_traits": ["双重环境耐受", "扩展生态位"],
+    "trait_balance": {{
+        "耐盐性": "+0.5",
+        "耐热性": "+0.3",
+        "繁殖速度": "-0.6"
+    }},
+    "hybrid_description": "海洋与热泉生态型杂交产生具有广泛环境耐受性的新类型"
+}}
+
+只返回JSON对象。
 """
 }

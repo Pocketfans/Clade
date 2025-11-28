@@ -231,7 +231,7 @@ reproduction_service = ReproductionService(
 )
 adaptation_service = AdaptationService(model_router)
 genetic_distance_calculator = GeneticDistanceCalculator()
-hybridization_service = HybridizationService(genetic_distance_calculator)
+hybridization_service = HybridizationService(genetic_distance_calculator, router=model_router)
 gene_flow_service = GeneFlowService()
 save_manager = SaveManager(settings.saves_dir, embedding_service=embedding_service)
 species_generator = SpeciesGenerator(model_router)
@@ -2693,14 +2693,14 @@ def get_hybridization_candidates() -> dict:
 
 
 @router.post("/hybridization/execute", tags=["hybridization"])
-def execute_hybridization(request: dict) -> dict:
-    """执行杂交
+async def execute_hybridization(request: dict) -> dict:
+    """执行杂交（使用AI生成杂交物种）
     
     Body:
     - species_a: 物种A的lineage_code
     - species_b: 物种B的lineage_code
     
-    消耗能量点。
+    消耗能量点。使用LLM生成杂交物种的名称、描述和属性。
     """
     code_a = request.get("species_a", "")
     code_b = request.get("species_b", "")
@@ -2745,8 +2745,15 @@ def execute_hybridization(request: dict) -> dict:
     if not success:
         raise HTTPException(status_code=400, detail=msg)
     
-    # 执行杂交
-    hybrid = hybridization_service.create_hybrid(species_a, species_b, current_turn)
+    # 收集现有编码（用于杂交种编码生成）
+    all_species = species_repository.list_species()
+    existing_codes = {sp.lineage_code for sp in all_species}
+    
+    # 执行杂交（使用异步AI调用）
+    hybrid = await hybridization_service.create_hybrid_async(
+        species_a, species_b, current_turn, 
+        existing_codes=existing_codes
+    )
     if not hybrid:
         # 退还能量（杂交失败）
         energy_service.add_energy(cost, "杂交失败退还")

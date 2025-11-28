@@ -976,6 +976,21 @@ class SimulationEngine:
                 logger.info(f"基因流动完成: {gene_flow_count}对物种发生基因流动")
                 self._emit_event("info", f"基因流动完成: {gene_flow_count}对物种发生基因流动", "进化")
                 
+                # 8.6b. 【平衡优化v2】遗传漂变
+                logger.info(f"应用遗传漂变...")
+                drift_count = self._apply_genetic_drift(species_batch)
+                if drift_count > 0:
+                    logger.info(f"遗传漂变完成: {drift_count}个属更新了遗传距离")
+                
+                # 8.6c. 【平衡优化v2】自动杂交检测（使用AI生成杂交物种）
+                logger.info(f"检测自动杂交...")
+                auto_hybrids = await self._check_auto_hybridization_async(species_batch, self.turn_counter)
+                if auto_hybrids:
+                    logger.info(f"自动杂交完成: 产生了{len(auto_hybrids)}个杂交种")
+                    self._emit_event("info", f"自然杂交产生了{len(auto_hybrids)}个杂交种", "杂交")
+                    # 将杂交种加入物种列表
+                    species_batch.extend(auto_hybrids)
+                
                 # 8.7. 亚种晋升检查
                 logger.info(f"检查亚种晋升...")
                 self._emit_event("stage", "⬆️ 检查亚种晋升", "物种")
@@ -1539,7 +1554,24 @@ class SimulationEngine:
             )
         
         ecosystem_metrics = self._compute_ecosystem_metrics(mortality)
-        # 【优化】V2报告生成器支持 branching_events 参数用于事件驱动叙事
+        
+        # 【新增】提取物种详情（器官、能力、里程碑等）用于明星物种展示
+        species_details = {}
+        for item in mortality:
+            sp = item.species
+            species_details[sp.lineage_code] = {
+                'organs': sp.organs or {},
+                'capabilities': sp.capabilities or [],
+                'abstract_traits': sp.abstract_traits or {},
+                'achieved_milestones': getattr(sp, 'achieved_milestones', []) or [],
+                'life_form_stage': getattr(sp, 'life_form_stage', 0),
+                'growth_form': getattr(sp, 'growth_form', ''),
+                'trophic_level': sp.trophic_level,
+                'habitat_type': sp.habitat_type,
+                'history_highlights': getattr(sp, 'history_highlights', []) or [],
+            }
+        
+        # 【优化】V2报告生成器支持纪录片旁白风格
         narrative = await self.report_builder.build_turn_narrative_async(
             species_snapshots,
             pressures,
@@ -1548,8 +1580,10 @@ class SimulationEngine:
             major_events,
             map_changes,
             migration_events,
-            branching_events=branching_events,  # 【新增】传递分化事件
+            branching_events=branching_events,
             stream_callback=stream_callback,
+            species_details=species_details,
+            turn_index=self.turn_counter,  # 【新增】传递回合索引用于纪录片叙事
         )
         
         # 获取当前地图状态（确保读取最新更新的状态）
@@ -1769,6 +1803,171 @@ class SimulationEngine:
         
         return total_flow_count
     
+    def _apply_genetic_drift(self, species_batch: list) -> int:
+        """应用遗传漂变
+        
+        【平衡优化v2】每回合对同属物种间的遗传距离增加漂变量，
+        模拟50万年时间内的突变积累。
+        
+        这使得即使有基因交流，物种间的遗传距离也会逐渐增加，
+        最终超过基因交流阈值，实现真正的分化。
+        
+        Returns:
+            更新了遗传距离的属数量
+        """
+        from ..core.config import get_settings
+        _settings = get_settings()
+        drift_per_turn = _settings.genetic_drift_per_turn  # 默认0.008
+        
+        # 按属分组
+        genus_codes = set()
+        for species in species_batch:
+            if species.genus_code and species.status == "alive":
+                genus_codes.add(species.genus_code)
+        
+        updated_count = 0
+        for genus_code in genus_codes:
+            genus = genus_repository.get_by_code(genus_code)
+            if not genus or not genus.genetic_distances:
+                continue
+            
+            # 对所有距离增加漂变量
+            new_distances = {}
+            for key, dist in genus.genetic_distances.items():
+                # 漂变量随距离衰减（距离远的物种漂变效应小）
+                effective_drift = drift_per_turn * (1.0 - dist * 0.3)
+                new_dist = min(1.0, dist + effective_drift)
+                new_distances[key] = new_dist
+            
+            if new_distances:
+                genus_repository.update_distances(genus_code, new_distances, self.turn_counter)
+                updated_count += 1
+                logger.debug(f"[遗传漂变] {genus_code}属更新了{len(new_distances)}对物种的遗传距离")
+        
+        return updated_count
+    
+    async def _check_auto_hybridization_async(self, species_batch: list, turn_index: int) -> list:
+        """异步自动杂交检测（使用AI生成杂交物种）
+        
+        【平衡优化v2】每回合检测同属近缘物种，有一定概率自动产生杂交种。
+        这让杂交不再只是玩家手动操作，而是自然发生的演化事件。
+        【AI集成】使用LLM生成杂交物种的名称、描述和属性。
+        
+        条件：
+        1. 同属物种
+        2. 遗传距离 < 杂交阈值
+        3. 地理分布有重叠
+        4. 随机概率检测
+        
+        Returns:
+            新产生的杂交种列表
+        """
+        import random
+        from ..core.config import get_settings
+        from ..services.species.hybridization import HybridizationService
+        from ..services.species.genetic_distance import GeneticDistanceCalculator
+        
+        _settings = get_settings()
+        auto_chance = _settings.auto_hybridization_chance  # 默认0.08
+        
+        # 初始化杂交服务（传入router以启用AI生成）
+        genetic_calc = GeneticDistanceCalculator()
+        hybrid_service = HybridizationService(genetic_calc, router=self.router)
+        
+        # 按属分组
+        genus_groups = {}
+        for species in species_batch:
+            if species.status != "alive" or not species.genus_code:
+                continue
+            if species.genus_code not in genus_groups:
+                genus_groups[species.genus_code] = []
+            genus_groups[species.genus_code].append(species)
+        
+        new_hybrids = []
+        
+        # 收集已存在的编码（用于杂交种编码生成）
+        existing_codes = {sp.lineage_code for sp in species_batch}
+        
+        # 收集待处理的杂交任务
+        hybridization_tasks = []
+        
+        for genus_code, species_list in genus_groups.items():
+            if len(species_list) < 2:
+                continue
+            
+            genus = genus_repository.get_by_code(genus_code)
+            if not genus:
+                continue
+            
+            # 检查每对物种
+            for i, sp1 in enumerate(species_list):
+                for sp2 in species_list[i+1:]:
+                    # 随机概率检测
+                    if random.random() > auto_chance:
+                        continue
+                    
+                    # 检查杂交可行性
+                    distance_key = f"{min(sp1.lineage_code, sp2.lineage_code)}-{max(sp1.lineage_code, sp2.lineage_code)}"
+                    distance = genus.genetic_distances.get(distance_key, 0.5)
+                    
+                    can_hybrid, fertility = hybrid_service.can_hybridize(sp1, sp2, distance)
+                    if not can_hybrid:
+                        continue
+                    
+                    # 种群检查：双方都需要有一定种群
+                    pop1 = sp1.morphology_stats.get("population", 0) or 0
+                    pop2 = sp2.morphology_stats.get("population", 0) or 0
+                    if pop1 < 100 or pop2 < 100:
+                        continue
+                    
+                    # 添加到任务列表
+                    hybridization_tasks.append({
+                        "sp1": sp1,
+                        "sp2": sp2,
+                        "distance": distance,
+                        "fertility": fertility,
+                        "pop1": pop1,
+                        "pop2": pop2,
+                    })
+                    
+                    # 每属每回合最多产生1个自动杂交种
+                    break
+                else:
+                    continue
+                break
+        
+        # 批量处理杂交任务（使用异步AI调用）
+        for task in hybridization_tasks:
+            sp1, sp2 = task["sp1"], task["sp2"]
+            distance, fertility = task["distance"], task["fertility"]
+            pop1, pop2 = task["pop1"], task["pop2"]
+            
+            # 异步创建杂交种（传入现有编码集合以生成唯一编码）
+            hybrid = await hybrid_service.create_hybrid_async(
+                sp1, sp2, turn_index, distance, existing_codes
+            )
+            if hybrid:
+                # 将新生成的编码加入集合，防止重复
+                existing_codes.add(hybrid.lineage_code)
+                # 设置初始种群（较小的亲本种群的10%）
+                initial_pop = int(min(pop1, pop2) * 0.1)
+                hybrid.morphology_stats["population"] = max(50, initial_pop)
+                
+                species_repository.upsert(hybrid)
+                new_hybrids.append(hybrid)
+                
+                logger.info(
+                    f"[自动杂交] {sp1.common_name} × {sp2.common_name} "
+                    f"产生杂交种 {hybrid.common_name} (可育性:{fertility:.0%})"
+                )
+                self._emit_event(
+                    "info", 
+                    f"🧬 自然杂交！{sp1.common_name} × {sp2.common_name} → {hybrid.common_name}",
+                    "杂交"
+                )
+        
+        return new_hybrids
+    
     def _check_subspecies_promotion(self, species_batch: list, turn_index: int) -> int:
         """检查亚种是否应晋升为独立种"""
         promotion_count = 0
@@ -1779,7 +1978,8 @@ class SimulationEngine:
             
             divergence_turns = turn_index - species.created_turn
             
-            if divergence_turns >= 15:
+            # 【平衡优化v2】缩短晋升时间从15回合到10回合
+            if divergence_turns >= 10:
                 species.taxonomic_rank = "species"
                 species_repository.upsert(species)
                 promotion_count += 1
