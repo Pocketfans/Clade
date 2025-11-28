@@ -343,7 +343,7 @@ $feCmd = @"
 Set-Location -LiteralPath '$frontendPath'
 `$env:BACKEND_PORT='$BACKEND_PORT'
 `$env:FRONTEND_PORT='$FRONTEND_PORT'
-npm run dev -- --port $FRONTEND_PORT
+npx vite --port $FRONTEND_PORT --config vite.config.ts
 "@
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $feCmd -WorkingDirectory $frontendPath
 

@@ -470,6 +470,22 @@ export async function abortCurrentTasks(): Promise<AbortTasksResult> {
 }
 
 /**
+ * 跳过当前AI步骤，使用fallback规则
+ * 当AI步骤卡住太久时使用
+ */
+export async function skipCurrentAIStep(): Promise<AbortTasksResult> {
+  try {
+    const res = await fetch("/api/tasks/skip-ai-step", { method: "POST" });
+    if (!res.ok) {
+      return { success: false, message: `请求失败 (${res.status})` };
+    }
+    return await res.json();
+  } catch (error: any) {
+    return { success: false, message: error.message || "网络错误" };
+  }
+}
+
+/**
  * 获取当前 AI 任务的诊断信息
  */
 export async function getTaskDiagnostics(): Promise<TaskDiagnostics> {

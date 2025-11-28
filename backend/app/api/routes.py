@@ -2393,6 +2393,60 @@ async def abort_current_tasks() -> dict:
         }
 
 
+@router.post("/tasks/skip-ai-step", tags=["system"])
+async def skip_current_ai_step() -> dict:
+    """跳过当前AI步骤，使用fallback规则
+    
+    当AI步骤卡住太久时，可以调用此API：
+    - 设置跳过标志
+    - 强制关闭当前连接
+    - 触发超时异常，让代码使用fallback逻辑
+    
+    这会让当前的AI步骤（如报告生成、物种分化）立即使用规则fallback完成
+    """
+    from ..main import get_simulation_engine
+    
+    try:
+        engine = get_simulation_engine()
+        router = engine.router
+        
+        # 设置跳过标志（如果引擎支持）
+        if hasattr(engine, '_skip_current_ai_step'):
+            engine._skip_current_ai_step = True
+        
+        # 获取诊断信息
+        diagnostics = router.get_diagnostics()
+        
+        # 强制关闭客户端连接，触发超时
+        old_client = router._client_session
+        router._client_session = None
+        
+        if old_client and not old_client.is_closed:
+            try:
+                await old_client.aclose()
+                logger.info("[跳过AI] 已关闭HTTP连接，触发fallback")
+            except Exception as e:
+                logger.warning(f"[跳过AI] 关闭连接时出错: {e}")
+        
+        # 发送跳过事件通知前端
+        push_simulation_event("ai_skip", "⏭️ 已跳过当前AI步骤，使用规则fallback", "系统")
+        
+        logger.warning(f"[跳过AI] 用户请求跳过，活跃请求: {diagnostics['active_requests']}")
+        
+        return {
+            "success": True,
+            "message": "已触发跳过，当前AI步骤将使用fallback完成",
+            "active_requests": diagnostics['active_requests'],
+            "skipped_at": "current_stage"
+        }
+    except Exception as e:
+        logger.error(f"[跳过AI] 跳过失败: {e}")
+        return {
+            "success": False,
+            "message": f"跳过失败: {str(e)}"
+        }
+
+
 @router.get("/tasks/diagnostics", tags=["system"])
 def get_task_diagnostics() -> dict:
     """获取当前 AI 任务的诊断信息

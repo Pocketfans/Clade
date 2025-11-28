@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { connectToEventStream, abortCurrentTasks } from "../services/api";
+import { connectToEventStream, abortCurrentTasks, skipCurrentAIStep } from "../services/api";
 
 interface Props {
   message?: string;
