@@ -273,7 +273,7 @@ export function SpeciesPanel({
           <Users size={16} />
         </div>
         <div className="sp-pop-info">
-          <span className="sp-pop-label">总种群数量</span>
+          <span className="sp-pop-label">总生物量 (kg)</span>
           <span className="sp-pop-value">{formatPopulation(totalPopulation)}</span>
         </div>
         <div className="sp-pop-bar">
@@ -602,7 +602,7 @@ export function SpeciesPanel({
                 <Users size={18} />
               </div>
               <div className="sp-dash-content">
-                <span className="sp-dash-label">种群规模</span>
+                <span className="sp-dash-label">生物量 (kg)</span>
                 <span className="sp-dash-value">{formatPopulation(snapshot.population)}</span>
               </div>
               <div className="sp-dash-sparkline" style={{ background: role.gradient }} />

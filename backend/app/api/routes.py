@@ -9,6 +9,7 @@ import asyncio
 from queue import Queue
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 from fastapi.responses import StreamingResponse
@@ -635,8 +636,8 @@ def _cleanup_old_autosaves(base_save_name: str, max_slots: int) -> None:
         logger.warning(f"[自动保存] 清理旧存档失败: {str(e)}")
 
 
-@router.post("/turns/run", response_model=list[TurnReport])
-async def run_turns(command: TurnCommand) -> list[TurnReport]:
+@router.post("/turns/run")  # 移除 response_model，避免 Pydantic 验证阻塞
+async def run_turns(command: TurnCommand):
     import traceback
     import time as time_module
     global simulation_running, autosave_counter
@@ -708,32 +709,48 @@ async def run_turns(command: TurnCommand) -> list[TurnReport]:
             total_species = sum(len(r.species) for r in reports)
             logger.info(f"[响应准备] 返回 {len(reports)} 个报告, 共 {total_species} 个物种快照")
         
-        # 【优化】先返回响应，再进行自动保存（避免阻塞前端）
-        # 使用 asyncio.create_task 将自动保存放到后台执行
-        latest_turn = reports[-1].turn_index if reports else 0
-        
-        async def background_tasks():
-            """后台任务：自动保存等不阻塞响应的操作"""
-            try:
-                _perform_autosave(latest_turn)
-            except Exception as e:
-                logger.warning(f"[后台任务] 自动保存失败: {e}")
-        
-        # 启动后台任务（不等待完成）
-        asyncio.create_task(background_tasks())
-        
-        # 【关键】在返回响应前发送完成事件
+        # 【关键】先发送完成事件，让前端知道推演已完成
         push_simulation_event("complete", f"推演完成！生成了 {len(reports)} 个报告", "系统")
-        # 同时发送 turn_complete 事件（前端同时检查两种事件类型）
         push_simulation_event("turn_complete", f"回合推演完成", "系统")
         
         action_queue["running"] = False
         action_queue["queued_rounds"] = max(action_queue["queued_rounds"] - command.rounds, 0)
         simulation_running = False
         
-        logger.info(f"[HTTP响应] 正在返回响应...")
+        # 【关键修复】使用线程池执行自动保存，避免阻塞事件循环
+        latest_turn = reports[-1].turn_index if reports else 0
         
-        return reports
+        def do_autosave():
+            """在后台线程执行自动保存"""
+            try:
+                _perform_autosave(latest_turn)
+            except Exception as e:
+                logger.warning(f"[后台任务] 自动保存失败: {e}")
+        
+        # 启动后台线程任务（不等待完成）
+        asyncio.get_event_loop().run_in_executor(None, do_autosave)
+        
+        # 【性能优化】直接使用 json.dumps 序列化，完全绕过 FastAPI/Pydantic
+        logger.info(f"[HTTP响应] 开始序列化响应...")
+        try:
+            # 使用 model_dump 转换为 dict
+            response_data = [r.model_dump(mode="json") for r in reports]
+            # 使用标准 json 模块序列化
+            json_str = json.dumps(response_data, ensure_ascii=False, default=str)
+            logger.info(f"[HTTP响应] 序列化完成，数据大小: {len(json_str)} 字节，正在返回...")
+            # 使用最原始的 Response 返回
+            from starlette.responses import Response
+            return Response(
+                content=json_str,
+                media_type="application/json",
+                headers={"Content-Length": str(len(json_str.encode('utf-8')))}
+            )
+        except Exception as e:
+            logger.error(f"[HTTP响应] 序列化失败: {e}")
+            import traceback as tb
+            logger.error(tb.format_exc())
+            # 降级：返回简化的响应
+            return JSONResponse(content={"error": str(e), "reports_count": len(reports)})
         
     except Exception as e:
         elapsed = time_module.time() - start_time
@@ -2515,6 +2532,9 @@ from ..services.system.divine_energy import DivineEnergyService
 
 # 初始化能量服务
 energy_service = DivineEnergyService(settings.data_dir)
+
+# 【关键】将能量服务注入存档管理器，确保能量状态随存档保存/加载
+save_manager.set_energy_service(energy_service)
 
 
 @router.get("/energy", tags=["energy"])

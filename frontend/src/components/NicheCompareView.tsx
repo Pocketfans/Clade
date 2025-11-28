@@ -323,7 +323,7 @@ export function NicheCompareView({ onClose }: NicheCompareViewProps) {
                   }}
                 />
               </div>
-              <div className="niche-metric-hint">综合考虑种群规模的竞争压力</div>
+              <div className="niche-metric-hint">综合考虑生物量的竞争压力</div>
             </div>
           </div>
         </div>

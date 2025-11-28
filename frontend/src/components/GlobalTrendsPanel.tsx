@@ -704,7 +704,7 @@ export function GlobalTrendsPanel({ reports, onClose }: Props) {
                       }}>{idx + 1}</div>
                       <div style={styles.rankInfo}>
                         <div style={styles.rankName}>{sp.common_name}</div>
-                        <div style={styles.rankPop}>{formatPopulation(sp.population)} 个体</div>
+                        <div style={styles.rankPop}>{formatPopulation(sp.population)} kg</div>
                       </div>
                       <div style={styles.rankBar}>
                         <div 
@@ -1182,7 +1182,7 @@ function renderHealthChart(type: ChartType, props: any) {
       <Legend wrapperStyle={{ paddingTop: '12px' }} />
       <Area yAxisId="left" type="monotone" dataKey="deaths" name="死亡数" stroke={THEME.accentDanger} fill="url(#deathGradient)" strokeWidth={2.5} />
       <Line yAxisId="right" type="monotone" dataKey="deathRate" name="平均死亡率 (%)" stroke={THEME.accentVital} strokeWidth={3} dot={false} />
-      <Line yAxisId="left" type="monotone" dataKey="totalPop" name="总种群" stroke={THEME.accentGrowth} strokeWidth={2} strokeDasharray="5 5" dot={false} />
+      <Line yAxisId="left" type="monotone" dataKey="totalPop" name="总生物量" stroke={THEME.accentGrowth} strokeWidth={2} strokeDasharray="5 5" dot={false} />
     </ComposedChart>
   );
 }
@@ -1748,9 +1748,9 @@ function buildInsightItems(tab: Tab, summary: SummaryStats, reports: TurnReport[
           accent: THEME.accentLife,
         },
         {
-          key: "density", label: "平均种群规模",
+          key: "density", label: "平均生物量",
           value: formatPopulation(avgPop),
-          description: "单物种平均种群大小",
+          description: "单物种平均生物量 (kg)",
           accent: THEME.accentGrowth,
         },
         {
@@ -1838,7 +1838,7 @@ function buildInsightItems(tab: Tab, summary: SummaryStats, reports: TurnReport[
         {
           key: "sustainability", label: "可持续性",
           value: summary.populationDelta >= 0 && summary.speciesDelta >= 0 ? "🌱 可持续" : "⚠️ 需关注",
-          description: "综合种群和物种变化趋势",
+          description: "综合生物量和物种变化趋势",
           accent: summary.populationDelta >= 0 ? THEME.accentGrowth : THEME.accentDanger,
         },
         {

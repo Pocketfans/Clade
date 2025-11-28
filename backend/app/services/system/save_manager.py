@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from ...models.species import Species
+
+logger = logging.getLogger(__name__)
 from ...models.environment import MapState, MapTile, HabitatPopulation
 from ...models.history import TurnLog
 from ...models.genus import Genus
@@ -17,6 +20,7 @@ from ...repositories.genus_repository import genus_repository
 
 if TYPE_CHECKING:
     from .embedding import EmbeddingService
+    from .divine_energy import DivineEnergyService
 
 
 class SaveManager:
@@ -31,15 +35,21 @@ class SaveManager:
     def __init__(
         self, 
         saves_dir: str | Path,
-        embedding_service: 'EmbeddingService | None' = None
+        embedding_service: 'EmbeddingService | None' = None,
+        energy_service: 'DivineEnergyService | None' = None
     ) -> None:
         self.saves_dir = Path(saves_dir)
         self.saves_dir.mkdir(parents=True, exist_ok=True)
         self._embedding_service = embedding_service
+        self._energy_service = energy_service
 
     def set_embedding_service(self, service: 'EmbeddingService') -> None:
         """设置 embedding 服务（延迟注入）"""
         self._embedding_service = service
+
+    def set_energy_service(self, service: 'DivineEnergyService') -> None:
+        """设置能量服务（延迟注入）"""
+        self._energy_service = service
 
     def list_saves(self) -> list[dict[str, Any]]:
         """列出所有存档"""
@@ -83,7 +93,7 @@ class SaveManager:
                 }
                 saves.append(formatted_save)
             except Exception as e:
-                print(f"[存档管理器] 读取存档元数据失败: {save_dir.name}, {e}")
+                logger.info(f"[存档管理器] 读取存档元数据失败: {save_dir.name}, {e}")
                 continue
         
         # 按最后保存时间排序
@@ -92,7 +102,7 @@ class SaveManager:
 
     def create_save(self, save_name: str, scenario: str = "原初大陆") -> dict[str, Any]:
         """创建新存档"""
-        print(f"[存档管理器] 创建新存档: {save_name}")
+        logger.info(f"[存档管理器] 创建新存档: {save_name}")
         
         # 生成存档文件夹名称
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -115,7 +125,7 @@ class SaveManager:
             encoding="utf-8"
         )
         
-        print(f"[存档管理器] 存档创建成功: {save_dir.name}")
+        logger.info(f"[存档管理器] 存档创建成功: {save_dir.name}")
         return metadata
 
     def save_game(
@@ -136,12 +146,12 @@ class SaveManager:
         Returns:
             存档目录路径
         """
-        print(f"[存档管理器] 保存游戏: {save_name}, 回合={turn_index}")
+        logger.info(f"[存档管理器] 保存游戏: {save_name}, 回合={turn_index}")
         
         # 查找或创建存档目录
         save_dir = self._find_save_dir(save_name)
         if not save_dir:
-            print(f"[存档管理器] 存档不存在，创建新存档")
+            logger.info(f"[存档管理器] 存档不存在，创建新存档")
             self.create_save(save_name)
             save_dir = self._find_save_dir(save_name)
         
@@ -166,7 +176,7 @@ class SaveManager:
             "genus_list": [g.model_dump(mode="json") for g in genus_list],
         }
         
-        print(f"[存档管理器] 保存数据: {len(species_list)} 物种, {len(map_tiles)} 地块, {len(habitats)} 栖息地, {len(history_logs)} 历史记录, {len(genus_list)} 属")
+        logger.info(f"[存档管理器] 保存数据: {len(species_list)} 物种, {len(map_tiles)} 地块, {len(habitats)} 栖息地, {len(history_logs)} 历史记录, {len(genus_list)} 属")
         
         (save_dir / "game_state.json").write_text(
             json.dumps(save_data, ensure_ascii=False, indent=2),
@@ -190,9 +200,9 @@ class SaveManager:
                     json.dumps(embedding_data, ensure_ascii=False),
                     encoding="utf-8"
                 )
-                print(f"[存档管理器] 已保存 {len(embedding_data.get('embeddings', {}))} 个 embedding 向量")
+                logger.info(f"[存档管理器] 已保存 {len(embedding_data.get('embeddings', {}))} 个 embedding 向量")
             except Exception as e:
-                print(f"[存档管理器] 保存 embedding 数据失败: {e}")
+                logger.info(f"[存档管理器] 保存 embedding 数据失败: {e}")
         
         # ========== 保存分类学数据 ==========
         if taxonomy_data:
@@ -201,9 +211,9 @@ class SaveManager:
                     json.dumps(taxonomy_data, ensure_ascii=False, indent=2),
                     encoding="utf-8"
                 )
-                print(f"[存档管理器] 已保存分类学数据")
+                logger.info(f"[存档管理器] 已保存分类学数据")
             except Exception as e:
-                print(f"[存档管理器] 保存分类学数据失败: {e}")
+                logger.info(f"[存档管理器] 保存分类学数据失败: {e}")
         
         # ========== 保存事件 Embedding ==========
         if event_embeddings:
@@ -212,9 +222,25 @@ class SaveManager:
                     json.dumps(event_embeddings, ensure_ascii=False),
                     encoding="utf-8"
                 )
-                print(f"[存档管理器] 已保存事件 embedding 数据")
+                logger.info(f"[存档管理器] 已保存事件 embedding 数据")
             except Exception as e:
-                print(f"[存档管理器] 保存事件 embedding 失败: {e}")
+                logger.info(f"[存档管理器] 保存事件 embedding 失败: {e}")
+        
+        # ========== 保存能量状态 ==========
+        if self._energy_service:
+            try:
+                energy_data = {
+                    "state": self._energy_service.get_state().to_dict(),
+                    "enabled": self._energy_service.enabled,
+                    "history": self._energy_service.get_history(limit=50),
+                }
+                (save_dir / "energy.json").write_text(
+                    json.dumps(energy_data, ensure_ascii=False, indent=2),
+                    encoding="utf-8"
+                )
+                logger.info(f"[存档管理器] 已保存能量状态: {energy_data['state']['current']}/{energy_data['state']['maximum']}")
+            except Exception as e:
+                logger.info(f"[存档管理器] 保存能量状态失败: {e}")
         
         # 更新元数据
         metadata = json.loads((save_dir / "metadata.json").read_text(encoding="utf-8"))
@@ -229,7 +255,7 @@ class SaveManager:
             encoding="utf-8"
         )
         
-        print(f"[存档管理器] 游戏保存成功: {save_dir.name}")
+        logger.info(f"[存档管理器] 游戏保存成功: {save_dir.name}")
         return save_dir
 
     def load_game(self, save_name: str) -> dict[str, Any]:
@@ -242,7 +268,7 @@ class SaveManager:
             - taxonomy: dict | None - 分类学数据
             - event_embeddings: dict | None - 事件 embedding 数据
         """
-        print(f"[存档管理器] 加载游戏: {save_name}")
+        logger.info(f"[存档管理器] 加载游戏: {save_name}")
         
         save_dir = self._find_save_dir(save_name)
         if not save_dir:
@@ -255,10 +281,10 @@ class SaveManager:
         # 读取存档数据
         save_data = json.loads(game_state_path.read_text(encoding="utf-8"))
         
-        print(f"[存档管理器] 加载数据: {len(save_data.get('species', []))} 物种, {len(save_data.get('map_tiles', []))} 地块")
+        logger.info(f"[存档管理器] 加载数据: {len(save_data.get('species', []))} 物种, {len(save_data.get('map_tiles', []))} 地块")
         
         # 1. 清除当前运行时数据
-        print("[存档管理器] 清除当前运行时状态...")
+        logger.info("[存档管理器] 清除当前运行时状态...")
         environment_repository.clear_state()
         species_repository.clear_state()
         history_repository.clear_state()
@@ -274,7 +300,7 @@ class SaveManager:
         
         # 恢复地图地块
         if save_data.get("map_tiles"):
-            print(f"[存档管理器] 恢复 {len(save_data['map_tiles'])} 个地块...")
+            logger.info(f"[存档管理器] 恢复 {len(save_data['map_tiles'])} 个地块...")
             tiles = [MapTile(**tile_data) for tile_data in save_data["map_tiles"]]
             environment_repository.upsert_tiles(tiles)
         
@@ -285,13 +311,13 @@ class SaveManager:
 
         # 恢复栖息地分布
         if save_data.get("habitats"):
-            print(f"[存档管理器] 恢复 {len(save_data['habitats'])} 个栖息地记录...")
+            logger.info(f"[存档管理器] 恢复 {len(save_data['habitats'])} 个栖息地记录...")
             habitats = [HabitatPopulation(**h_data) for h_data in save_data["habitats"]]
             environment_repository.write_habitats(habitats)
 
         # 恢复历史记录
         if save_data.get("history_logs"):
-            print(f"[存档管理器] 恢复 {len(save_data['history_logs'])} 条历史记录...")
+            logger.info(f"[存档管理器] 恢复 {len(save_data['history_logs'])} 条历史记录...")
             for log_data in save_data["history_logs"]:
                 if isinstance(log_data.get("created_at"), str):
                      try:
@@ -303,7 +329,7 @@ class SaveManager:
         
         # 恢复属数据（Genus）
         if save_data.get("genus_list"):
-            print(f"[存档管理器] 恢复 {len(save_data['genus_list'])} 个属...")
+            logger.info(f"[存档管理器] 恢复 {len(save_data['genus_list'])} 个属...")
             for genus_data in save_data["genus_list"]:
                 genus = Genus(**genus_data)
                 genus_repository.upsert(genus)
@@ -322,9 +348,9 @@ class SaveManager:
                 ]
                 imported = self._embedding_service.import_embeddings(embedding_data, descriptions)
                 embeddings_loaded = imported > 0
-                print(f"[存档管理器] 已恢复 {imported} 个 embedding 向量")
+                logger.info(f"[存档管理器] 已恢复 {imported} 个 embedding 向量")
             except Exception as e:
-                print(f"[存档管理器] 恢复 embedding 数据失败: {e}")
+                logger.info(f"[存档管理器] 恢复 embedding 数据失败: {e}")
         
         save_data["embeddings_loaded"] = embeddings_loaded
         
@@ -333,9 +359,9 @@ class SaveManager:
         if taxonomy_path.exists():
             try:
                 save_data["taxonomy"] = json.loads(taxonomy_path.read_text(encoding="utf-8"))
-                print(f"[存档管理器] 已加载分类学数据")
+                logger.info(f"[存档管理器] 已加载分类学数据")
             except Exception as e:
-                print(f"[存档管理器] 加载分类学数据失败: {e}")
+                logger.info(f"[存档管理器] 加载分类学数据失败: {e}")
                 save_data["taxonomy"] = None
         else:
             save_data["taxonomy"] = None
@@ -345,14 +371,60 @@ class SaveManager:
         if event_embeddings_path.exists():
             try:
                 save_data["event_embeddings"] = json.loads(event_embeddings_path.read_text(encoding="utf-8"))
-                print(f"[存档管理器] 已加载事件 embedding 数据")
+                logger.info(f"[存档管理器] 已加载事件 embedding 数据")
             except Exception as e:
-                print(f"[存档管理器] 加载事件 embedding 失败: {e}")
+                logger.info(f"[存档管理器] 加载事件 embedding 失败: {e}")
                 save_data["event_embeddings"] = None
         else:
             save_data["event_embeddings"] = None
         
-        print(f"[存档管理器] 游戏加载成功: {save_name}")
+        # ========== 恢复能量状态 ==========
+        energy_loaded = False
+        energy_path = save_dir / "energy.json"
+        if energy_path.exists() and self._energy_service:
+            try:
+                energy_data = json.loads(energy_path.read_text(encoding="utf-8"))
+                
+                # 恢复能量状态
+                state = energy_data.get("state", {})
+                self._energy_service.set_energy(
+                    current=state.get("current", 100),
+                    maximum=state.get("maximum", 100),
+                    regen=state.get("regen_per_turn", 15),
+                )
+                
+                # 恢复启用状态
+                self._energy_service.enabled = energy_data.get("enabled", True)
+                
+                # 恢复历史统计（total_spent, total_regenerated）
+                energy_state = self._energy_service.get_state()
+                energy_state.total_spent = state.get("total_spent", 0)
+                energy_state.total_regenerated = state.get("total_regenerated", 0)
+                
+                # 恢复历史记录
+                self._energy_service._history.clear()
+                for h in energy_data.get("history", []):
+                    from .divine_energy import EnergyTransaction
+                    self._energy_service._history.append(EnergyTransaction(
+                        action=h.get("action", ""),
+                        cost=h.get("cost", 0),
+                        turn=h.get("turn", 0),
+                        details=h.get("details", ""),
+                        success=h.get("success", True),
+                    ))
+                
+                energy_loaded = True
+                logger.info(f"[存档管理器] 已恢复能量状态: {state.get('current', 100)}/{state.get('maximum', 100)}")
+            except Exception as e:
+                logger.info(f"[存档管理器] 恢复能量状态失败: {e}")
+        elif self._energy_service:
+            # 存档中没有能量数据，重置为默认状态
+            self._energy_service.reset()
+            logger.info(f"[存档管理器] 存档中无能量数据，已重置为默认状态")
+        
+        save_data["energy_loaded"] = energy_loaded
+        
+        logger.info(f"[存档管理器] 游戏加载成功: {save_name}")
         return save_data
 
     def delete_save(self, save_name: str) -> bool:
@@ -362,7 +434,7 @@ class SaveManager:
             return False
         
         shutil.rmtree(save_dir)
-        print(f"[存档管理器] 存档已删除: {save_name}")
+        logger.info(f"[存档管理器] 存档已删除: {save_name}")
         return True
 
     def _find_save_dir(self, save_name: str) -> Path | None:

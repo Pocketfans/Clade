@@ -840,6 +840,12 @@
   overflow: visible;
 }
 
+/* 工具按钮包装器 - 用于正确定位 tooltip */
+.tool-btn-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
 .tool-btn-v2 {
   position: relative;
   display: flex;

@@ -298,7 +298,8 @@ class GameHintsService:
         
         # 最近有分化事件
         if recent_report and recent_report.branching_events:
-            new_species = [e.child_code for e in recent_report.branching_events]
+            # 使用 new_lineage 属性（BranchingEvent 的正确属性名）
+            new_species = [e.new_lineage for e in recent_report.branching_events]
             if new_species:
                 hints.append(GameHint(
                     hint_type=HintType.EVOLUTION,

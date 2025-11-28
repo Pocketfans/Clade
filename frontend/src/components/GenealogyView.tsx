@@ -416,8 +416,8 @@ function NodeDetailCard({ node, onClose }: { node: LineageNode; onClose: () => v
                 <InfoItem label="生态角色" value={node.ecological_role} />
                 <InfoItem label="出生回合" value={`T${node.birth_turn + 1}`} />
                 {node.extinction_turn != null && <InfoItem label="灭绝回合" value={`T${node.extinction_turn + 1}`} color="#ef4444" />}
-                <InfoItem label="当前规模" value={node.current_population?.toLocaleString() || "0"} />
-                <InfoItem label="峰值规模" value={node.peak_population?.toLocaleString() || "0"} color="#fbbf24" />
+                <InfoItem label="当前生物量" value={node.current_population?.toLocaleString() || "0"} />
+                <InfoItem label="峰值生物量" value={node.peak_population?.toLocaleString() || "0"} color="#fbbf24" />
                 <InfoItem label="后代数量" value={String(node.descendant_count || 0)} />
                 <InfoItem label="分化类型" value={node.speciation_type || "N/A"} />
               </div>

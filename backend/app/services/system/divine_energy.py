@@ -16,7 +16,6 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -136,6 +135,11 @@ class DivineEnergyService:
     """神力能量服务
     
     管理玩家的能量点资源。
+    
+    【重要】能量状态完全由存档系统管理，不再使用全局文件持久化。
+    - 服务启动时使用默认状态
+    - 存档加载时由 SaveManager 恢复状态
+    - 存档保存时由 SaveManager 导出状态
     """
     
     def __init__(self, data_dir: Path | str | None = None):
@@ -144,53 +148,8 @@ class DivineEnergyService:
         self._history: list[EnergyTransaction] = []
         self._enabled = True  # 可以禁用能量系统（测试模式）
         
-        self._load_state()
-    
-    def _get_state_file(self) -> Path:
-        """获取能量状态文件路径"""
-        return self.data_dir / "energy.json"
-    
-    def _load_state(self) -> None:
-        """加载能量状态"""
-        state_file = self._get_state_file()
-        if state_file.exists():
-            try:
-                with open(state_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self._state = EnergyState.from_dict(data.get("state", {}))
-                    self._enabled = data.get("enabled", True)
-                    
-                    # 恢复历史记录（只保留最近50条）
-                    history_data = data.get("history", [])
-                    self._history = [
-                        EnergyTransaction(**h) for h in history_data[-50:]
-                    ]
-                logger.info(f"[能量] 加载状态: {self._state.current}/{self._state.maximum}")
-            except Exception as e:
-                logger.warning(f"[能量] 加载状态失败: {e}")
-    
-    def _save_state(self) -> None:
-        """保存能量状态"""
-        state_file = self._get_state_file()
-        state_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        data = {
-            "state": self._state.to_dict(),
-            "enabled": self._enabled,
-            "history": [
-                {
-                    "action": h.action,
-                    "cost": h.cost,
-                    "turn": h.turn,
-                    "details": h.details,
-                    "success": h.success,
-                }
-                for h in self._history[-50:]  # 只保留最近50条
-            ],
-        }
-        
-        with open(state_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # 【移除】不再从全局文件加载状态，等待存档系统恢复
+        logger.info(f"[能量] 服务初始化，使用默认状态: {self._state.current}/{self._state.maximum}")
     
     @property
     def enabled(self) -> bool:
@@ -200,7 +159,7 @@ class DivineEnergyService:
     @enabled.setter
     def enabled(self, value: bool) -> None:
         self._enabled = value
-        self._save_state()
+        # 【移除】不再自动保存到全局文件
     
     def get_state(self) -> EnergyState:
         """获取当前能量状态"""
@@ -282,7 +241,7 @@ class DivineEnergyService:
                 details=f"能量不足: {details}",
                 success=False,
             ))
-            self._save_state()
+            # 【移除】不再自动保存到全局文件
             
             return False, f"能量不足！需要 {cost}，当前 {self._state.current}"
         
@@ -299,7 +258,7 @@ class DivineEnergyService:
             success=True,
         ))
         
-        self._save_state()
+        # 【移除】不再自动保存到全局文件
         
         action_name = ENERGY_COSTS.get(action, EnergyCost(0, action, "", "")).name
         logger.info(f"[能量] 消耗 {cost} ({action_name}): {self._state.current}/{self._state.maximum}")
@@ -330,21 +289,21 @@ class DivineEnergyService:
                 details=f"回合开始恢复",
                 success=True,
             ))
-            self._save_state()
+            # 【移除】不再自动保存到全局文件
             logger.info(f"[能量] 回复 {actual_regen}: {self._state.current}/{self._state.maximum}")
         
         return actual_regen
     
     def set_energy(self, current: int | None = None, maximum: int | None = None, regen: int | None = None) -> None:
-        """设置能量参数（GM模式）"""
+        """设置能量参数（GM模式或存档恢复）"""
         if current is not None:
-            self._state.current = max(0, min(current, self._state.maximum))
+            self._state.current = max(0, min(current, self._state.maximum if maximum is None else maximum))
         if maximum is not None:
             self._state.maximum = max(1, maximum)
             self._state.current = min(self._state.current, self._state.maximum)
         if regen is not None:
             self._state.regen_per_turn = max(0, regen)
-        self._save_state()
+        # 【移除】不再自动保存到全局文件
     
     def add_energy(self, amount: int, reason: str = "") -> None:
         """添加能量（奖励等）"""
@@ -360,16 +319,14 @@ class DivineEnergyService:
                 details=reason,
                 success=True,
             ))
-            self._save_state()
+            # 【移除】不再自动保存到全局文件
     
     def reset(self) -> None:
         """重置能量状态（新存档时调用）"""
         self._state = EnergyState()
         self._history.clear()
         
-        state_file = self._get_state_file()
-        if state_file.exists():
-            state_file.unlink()
+        # 【移除】不再操作全局文件，状态完全由内存管理
         
         logger.info("[能量] 状态已重置")
     

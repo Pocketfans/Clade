@@ -84,13 +84,15 @@ class ReportBuilderV2:
             for branch in branching_events[:3]:  # 最多3个
                 child_name = getattr(branch, 'child_name', None) or getattr(branch, 'common_name', '新物种')
                 parent_name = getattr(branch, 'parent_name', '祖先')
+                # 使用 new_lineage 属性（BranchingEvent 的正确属性名）
+                lineage = getattr(branch, 'new_lineage', '') or getattr(branch, 'child_code', '')
                 events.append(ReportableEvent(
                     event_type="speciation",
                     severity=4,
                     title=f"新物种诞生：{child_name}",
                     description=f"从{parent_name}分化出新物种{child_name}",
                     species_name=child_name,
-                    lineage_code=getattr(branch, 'child_code', ''),
+                    lineage_code=lineage,
                 ))
         
         # 3. 种群崩溃（中高优先级）- 只选最严重的1个

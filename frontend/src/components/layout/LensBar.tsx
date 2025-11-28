@@ -64,7 +64,7 @@ const ANALYSIS_TOOLS = [
   { id: "genealogy", label: "演化族谱", icon: "🌳", description: "查看物种演化关系树", color: "#c084fc" },
   { id: "foodweb", label: "食物网", icon: "🕸️", description: "分析捕食与被捕食关系", color: "#f43f5e" },
   { id: "niche", label: "生态位对比", icon: "📊", description: "对比不同物种的生态位", color: "#38bdf8" },
-  { id: "trends", label: "全球趋势", icon: "📈", description: "查看环境与种群变化趋势", color: "#4ade80" },
+  { id: "trends", label: "全球趋势", icon: "📈", description: "查看环境与生物量变化趋势", color: "#4ade80" },
   { id: "ai", label: "AI 助手", icon: "🤖", description: "智能搜索、问答与演化预测", color: "#a855f7" },
   { id: "achievements", label: "成就", icon: "🏆", description: "查看成就进度与解锁奖励", color: "#fbbf24" },
   { id: "hints", label: "提示", icon: "💡", description: "智能游戏建议与提示", color: "#22d3ee" },
@@ -247,15 +247,20 @@ export function LensBar({
             if (t.id === "hints") return !!onToggleHints;
             return true;
           }).map(tool => (
-            <button
+            <div
               key={tool.id}
-              className={`tool-btn-v2 ${hoveredTool === tool.id ? 'hovered' : ''} ${tool.id === 'hints' && showHints ? 'active' : ''}`}
-              style={{ '--tool-color': tool.color } as React.CSSProperties}
-              onClick={() => handleToolClick(tool.id)}
+              className="tool-btn-wrapper"
               onMouseEnter={() => setHoveredTool(tool.id)}
               onMouseLeave={() => setHoveredTool(null)}
             >
-              <span className="tool-icon-v2">{tool.icon}</span>
+              <button
+                className={`tool-btn-v2 ${hoveredTool === tool.id ? 'hovered' : ''} ${tool.id === 'hints' && showHints ? 'active' : ''}`}
+                style={{ '--tool-color': tool.color } as React.CSSProperties}
+                onClick={() => handleToolClick(tool.id)}
+                title={`${tool.label} - ${tool.description}`}
+              >
+                <span className="tool-icon-v2">{tool.icon}</span>
+              </button>
               {hoveredTool === tool.id && (
                 <ToolTooltip 
                   title={tool.label} 
@@ -263,7 +268,7 @@ export function LensBar({
                   color={tool.color}
                 />
               )}
-            </button>
+            </div>
           ))}
         </div>
       </div>
@@ -280,15 +285,20 @@ export function LensBar({
             if (t.id === "logs") return !!onOpenLogs;
             return true;
           }).map(tool => (
-            <button
+            <div
               key={tool.id}
-              className={`tool-btn-v2 ${hoveredTool === tool.id ? 'hovered' : ''}`}
-              style={{ '--tool-color': tool.color } as React.CSSProperties}
-              onClick={() => handleToolClick(tool.id)}
+              className="tool-btn-wrapper"
               onMouseEnter={() => setHoveredTool(tool.id)}
               onMouseLeave={() => setHoveredTool(null)}
             >
-              <span className="tool-icon-v2">{tool.icon}</span>
+              <button
+                className={`tool-btn-v2 ${hoveredTool === tool.id ? 'hovered' : ''}`}
+                style={{ '--tool-color': tool.color } as React.CSSProperties}
+                onClick={() => handleToolClick(tool.id)}
+                title={`${tool.label} - ${tool.description}`}
+              >
+                <span className="tool-icon-v2">{tool.icon}</span>
+              </button>
               {hoveredTool === tool.id && (
                 <ToolTooltip 
                   title={tool.label} 
@@ -296,7 +306,7 @@ export function LensBar({
                   color={tool.color}
                 />
               )}
-            </button>
+            </div>
           ))}
         </div>
       </div>

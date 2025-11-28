@@ -429,7 +429,7 @@ export function FoodWebGraph({ speciesList, onClose, onSelectSpecies }: Props) {
             </div>
             <div className="foodweb-legend-hint">
               <div>→ 箭头 = 能量流动方向</div>
-              <div>◉ 节点大小 = 种群规模</div>
+              <div>◉ 节点大小 = 生物量</div>
               <div>━ 线条粗细 = 捕食偏好</div>
             </div>
           </div>
@@ -545,7 +545,7 @@ export function FoodWebGraph({ speciesList, onClose, onSelectSpecies }: Props) {
                   </span>
                 </div>
                 <div className="foodweb-info-row">
-                  <span className="foodweb-info-label">种群数量</span>
+                  <span className="foodweb-info-label">生物量 (kg)</span>
                   <span className="foodweb-info-value">
                     {(hoveredNode || selectedNode)?.population.toLocaleString()}
                   </span>

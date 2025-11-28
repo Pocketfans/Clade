@@ -98,7 +98,7 @@ export function SpeciesLedger({ speciesList, onClose, onSelectSpecies }: Props) 
               {stats.extinct} 灭绝
             </span>
             <span className="stat total">
-              共 {formatNumber(stats.totalPop)} 个体
+              共 {formatNumber(stats.totalPop)} kg
             </span>
           </div>
         </div>
@@ -165,7 +165,7 @@ export function SpeciesLedger({ speciesList, onClose, onSelectSpecies }: Props) 
           </div>
           <div className="col col-role">生态角色</div>
           <div className="col col-pop" onClick={() => handleSort("population")}>
-            种群规模 <SortIcon field="population" />
+            生物量 <SortIcon field="population" />
           </div>
           <div className="col col-share" onClick={() => handleSort("population_share")}>
             生态占比 <SortIcon field="population_share" />

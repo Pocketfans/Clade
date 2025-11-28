@@ -453,7 +453,7 @@ export function TileDetailPanel({ tile, habitats, selectedSpecies, onSelectSpeci
                     <div className="species-meta-row">
                       <span className="species-code-badge">{entry.lineage_code}</span>
                       <span className="species-population">
-                        {entry.population.toLocaleString()} 个体
+                        {entry.population.toLocaleString()} kg
                       </span>
                     </div>
                   </div>
