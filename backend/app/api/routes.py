@@ -175,6 +175,17 @@ model_router = ModelRouter(
             model=settings.speciation_model,  # 使用与分化相同的模型
             extra_body={"response_format": {"type": "json_object"}}
         ),
+        # 【新增】杂交相关
+        "hybridization": ModelConfig(
+            provider="openai", 
+            model=settings.speciation_model,
+            extra_body={"response_format": {"type": "json_object"}}
+        ),
+        "forced_hybridization": ModelConfig(
+            provider="openai", 
+            model=settings.speciation_model,
+            extra_body={"response_format": {"type": "json_object"}}
+        ),
     },
     base_url=settings.ai_base_url,
     api_key=settings.ai_api_key,
