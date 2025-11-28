@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from collections import defaultdict
+from datetime import datetime
 import asyncio
 import logging
 import sys
@@ -1340,14 +1341,26 @@ class SimulationEngine:
                                 migration_events,
                                 stream_callback=None, 
                             ),
-                            timeout=10  # 模板模式应该很快
+                            timeout=30  # 模板模式超时增加到30秒
                         )
+                        if not report.narrative:
+                            report.narrative = "由于 AI 响应超时，本回合使用简报模式。"
+                        self._emit_event("stage", "✅ 快速报告生成完成", "报告")
+                    except asyncio.TimeoutError:
+                        # 模板模式也超时，生成最基本的报告
+                        logger.warning(f"[报告生成] 模板模式也超时，使用最简报告")
+                        self._emit_event("warning", "⏱️ 模板模式超时，使用最简报告", "报告")
+                        report = TurnReport(
+                            turn_index=self.turn_counter,
+                            narrative="⚠️ 由于网络问题，本回合报告生成超时。演化数据已正常保存，您可以在物种面板查看详细信息。",
+                            events=[],
+                            timestamp=datetime.now().isoformat(),
+                            major_events=major_events,
+                        )
+                        self._emit_event("stage", "✅ 最简报告生成完成", "报告")
                     finally:
                         # 恢复LLM润色设置
                         self.report_builder.enable_llm_polish = True
-                    if not report.narrative:
-                        report.narrative = "由于 AI 响应超时，本回合使用简报模式。"
-                    self._emit_event("stage", "✅ 快速报告生成完成", "报告")
                 
                 # 12. 保存地图快照
                 # 【修复】重新查询数据库获取最新物种列表

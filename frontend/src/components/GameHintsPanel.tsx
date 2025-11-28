@@ -5,7 +5,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { 
   Lightbulb, RefreshCw, ChevronDown, ChevronUp, X, AlertTriangle, 
-  TrendingUp, Zap, Target, Leaf, Skull, GitBranch, Minimize2, Maximize2 
+  TrendingUp, Zap, Target, Leaf, GitBranch
 } from "lucide-react";
 
 interface GameHint {
@@ -21,6 +21,7 @@ interface GameHint {
 interface Props {
   onSelectSpecies?: (code: string) => void;
   refreshTrigger?: number;
+  onClose?: () => void;
 }
 
 const PRIORITY_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
@@ -38,11 +39,9 @@ const TYPE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color:
   ecosystem: { icon: <Leaf size={14} />, label: "生态", color: "#10b981" },
 };
 
-export function GameHintsPanel({ onSelectSpecies, refreshTrigger }: Props) {
+export function GameHintsPanel({ onSelectSpecies, refreshTrigger, onClose }: Props) {
   const [hints, setHints] = useState<GameHint[]>([]);
   const [loading, setLoading] = useState(true);
-  const [collapsed, setCollapsed] = useState(false);
-  const [minimized, setMinimized] = useState(false);
   const [expandedHint, setExpandedHint] = useState<number | null>(null);
 
   const fetchHints = useCallback(async () => {
@@ -68,144 +67,37 @@ export function GameHintsPanel({ onSelectSpecies, refreshTrigger }: Props) {
     return () => clearInterval(interval);
   }, [fetchHints]);
 
-  // 获取优先级最高的提示
-  const criticalCount = hints.filter(h => h.priority === 'critical').length;
-  const highCount = hints.filter(h => h.priority === 'high').length;
-
-  if (minimized) {
-    return (
-      <div 
-        className="hints-minimized"
-        onClick={() => setMinimized(false)}
-      >
-        <div className="minimized-icon">
-          <Lightbulb size={18} />
-        </div>
-        {hints.length > 0 && (
-          <div className="minimized-badge">
-            {criticalCount > 0 ? (
-              <span className="critical-badge">{criticalCount}</span>
-            ) : highCount > 0 ? (
-              <span className="high-badge">{highCount}</span>
-            ) : (
-              <span className="normal-badge">{hints.length}</span>
+  return (
+    <div className="hints-modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose?.()}>
+      <div className="hints-modal">
+        {/* 头部 */}
+        <div className="hints-header">
+          <div className="header-left">
+            <Lightbulb size={18} />
+            <span className="header-title">智能提示</span>
+            {hints.length > 0 && (
+              <span className="hints-count">{hints.length}</span>
             )}
           </div>
-        )}
-
-        <style>{`
-          .hints-minimized {
-            position: fixed;
-            bottom: 90px;
-            right: 20px;
-            width: 52px;
-            height: 52px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: linear-gradient(135deg, 
-              rgba(15, 23, 42, 0.95) 0%, 
-              rgba(10, 15, 25, 0.98) 100%
-            );
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 16px;
-            cursor: pointer;
-            z-index: 100;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-          }
-
-          .hints-minimized:hover {
-            transform: scale(1.08);
-            border-color: rgba(59, 130, 246, 0.4);
-            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 20px rgba(59, 130, 246, 0.2);
-          }
-
-          .minimized-icon {
-            color: #60a5fa;
-          }
-
-          .minimized-badge {
-            position: absolute;
-            top: -6px;
-            right: -6px;
-          }
-
-          .critical-badge, .high-badge, .normal-badge {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-width: 20px;
-            height: 20px;
-            padding: 0 6px;
-            border-radius: 10px;
-            font-size: 0.7rem;
-            font-weight: 700;
-          }
-
-          .critical-badge {
-            background: #ef4444;
-            color: white;
-            animation: pulse-critical 2s ease-in-out infinite;
-          }
-
-          .high-badge {
-            background: #f59e0b;
-            color: white;
-          }
-
-          .normal-badge {
-            background: rgba(59, 130, 246, 0.8);
-            color: white;
-          }
-
-          @keyframes pulse-critical {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
-            50% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
-          }
-        `}</style>
-      </div>
-    );
-  }
-
-  return (
-    <div className={`hints-panel ${collapsed ? 'collapsed' : ''}`}>
-      {/* 头部 */}
-      <div className="hints-header">
-        <div className="header-left">
-          <Lightbulb size={18} />
-          <span className="header-title">智能提示</span>
-          {hints.length > 0 && (
-            <span className="hints-count">{hints.length}</span>
-          )}
+          <div className="header-actions">
+            <button 
+              className="header-btn refresh-btn" 
+              onClick={fetchHints}
+              title="刷新提示"
+            >
+              <RefreshCw size={14} className={loading ? 'spinning' : ''} />
+            </button>
+            <button 
+              className="header-btn close-btn" 
+              onClick={onClose}
+              title="关闭"
+            >
+              <X size={14} />
+            </button>
+          </div>
         </div>
-        <div className="header-actions">
-          <button 
-            className="header-btn refresh-btn" 
-            onClick={fetchHints}
-            title="刷新提示"
-          >
-            <RefreshCw size={14} className={loading ? 'spinning' : ''} />
-          </button>
-          <button 
-            className="header-btn" 
-            onClick={() => setCollapsed(!collapsed)}
-            title={collapsed ? "展开" : "收起"}
-          >
-            {collapsed ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
-          <button 
-            className="header-btn" 
-            onClick={() => setMinimized(true)}
-            title="最小化"
-          >
-            <Minimize2 size={14} />
-          </button>
-        </div>
-      </div>
 
-      {/* 内容 */}
-      {!collapsed && (
+        {/* 内容 */}
         <div className="hints-body">
           {loading && hints.length === 0 ? (
             <div className="hints-loading">
@@ -233,34 +125,55 @@ export function GameHintsPanel({ onSelectSpecies, refreshTrigger }: Props) {
             </div>
           )}
         </div>
-      )}
 
       <style>{`
-        .hints-panel {
+        .hints-modal-overlay {
           position: fixed;
-          bottom: 90px;
-          right: 20px;
-          width: 360px;
-          max-height: 480px;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.6);
+          backdrop-filter: blur(4px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 9000;
+          animation: overlayFadeIn 0.2s ease;
+        }
+
+        @keyframes overlayFadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
+        .hints-modal {
+          width: 480px;
+          max-width: 90vw;
+          max-height: 70vh;
           display: flex;
           flex-direction: column;
           background: linear-gradient(165deg, 
-            rgba(15, 23, 42, 0.96) 0%, 
-            rgba(10, 15, 25, 0.98) 100%
+            rgba(15, 23, 42, 0.98) 0%, 
+            rgba(10, 15, 25, 0.99) 100%
           );
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 20px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 24px;
           overflow: hidden;
-          z-index: 100;
           box-shadow: 
-            0 20px 60px rgba(0, 0, 0, 0.4),
-            0 0 1px rgba(255, 255, 255, 0.1);
-          backdrop-filter: blur(16px);
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            0 25px 80px rgba(0, 0, 0, 0.5),
+            0 0 1px rgba(255, 255, 255, 0.15),
+            0 0 60px rgba(59, 130, 246, 0.1);
+          backdrop-filter: blur(20px);
+          animation: modalSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
         }
 
-        .hints-panel.collapsed {
-          max-height: 60px;
+        @keyframes modalSlideIn {
+          from {
+            opacity: 0;
+            transform: scale(0.9) translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: scale(1) translateY(0);
+          }
         }
 
         /* 头部 */
@@ -321,6 +234,11 @@ export function GameHintsPanel({ onSelectSpecies, refreshTrigger }: Props) {
         .header-btn:hover {
           background: rgba(255, 255, 255, 0.08);
           color: rgba(255, 255, 255, 0.9);
+        }
+
+        .close-btn:hover {
+          background: rgba(239, 68, 68, 0.15);
+          color: #f87171;
         }
 
         .refresh-btn svg.spinning {
@@ -392,6 +310,7 @@ export function GameHintsPanel({ onSelectSpecies, refreshTrigger }: Props) {
           gap: 10px;
         }
       `}</style>
+      </div>
     </div>
   );
 }

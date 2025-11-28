@@ -15,7 +15,6 @@ const roleColors: Record<string, string> = {
   carnivore: "#f43f5e",     // 食肉动物 - 玫红
   omnivore: "#fb923c",      // 杂食动物 - 橙色
   mixotroph: "#22d3ee",     // 混合营养 - 青色
-  decomposer: "#a78bfa",    // 分解者 - 紫色
   decomposer: "#c084fc",    // 分解者 - 紫色
   scavenger: "#94a3b8",     // 食腐动物 - 灰色
   default: "#2dd4bf"        // 默认 - 主题色
@@ -28,7 +27,6 @@ const roleIcons: Record<string, string> = {
   carnivore: "🦁",
   omnivore: "🐻",
   mixotroph: "🔬",
-  decomposer: "🍄",
   decomposer: "🍄",
   scavenger: "🦅",
   default: "🧬"

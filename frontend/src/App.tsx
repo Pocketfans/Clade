@@ -215,8 +215,9 @@ export default function App() {
   const [showAIAssistant, setShowAIAssistant] = useState(false); // AI 助手面板
   const [showAITimeline, setShowAITimeline] = useState(false); // AI 增强年鉴
   const [showAchievements, setShowAchievements] = useState(false); // 成就面板
-  const [showHints, setShowHints] = useState(true); // 智能提示面板（默认显示）
+  const [showHints, setShowHints] = useState(false); // 智能提示面板（点击打开）
   const [showHybridization, setShowHybridization] = useState(false); // 杂交面板
+  const [hintsInfo, setHintsInfo] = useState<{count: number; criticalCount: number; highCount: number}>({ count: 0, criticalCount: 0, highCount: 0 });
   const [pendingAchievement, setPendingAchievement] = useState<{name: string; icon: string; description: string; rarity: string} | null>(null);
 
   // Working Data
@@ -257,6 +258,30 @@ export default function App() {
     }
     // loading 状态不做任何操作
   }, [scene, sessionInfo, currentSaveName, backendSessionId]);
+
+  // 定期获取提示信息（用于底部栏徽章显示）
+  useEffect(() => {
+    if (scene !== "game") return;
+    
+    const fetchHintsInfo = async () => {
+      try {
+        const response = await fetch("/api/hints");
+        const data = await response.json();
+        const hints = data.hints || [];
+        setHintsInfo({
+          count: hints.length,
+          criticalCount: hints.filter((h: {priority: string}) => h.priority === 'critical').length,
+          highCount: hints.filter((h: {priority: string}) => h.priority === 'high').length,
+        });
+      } catch (error) {
+        console.error("获取提示信息失败:", error);
+      }
+    };
+    
+    fetchHintsInfo();
+    const interval = setInterval(fetchHintsInfo, 30000);
+    return () => clearInterval(interval);
+  }, [scene, speciesRefreshTrigger]);
 
   // Game Start Logic
   useEffect(() => {
@@ -981,22 +1006,21 @@ export default function App() {
           onOpenAchievements={() => setShowAchievements(true)}
           onToggleHints={() => setShowHints(!showHints)}
           showHints={showHints}
+          hintsInfo={hintsInfo}
         />
       }
       drawer={renderDrawerContent()}
       modals={hasActiveModal ? renderModals() : null}
-      extras={
-        <>
-          {/* 智能提示面板 */}
-          {showHints && scene === "game" && (
-            <GameHintsPanel 
-              onSelectSpecies={handleSpeciesSelect}
-              refreshTrigger={speciesRefreshTrigger}
-            />
-          )}
-        </>
-      }
     />
+    
+    {/* 智能提示面板（居中模态弹窗） */}
+    {showHints && scene === "game" && (
+      <GameHintsPanel 
+        onSelectSpecies={handleSpeciesSelect}
+        refreshTrigger={speciesRefreshTrigger}
+        onClose={() => setShowHints(false)}
+      />
+    )}
     </>
   );
 }

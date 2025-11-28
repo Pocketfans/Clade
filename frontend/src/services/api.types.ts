@@ -276,6 +276,7 @@ export interface UIConfig {
   ai_batch_eval_timeout?: number;     // 整体批量评估超时（秒）
   ai_narrative_timeout?: number;      // 物种叙事生成超时（秒）
   ai_speciation_timeout?: number;     // 物种分化评估超时（秒）
+  ai_concurrency_limit?: number;      // AI并发请求数限制
 
   // --- Legacy Fields (For backward compatibility types) ---
   ai_provider?: string | null;

@@ -889,6 +889,47 @@
   transform: scale(1.15);
 }
 
+/* 提示按钮徽章 */
+.hints-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  z-index: 10;
+}
+
+.hints-badge.critical {
+  background: #ef4444;
+  animation: badge-pulse 2s ease-in-out infinite;
+}
+
+.hints-badge.high {
+  background: #f59e0b;
+}
+
+.hints-badge.normal {
+  background: #3b82f6;
+}
+
+@keyframes badge-pulse {
+  0%, 100% { 
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); 
+  }
+  50% { 
+    box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); 
+  }
+}
+
 /* 改进的工具提示 */
 .tool-tooltip-v2 {
   --tooltip-color: #2dd4bf;

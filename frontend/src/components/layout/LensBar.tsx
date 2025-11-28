@@ -1,6 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import { ViewMode } from "../MapViewSelector";
 
+interface HintsInfo {
+  count: number;
+  criticalCount: number;
+  highCount: number;
+}
+
 interface Props {
   currentMode: ViewMode;
   onModeChange: (mode: ViewMode) => void;
@@ -17,6 +23,7 @@ interface Props {
   onOpenAchievements?: () => void;
   onToggleHints?: () => void;
   showHints?: boolean;
+  hintsInfo?: HintsInfo;
 }
 
 // Tooltip 组件
@@ -92,7 +99,8 @@ export function LensBar({
   onOpenAIAssistant,
   onOpenAchievements,
   onToggleHints,
-  showHints = true,
+  showHints = false,
+  hintsInfo,
 }: Props) {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [hoveredTool, setHoveredTool] = useState<string | null>(null);
@@ -260,6 +268,16 @@ export function LensBar({
                 title={`${tool.label} - ${tool.description}`}
               >
                 <span className="tool-icon-v2">{tool.icon}</span>
+                {/* 提示按钮的徽章 */}
+                {tool.id === 'hints' && hintsInfo && hintsInfo.count > 0 && (
+                  <span className={`hints-badge ${
+                    hintsInfo.criticalCount > 0 ? 'critical' : 
+                    hintsInfo.highCount > 0 ? 'high' : 'normal'
+                  }`}>
+                    {hintsInfo.criticalCount > 0 ? hintsInfo.criticalCount : 
+                     hintsInfo.highCount > 0 ? hintsInfo.highCount : hintsInfo.count}
+                  </span>
+                )}
               </button>
               {hoveredTool === tool.id && (
                 <ToolTooltip 

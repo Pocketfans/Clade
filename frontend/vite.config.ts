@@ -16,4 +16,28 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    // 调整警告阈值（单位：KB）- 考虑到 PixiJS 和应用代码的实际需求
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // React 核心库
+          "vendor-react": ["react", "react-dom"],
+          // 2D 渲染库 (PixiJS) - 分割核心和扩展
+          "vendor-pixi": ["pixi.js"],
+          // 数据可视化库
+          "vendor-d3": ["d3"],
+          // 图表库
+          "vendor-recharts": ["recharts"],
+          // 力导向图
+          "vendor-force-graph": ["react-force-graph-2d"],
+          // Markdown 渲染
+          "vendor-markdown": ["react-markdown"],
+          // 图标库
+          "vendor-icons": ["lucide-react"],
+        },
+      },
+    },
+  },
 });
