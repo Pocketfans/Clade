@@ -1305,8 +1305,12 @@ class SimulationEngine:
                 async def on_narrative_chunk(chunk: str):
                     self._emit_event("narrative_token", chunk, "报告")
 
-                # 【优化】缩短超时时间，快速降级确保游戏流畅
-                # 报告生成最多等待45秒，超时后立即降级为模板模式
+                # 【优化】使用流式传输+心跳监测，延长超时时间
+                # 只要AI持续输出就继续等待，30秒无输出才视为超时
+                # 心跳回调用于监测AI是否卡住
+                async def on_report_heartbeat(chunk_count: int):
+                    self._emit_event("ai_chunk_heartbeat", f"💓 叙事报告输出中 ({chunk_count} chunks)", "报告")
+                
                 try:
                     self._emit_event("stage", "📝 生成回合报告...", "报告")
                     report = await asyncio.wait_for(
@@ -1320,12 +1324,13 @@ class SimulationEngine:
                             map_changes,
                             migration_events,
                             stream_callback=on_narrative_chunk,
+                            heartbeat_callback=on_report_heartbeat,  # 【新增】心跳监测
                         ),
-                        timeout=45  # 缩短到45秒，快速降级
+                        timeout=90  # 延长到90秒，因为有流式心跳监测
                     )
                     self._emit_event("stage", "✅ 报告生成完成", "报告")
                 except asyncio.TimeoutError:
-                    logger.warning(f"[报告生成] 超时（45秒），转为模板模式")
+                    logger.warning(f"[报告生成] 超时（90秒），转为模板模式")
                     self._emit_event("warning", "⏱️ AI响应超时，使用快速模式", "报告")
                     # 禁用LLM润色，直接使用模板生成
                     self.report_builder.enable_llm_polish = False
@@ -1340,23 +1345,60 @@ class SimulationEngine:
                                 major_events,
                                 map_changes,
                                 migration_events,
-                                stream_callback=None, 
+                                stream_callback=None,
+                                heartbeat_callback=None,  # 模板模式不需要心跳
                             ),
-                            timeout=30  # 模板模式超时增加到30秒
+                            timeout=30  # 模板模式超时30秒
                         )
                         if not report.narrative:
                             report.narrative = "由于 AI 响应超时，本回合使用简报模式。"
                         self._emit_event("stage", "✅ 快速报告生成完成", "报告")
                     except asyncio.TimeoutError:
                         # 模板模式也超时，生成最基本的报告
+                        # 【关键修复】即使超时也要填充物种快照，否则前端无法显示物种数据
                         logger.warning(f"[报告生成] 模板模式也超时，使用最简报告")
                         self._emit_event("warning", "⏱️ 模板模式超时，使用最简报告", "报告")
+                        
+                        # 【修复】构建物种快照，不能返回空列表
+                        species_snapshots = []
+                        MAX_SAFE_POPULATION = 9_007_199_254_740_991
+                        total_pop = sum(
+                            max(0, min(int(item.species.morphology_stats.get("population", 0) or 0), MAX_SAFE_POPULATION))
+                            for item in combined_results
+                        )
+                        for item in combined_results:
+                            population = max(0, min(int(item.species.morphology_stats.get("population", 0) or 0), MAX_SAFE_POPULATION))
+                            share = (population / total_pop) if total_pop else 0
+                            species_snapshots.append(
+                                SpeciesSnapshot(
+                                    lineage_code=item.species.lineage_code,
+                                    latin_name=item.species.latin_name,
+                                    common_name=item.species.common_name,
+                                    population=population,
+                                    population_share=share,
+                                    deaths=item.deaths,
+                                    death_rate=item.death_rate,
+                                    ecological_role=item.species.description,
+                                    status=item.species.status,
+                                    notes=item.notes,
+                                    niche_overlap=item.niche_overlap,
+                                    resource_pressure=item.resource_pressure,
+                                    is_background=item.is_background,
+                                    tier=item.tier,
+                                    trophic_level=item.species.trophic_level,
+                                    grazing_pressure=item.grazing_pressure,
+                                    predation_pressure=item.predation_pressure,
+                                    ai_narrative=None,
+                                )
+                            )
+                        logger.info(f"[最简报告] 构建了 {len(species_snapshots)} 个物种快照")
+                        
                         report = TurnReport(
                             turn_index=self.turn_counter,
                             narrative="⚠️ 由于网络问题，本回合报告生成超时。演化数据已正常保存，您可以在物种面板查看详细信息。",
                             pressures_summary="报告生成超时，环境压力摘要不可用。",
-                            species=[],
-                            branching_events=[],
+                            species=species_snapshots,  # 【修复】使用实际的物种快照
+                            branching_events=branching,  # 【修复】使用实际的分化事件
                             major_events=major_events,
                         )
                         self._emit_event("stage", "✅ 最简报告生成完成", "报告")
@@ -1534,6 +1576,7 @@ class SimulationEngine:
         map_changes,
         migration_events,
         stream_callback=None,
+        heartbeat_callback=None,
     ) -> TurnReport:
         species_snapshots: list[SpeciesSnapshot] = []
         # 【修复】确保种群数量在JavaScript安全整数范围内
@@ -1587,6 +1630,10 @@ class SimulationEngine:
             }
         
         # 【优化】V2报告生成器支持纪录片旁白风格
+        # 【新增】心跳回调：监测AI是否持续输出
+        async def on_narrative_heartbeat(chunk_count: int):
+            self._emit_event("ai_chunk_heartbeat", f"💓 叙事报告输出中 ({chunk_count} chunks)", "报告")
+        
         narrative = await self.report_builder.build_turn_narrative_async(
             species_snapshots,
             pressures,
@@ -1599,6 +1646,7 @@ class SimulationEngine:
             stream_callback=stream_callback,
             species_details=species_details,
             turn_index=self.turn_counter,  # 【新增】传递回合索引用于纪录片叙事
+            heartbeat_callback=on_narrative_heartbeat,  # 【新增】心跳监测
         )
         
         # 获取当前地图状态（确保读取最新更新的状态）

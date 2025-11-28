@@ -1,11 +1,18 @@
 ﻿import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import path from "path";
+import { fileURLToPath } from "url";
+
+// 获取当前文件所在目录（确保 Vite 能找到 index.html）
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // 从环境变量读取端口配置，支持灵活部署
 const BACKEND_PORT = process.env.BACKEND_PORT || "8022";
 const FRONTEND_PORT = parseInt(process.env.FRONTEND_PORT || "5173", 10);
 
 export default defineConfig({
+  // 显式指定项目根目录，解决某些系统上启动脚本工作目录不正确的问题
+  root: __dirname,
   plugins: [react()],
   // 显式指定需要预打包的依赖，消除 Vite 5.x 的自动检测警告
   optimizeDeps: {
