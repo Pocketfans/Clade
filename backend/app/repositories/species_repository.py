@@ -23,6 +23,10 @@ class SpeciesRepository:
                 select(Species).where(Species.lineage_code == lineage_code)
             ).first()
 
+    def get_by_code(self, code: str) -> Species | None:
+        """根据物种代码获取物种（lineage_code的别名）"""
+        return self.get_by_lineage(code)
+
     def upsert(self, species: Species) -> Species:
         with session_scope() as session:
             merged = session.merge(species)

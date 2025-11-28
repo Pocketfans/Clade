@@ -1353,8 +1353,9 @@ class SimulationEngine:
                         report = TurnReport(
                             turn_index=self.turn_counter,
                             narrative="⚠️ 由于网络问题，本回合报告生成超时。演化数据已正常保存，您可以在物种面板查看详细信息。",
-                            events=[],
-                            timestamp=datetime.now().isoformat(),
+                            pressures_summary="报告生成超时，环境压力摘要不可用。",
+                            species=[],
+                            branching_events=[],
                             major_events=major_events,
                         )
                         self._emit_event("stage", "✅ 最简报告生成完成", "报告")
