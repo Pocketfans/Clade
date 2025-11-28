@@ -109,7 +109,7 @@ class EnvironmentRepository:
         """保存 UI 配置到 JSON 文件"""
         # 1. 保存到 JSON 文件
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(config.model_dump_json(indent=2, ensure_ascii=False), encoding="utf-8")
+        path.write_text(config.model_dump_json(indent=2), encoding="utf-8")
         logger.debug(f"[配置] 已保存配置到 {path}")
         return config
 

@@ -223,6 +223,11 @@ if (-not $venvExists) {
 # 激活虚拟环境
 & .\venv\Scripts\Activate.ps1
 
+# 确保 pip 和 setuptools 是最新版本（解决 Python 3.13 兼容性问题）
+if (-not $venvExists) {
+    & python -m pip install --upgrade pip setuptools wheel --quiet --disable-pip-version-check 2>&1 | Out-Null
+}
+
 # 检查依赖是否完整安装（检查关键包）
 $needInstallBackend = $false
 $packagesToCheck = @("fastapi", "uvicorn", "sqlmodel", "numpy", "scipy")
