@@ -1870,8 +1870,8 @@ class SimulationEngine:
         _settings = get_settings()
         auto_chance = _settings.auto_hybridization_chance  # 默认0.08
         
-        # 初始化杂交服务（传入router以启用AI生成）
-        genetic_calc = GeneticDistanceCalculator()
+        # 初始化杂交服务（传入router以启用AI生成，传入embeddings以支持语义距离）
+        genetic_calc = GeneticDistanceCalculator(embedding_service=self.embeddings)
         hybrid_service = HybridizationService(genetic_calc, router=self.router)
         
         # 按属分组

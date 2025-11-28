@@ -787,4 +787,491 @@ class HybridizationService:
         
         # 同为水生或同为陆生，随机选择
         return random.choice([h1, h2])
+    
+    # ==================== 强行杂交（跨属/幻想杂交）====================
+    
+    def can_force_hybridize(self, sp1: Species, sp2: Species) -> tuple[bool, str]:
+        """检查是否可以进行强行杂交
+        
+        强行杂交允许跨越正常杂交限制，但有条件：
+        1. 两个物种都必须存活
+        2. 两个物种不能是同一个
+        3. 消耗更多能量（由调用方处理）
+        
+        Returns:
+            (是否可以强行杂交, 原因说明)
+        """
+        if sp1.lineage_code == sp2.lineage_code:
+            return False, "不能与自身杂交"
+        
+        if sp1.status != "alive":
+            return False, f"{sp1.common_name}已灭绝"
+        
+        if sp2.status != "alive":
+            return False, f"{sp2.common_name}已灭绝"
+        
+        # 检查是否已经可以正常杂交（如果可以，建议使用普通杂交）
+        can_normal, _ = self.can_hybridize(sp1, sp2)
+        if can_normal:
+            return True, "这两个物种可以正常杂交，建议使用普通杂交（消耗更少能量）"
+        
+        return True, "可以进行强行杂交实验"
+    
+    async def force_hybridize_async(
+        self,
+        parent1: Species,
+        parent2: Species,
+        turn_index: int,
+        existing_codes: set[str] = None
+    ) -> Species | None:
+        """强行杂交：跨越自然界限创造嵌合体
+        
+        这是一个疯狂的基因工程实验，可以将任意两个物种强行融合！
+        
+        特点：
+        1. 无视遗传距离和属的限制
+        2. 产生的是"嵌合体"（Chimera）
+        3. 通常不育或极低可育性
+        4. 可能有基因不稳定性
+        5. 消耗大量能量（由调用方处理）
+        
+        Args:
+            parent1, parent2: 要融合的两个物种
+            turn_index: 当前回合
+            existing_codes: 已存在的编码集合
+            
+        Returns:
+            嵌合体物种，如果失败则返回None
+        """
+        # 生成嵌合体编码：使用X前缀表示跨属杂交
+        chimera_code = self._generate_chimera_code(
+            parent1.lineage_code, 
+            parent2.lineage_code, 
+            existing_codes or set()
+        )
+        
+        # 调用AI生成嵌合体信息
+        ai_content = None
+        if self.router:
+            ai_content = await self._call_forced_hybridization_ai(
+                parent1, parent2, chimera_code
+            )
+        
+        # 基础属性混合（使用更激进的混合策略）
+        chimera_traits = self._mix_chimera_traits(parent1, parent2)
+        chimera_organs = self._merge_chimera_organs(parent1, parent2)
+        chimera_morphology = self._mix_chimera_morphology(parent1, parent2)
+        chimera_capabilities = list(set(parent1.capabilities + parent2.capabilities))
+        
+        # 计算嵌合体的可育性（通常极低或不育）
+        # 基于两个物种的差异程度
+        trophic_diff = abs(parent1.trophic_level - parent2.trophic_level)
+        base_fertility = max(0.0, 0.15 - trophic_diff * 0.03)  # 最高15%可育性
+        
+        # 如果是完全不同的属，可育性更低
+        if parent1.genus_code != parent2.genus_code:
+            base_fertility *= 0.3
+        
+        fertility = max(0.0, min(0.15, base_fertility))
+        
+        # 应用AI生成的内容
+        if ai_content and isinstance(ai_content, dict):
+            latin_name = ai_content.get("latin_name") or self._generate_chimera_latin_name(parent1, parent2)
+            common_name = ai_content.get("common_name") or self._generate_chimera_common_name(parent1, parent2)
+            description = ai_content.get("description") or self._generate_chimera_description(parent1, parent2)
+            appearance = ai_content.get("appearance", "")
+            
+            # 将外形描述添加到描述中
+            if appearance and appearance not in description:
+                description = f"{appearance} {description}"
+            
+            # 应用AI建议的属性加成
+            trait_bonuses = ai_content.get("trait_bonuses", {})
+            if isinstance(trait_bonuses, dict):
+                for trait_name, bonus in trait_bonuses.items():
+                    try:
+                        bonus_value = float(str(bonus).replace("+", ""))
+                        if trait_name in chimera_traits:
+                            chimera_traits[trait_name] = max(0.0, min(15.0, 
+                                chimera_traits[trait_name] + bonus_value
+                            ))
+                        else:
+                            chimera_traits[trait_name] = max(0.0, min(15.0, 5.0 + bonus_value))
+                    except (ValueError, TypeError):
+                        pass
+            
+            # 应用AI建议的属性惩罚
+            trait_penalties = ai_content.get("trait_penalties", {})
+            if isinstance(trait_penalties, dict):
+                for trait_name, penalty in trait_penalties.items():
+                    try:
+                        penalty_value = float(str(penalty).replace("-", "").replace("+", ""))
+                        if trait_name in chimera_traits:
+                            chimera_traits[trait_name] = max(0.0, min(15.0, 
+                                chimera_traits[trait_name] - penalty_value
+                            ))
+                    except (ValueError, TypeError):
+                        pass
+            
+            # 应用稳定性和可育性
+            stability = ai_content.get("stability", "unstable")
+            ai_fertility = ai_content.get("fertility", "very_low")
+            
+            # 根据AI判断调整可育性
+            if ai_fertility == "sterile":
+                fertility = 0.0
+            elif ai_fertility == "very_low":
+                fertility = min(fertility, 0.05)
+            elif ai_fertility == "low":
+                fertility = min(fertility, 0.10)
+            
+            # 营养级
+            trophic_level = parent1.trophic_level
+            ai_trophic = ai_content.get("trophic_level")
+            if ai_trophic is not None:
+                try:
+                    trophic_level = max(1.0, min(6.0, float(ai_trophic)))
+                except (ValueError, TypeError):
+                    pass
+            
+            # 栖息地
+            habitat_type = ai_content.get("habitat_type") or self._merge_habitat(parent1, parent2)
+            
+            # 特殊能力和弱点（存储在描述或隐藏属性中）
+            abilities = ai_content.get("abilities", [])
+            weaknesses = ai_content.get("weaknesses", [])
+            personality = ai_content.get("personality", "")
+            
+            logger.info(
+                f"[强行杂交] {parent1.common_name} × {parent2.common_name} → "
+                f"{common_name} ({latin_name}) [稳定性:{stability}, 可育:{fertility:.0%}]"
+            )
+        else:
+            # 回退到规则生成
+            latin_name = self._generate_chimera_latin_name(parent1, parent2)
+            common_name = self._generate_chimera_common_name(parent1, parent2)
+            description = self._generate_chimera_description(parent1, parent2)
+            habitat_type = self._merge_habitat(parent1, parent2)
+            trophic_level = (parent1.trophic_level + parent2.trophic_level) / 2
+            stability = "unstable"
+            abilities = []
+            weaknesses = ["基因不稳定"]
+            personality = ""
+            
+            logger.info(
+                f"[强行杂交规则] {parent1.common_name} × {parent2.common_name} → "
+                f"{common_name} (AI未返回有效数据)"
+            )
+        
+        # 混合隐藏属性（嵌合体特殊处理）
+        hidden_traits = self._mix_chimera_hidden_traits(parent1, parent2, stability)
+        
+        # 合并食性（嵌合体可能有更广泛的食性）
+        diet_type, prey_species, prey_preferences = self._merge_chimera_diet(parent1, parent2)
+        
+        # 创建嵌合体物种
+        chimera = Species(
+            lineage_code=chimera_code,
+            latin_name=latin_name,
+            common_name=common_name,
+            description=description,
+            morphology_stats=chimera_morphology,
+            abstract_traits=chimera_traits,
+            hidden_traits=hidden_traits,
+            ecological_vector=None,
+            parent_code=None,  # 嵌合体没有单一父系
+            status="alive",
+            created_turn=turn_index,
+            trophic_level=trophic_level,
+            organs=chimera_organs,
+            capabilities=chimera_capabilities,
+            genus_code=None,  # 嵌合体没有明确的属
+            taxonomic_rank="chimera",  # 特殊分类等级
+            hybrid_parent_codes=[parent1.lineage_code, parent2.lineage_code],
+            hybrid_fertility=fertility,
+            diet_type=diet_type,
+            prey_species=prey_species,
+            prey_preferences=prey_preferences,
+            habitat_type=habitat_type,
+        )
+        
+        return chimera
+    
+    def _generate_chimera_code(
+        self, 
+        code1: str, 
+        code2: str, 
+        existing_codes: set[str]
+    ) -> str:
+        """生成嵌合体的编码
+        
+        使用格式: X + 数字（X表示跨属嵌合体）
+        """
+        idx = 1
+        while True:
+            chimera_code = f"X{idx}"
+            if chimera_code not in existing_codes:
+                return chimera_code
+            idx += 1
+    
+    def _generate_chimera_latin_name(self, p1: Species, p2: Species) -> str:
+        """生成嵌合体的拉丁学名"""
+        # 取两个物种名称的部分组合
+        p1_parts = (p1.latin_name or "Species").split()
+        p2_parts = (p2.latin_name or "Species").split()
+        
+        name1 = p1_parts[0][:4] if p1_parts else "Spec"
+        name2 = p2_parts[0][:4] if p2_parts else "imen"
+        
+        return f"× Chimera {name1.lower()}{name2.lower()}"
+    
+    def _generate_chimera_common_name(self, p1: Species, p2: Species) -> str:
+        """生成嵌合体的中文俗名"""
+        name1 = (p1.common_name or "物种1")[:2]
+        name2 = (p2.common_name or "物种2")[:2]
+        return f"{name1}{name2}兽"
+    
+    def _generate_chimera_description(self, p1: Species, p2: Species) -> str:
+        """生成嵌合体的描述"""
+        return (
+            f"由{p1.common_name}和{p2.common_name}强行融合产生的嵌合体生物。"
+            f"这是违背自然规律的基因工程产物，融合了双方的特征。"
+            f"由于基因不稳定性，这种生物的寿命和繁殖能力都受到严重影响。"
+            f"然而，它也可能展现出双亲都不具备的独特能力。"
+        )
+    
+    async def _call_forced_hybridization_ai(
+        self,
+        parent1: Species,
+        parent2: Species,
+        chimera_code: str
+    ) -> dict | None:
+        """调用AI生成嵌合体信息"""
+        if not self.router:
+            return None
+        
+        # 提取双亲的特征关键词
+        def extract_traits(sp: Species) -> str:
+            traits = []
+            for name, value in sp.abstract_traits.items():
+                if value >= 7:
+                    traits.append(f"{name}(高)")
+                elif value <= 3:
+                    traits.append(f"{name}(低)")
+            return ", ".join(traits[:5]) or "无明显特征"
+        
+        payload = {
+            "parent1_lineage": parent1.lineage_code,
+            "parent1_latin_name": parent1.latin_name or "Species unknown",
+            "parent1_common_name": parent1.common_name or "未知物种",
+            "parent1_description": parent1.description or "",
+            "parent1_traits": extract_traits(parent1),
+            "parent2_lineage": parent2.lineage_code,
+            "parent2_latin_name": parent2.latin_name or "Species unknown",
+            "parent2_common_name": parent2.common_name or "未知物种",
+            "parent2_description": parent2.description or "",
+            "parent2_traits": extract_traits(parent2),
+            "chimera_code": chimera_code,
+        }
+        
+        try:
+            response = await asyncio.wait_for(
+                self.router.ainvoke("forced_hybridization", payload),
+                timeout=45  # 强行杂交需要更多创意，给更长时间
+            )
+            content = response.get("content") if isinstance(response, dict) else None
+            if isinstance(content, dict):
+                return content
+            logger.warning(f"[强行杂交AI] 响应格式不正确: {type(content)}")
+            return None
+        except asyncio.TimeoutError:
+            logger.warning("[强行杂交AI] 请求超时（45秒）")
+            return None
+        except Exception as e:
+            logger.warning(f"[强行杂交AI] 请求失败: {e}")
+            return None
+    
+    def _mix_chimera_traits(self, p1: Species, p2: Species) -> dict[str, float]:
+        """混合嵌合体的特质
+        
+        嵌合体特质混合更加极端：
+        - 更高概率出现极端值
+        - 可能有双亲都不具备的新特质
+        """
+        mixed = {}
+        
+        # 合并双亲的所有特质
+        all_traits = set(p1.abstract_traits.keys()) | set(p2.abstract_traits.keys())
+        
+        for trait_name in all_traits:
+            val1 = p1.abstract_traits.get(trait_name, 5.0)
+            val2 = p2.abstract_traits.get(trait_name, 5.0)
+            
+            rand = random.random()
+            if rand < 0.25:
+                # 极端增强：取最大值再加成
+                mixed[trait_name] = max(val1, val2) * random.uniform(1.1, 1.3)
+            elif rand < 0.45:
+                # 极端削弱：取最小值再减少
+                mixed[trait_name] = min(val1, val2) * random.uniform(0.6, 0.9)
+            elif rand < 0.75:
+                # 随机偏向一方
+                if random.random() < 0.5:
+                    mixed[trait_name] = val1 * random.uniform(0.9, 1.1)
+                else:
+                    mixed[trait_name] = val2 * random.uniform(0.9, 1.1)
+            else:
+                # 完全随机
+                mixed[trait_name] = random.uniform(
+                    min(val1, val2) * 0.5,
+                    max(val1, val2) * 1.3
+                )
+            
+            mixed[trait_name] = max(0.0, min(15.0, round(mixed[trait_name], 2)))
+        
+        return mixed
+    
+    def _merge_chimera_organs(self, p1: Species, p2: Species) -> dict:
+        """合并嵌合体的器官
+        
+        嵌合体可能有双亲的器官混合，甚至产生新器官
+        """
+        merged = {}
+        all_categories = set(p1.organs.keys()) | set(p2.organs.keys())
+        
+        for category in all_categories:
+            organ1 = p1.organs.get(category)
+            organ2 = p2.organs.get(category)
+            
+            if organ1 and organ2:
+                # 双亲都有：随机选择或融合
+                if random.random() < 0.3:
+                    # 融合增强
+                    base_organ = dict(organ1) if organ1.get("stage", 0) >= organ2.get("stage", 0) else dict(organ2)
+                    base_organ["stage"] = min(5, base_organ.get("stage", 0) + 1)
+                    merged[category] = base_organ
+                else:
+                    merged[category] = dict(organ1 if random.random() < 0.5 else organ2)
+            elif organ1:
+                merged[category] = dict(organ1)
+            elif organ2:
+                merged[category] = dict(organ2)
+        
+        return merged
+    
+    def _mix_chimera_morphology(self, p1: Species, p2: Species) -> dict[str, float]:
+        """混合嵌合体的形态学参数"""
+        mixed = {}
+        
+        all_keys = set(p1.morphology_stats.keys()) | set(p2.morphology_stats.keys())
+        
+        for key in all_keys:
+            val1 = p1.morphology_stats.get(key)
+            val2 = p2.morphology_stats.get(key)
+            
+            if val1 is None:
+                mixed[key] = val2
+                continue
+            if val2 is None:
+                mixed[key] = val1
+                continue
+            
+            if key == "population":
+                # 嵌合体初始数量极少
+                mixed[key] = max(10, int(min(val1, val2) * 0.1))
+            elif key in ("body_length_cm", "body_weight_g"):
+                # 体型可能有较大变化
+                mixed[key] = (val1 + val2) / 2 * random.uniform(0.7, 1.5)
+            elif key == "lifespan_days":
+                # 寿命通常缩短
+                mixed[key] = min(val1, val2) * random.uniform(0.4, 0.8)
+            else:
+                mixed[key] = (val1 + val2) / 2 * random.uniform(0.8, 1.2)
+        
+        return mixed
+    
+    def _mix_chimera_hidden_traits(
+        self, 
+        p1: Species, 
+        p2: Species, 
+        stability: str
+    ) -> dict[str, float]:
+        """混合嵌合体的隐藏属性"""
+        mixed = {}
+        
+        all_keys = set(p1.hidden_traits.keys()) | set(p2.hidden_traits.keys())
+        
+        for key in all_keys:
+            val1 = p1.hidden_traits.get(key, 0.5)
+            val2 = p2.hidden_traits.get(key, 0.5)
+            
+            if key == "gene_diversity":
+                # 嵌合体基因多样性极高
+                mixed[key] = min(1.0, (val1 + val2) / 2 * 1.5)
+                
+            elif key == "evolution_potential":
+                # 演化潜力取决于稳定性
+                base = (val1 + val2) / 2
+                if stability == "stable":
+                    mixed[key] = base * 1.2
+                elif stability == "volatile":
+                    mixed[key] = base * 0.6
+                else:
+                    mixed[key] = base
+                    
+            elif key == "mutation_rate":
+                # 突变率显著提高
+                mixed[key] = min(1.0, (val1 + val2) / 2 * 1.5)
+                
+            elif key == "environment_sensitivity":
+                # 环境敏感度通常增加
+                mixed[key] = min(1.0, (val1 + val2) / 2 * 1.3)
+                
+            else:
+                mixed[key] = (val1 + val2) / 2
+        
+        # 添加嵌合体特有的隐藏属性
+        mixed["genetic_stability"] = {
+            "stable": 0.8,
+            "unstable": 0.5,
+            "volatile": 0.2
+        }.get(stability, 0.5)
+        
+        return mixed
+    
+    def _merge_chimera_diet(self, p1: Species, p2: Species) -> tuple[str, list, dict]:
+        """合并嵌合体的食性
+        
+        嵌合体通常是杂食性，能吃双亲能吃的所有食物
+        """
+        diet1 = getattr(p1, 'diet_type', None) or "omnivore"
+        diet2 = getattr(p2, 'diet_type', None) or "omnivore"
+        
+        # 嵌合体倾向于杂食
+        if diet1 != diet2:
+            result_diet = "omnivore"
+        else:
+            result_diet = diet1
+        
+        # 合并猎物
+        prey1 = set(getattr(p1, 'prey_species', None) or [])
+        prey2 = set(getattr(p2, 'prey_species', None) or [])
+        combined_prey = list(prey1 | prey2)
+        
+        # 合并偏好
+        pref1 = dict(getattr(p1, 'prey_preferences', None) or {})
+        pref2 = dict(getattr(p2, 'prey_preferences', None) or {})
+        combined_pref = {}
+        
+        for code in set(pref1.keys()) | set(pref2.keys()):
+            v1 = pref1.get(code, 0)
+            v2 = pref2.get(code, 0)
+            combined_pref[code] = (v1 + v2) / 2 if v1 and v2 else (v1 or v2)
+        
+        # 归一化
+        total = sum(combined_pref.values())
+        if total > 0:
+            combined_pref = {k: round(v / total, 2) for k, v in combined_pref.items()}
+        
+        return result_diet, combined_prey, combined_pref
 

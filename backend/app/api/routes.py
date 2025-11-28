@@ -230,7 +230,8 @@ reproduction_service = ReproductionService(
     turn_years=500_000,  # 每回合50万年
 )
 adaptation_service = AdaptationService(model_router)
-genetic_distance_calculator = GeneticDistanceCalculator()
+# 传入embedding_service以支持描述语义距离计算
+genetic_distance_calculator = GeneticDistanceCalculator(embedding_service=embedding_service)
 hybridization_service = HybridizationService(genetic_distance_calculator, router=model_router)
 gene_flow_service = GeneFlowService()
 save_manager = SaveManager(settings.saves_dir, embedding_service=embedding_service)
@@ -2833,4 +2834,183 @@ def preview_hybridization(species_a: str, species_b: str) -> dict:
             "combined_capabilities": combined_capabilities,
             "parent_traits_merged": True,
         },
+    }
+
+
+# ==================== 强行杂交（跨属/幻想杂交）API ====================
+
+FORCED_HYBRIDIZATION_COST = 50  # 强行杂交消耗的能量（普通杂交的5倍）
+
+
+@router.get("/hybridization/force/preview", tags=["hybridization"])
+def preview_forced_hybridization(species_a: str, species_b: str) -> dict:
+    """预览强行杂交结果
+    
+    强行杂交可以跨越正常杂交限制，将任意两个物种融合成嵌合体。
+    - 消耗能量：50点（普通杂交的5倍）
+    - 产物：嵌合体（Chimera）
+    - 可育性：极低或不育
+    - 风险：基因不稳定
+    """
+    sp_a = species_repository.get_by_lineage(species_a)
+    sp_b = species_repository.get_by_lineage(species_b)
+    
+    if not sp_a:
+        raise HTTPException(status_code=404, detail=f"物种 {species_a} 不存在")
+    if not sp_b:
+        raise HTTPException(status_code=404, detail=f"物种 {species_b} 不存在")
+    
+    # 检查是否可以强行杂交
+    can_force, reason = hybridization_service.can_force_hybridize(sp_a, sp_b)
+    
+    # 检查是否可以正常杂交
+    can_normal, normal_fertility = hybridization_service.can_hybridize(sp_a, sp_b)
+    
+    # 预估嵌合体特征
+    trophic_diff = abs(sp_a.trophic_level - sp_b.trophic_level)
+    estimated_fertility = max(0.0, 0.15 - trophic_diff * 0.03)
+    if sp_a.genus_code != sp_b.genus_code:
+        estimated_fertility *= 0.3
+    
+    # 稳定性预估
+    if sp_a.genus_code == sp_b.genus_code:
+        stability = "unstable"
+    elif trophic_diff <= 1.0:
+        stability = "unstable"
+    else:
+        stability = "volatile"
+    
+    return {
+        "can_force_hybridize": can_force,
+        "reason": reason,
+        "can_normal_hybridize": can_normal,
+        "normal_fertility": round(normal_fertility, 3) if can_normal else 0,
+        "energy_cost": FORCED_HYBRIDIZATION_COST,
+        "can_afford": energy_service.get_state().current >= FORCED_HYBRIDIZATION_COST,
+        "current_energy": energy_service.get_state().current,
+        "preview": {
+            "type": "chimera",
+            "estimated_fertility": round(estimated_fertility, 3),
+            "stability": stability,
+            "parent_a": {
+                "code": sp_a.lineage_code,
+                "name": sp_a.common_name,
+                "trophic": sp_a.trophic_level,
+            },
+            "parent_b": {
+                "code": sp_b.lineage_code,
+                "name": sp_b.common_name,
+                "trophic": sp_b.trophic_level,
+            },
+            "warnings": [
+                "嵌合体通常不育或极低可育性",
+                "基因不稳定可能导致寿命缩短",
+                "可能出现意想不到的能力或缺陷",
+            ] if can_force else [],
+        },
+    }
+
+
+@router.post("/hybridization/force/execute", tags=["hybridization"])
+async def execute_forced_hybridization(request: dict) -> dict:
+    """执行强行杂交（创造嵌合体）
+    
+    Body:
+    - species_a: 物种A的lineage_code
+    - species_b: 物种B的lineage_code
+    
+    消耗50能量点，将任意两个物种强行融合成嵌合体（Chimera）。
+    
+    ⚠️ 警告：
+    - 嵌合体通常不育或极低可育性
+    - 基因不稳定可能导致意外变异
+    - 这是违背自然规律的实验
+    """
+    code_a = request.get("species_a", "")
+    code_b = request.get("species_b", "")
+    
+    if not code_a or not code_b:
+        raise HTTPException(status_code=400, detail="请提供两个物种代码")
+    
+    # 获取物种
+    species_a = species_repository.get_by_lineage(code_a)
+    species_b = species_repository.get_by_lineage(code_b)
+    
+    if not species_a:
+        raise HTTPException(status_code=404, detail=f"物种 {code_a} 不存在")
+    if not species_b:
+        raise HTTPException(status_code=404, detail=f"物种 {code_b} 不存在")
+    
+    # 检查是否可以强行杂交
+    can_force, reason = hybridization_service.can_force_hybridize(species_a, species_b)
+    if not can_force:
+        raise HTTPException(status_code=400, detail=reason)
+    
+    # 检查能量
+    current_energy = energy_service.get_state().current
+    if current_energy < FORCED_HYBRIDIZATION_COST:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"能量不足！强行杂交需要 {FORCED_HYBRIDIZATION_COST} 能量，当前只有 {current_energy}"
+        )
+    
+    # 消耗能量
+    current_turn = simulation_engine.turn_counter
+    success = energy_service._state.current >= FORCED_HYBRIDIZATION_COST
+    if success:
+        energy_service._state.current -= FORCED_HYBRIDIZATION_COST
+        energy_service._state.history.append({
+            "turn": current_turn,
+            "action": "forced_hybridize",
+            "cost": FORCED_HYBRIDIZATION_COST,
+            "details": f"强行杂交 {species_a.common_name} × {species_b.common_name}",
+        })
+    else:
+        raise HTTPException(status_code=400, detail="能量扣除失败")
+    
+    # 收集现有编码
+    all_species = species_repository.list_species()
+    existing_codes = {sp.lineage_code for sp in all_species}
+    
+    # 执行强行杂交
+    chimera = await hybridization_service.force_hybridize_async(
+        species_a, species_b, current_turn, existing_codes
+    )
+    
+    if not chimera:
+        # 退还能量
+        energy_service._state.current += FORCED_HYBRIDIZATION_COST
+        energy_service._state.history.append({
+            "turn": current_turn,
+            "action": "forced_hybridize_refund",
+            "cost": -FORCED_HYBRIDIZATION_COST,
+            "details": "强行杂交失败，能量退还",
+        })
+        raise HTTPException(status_code=500, detail="强行杂交实验失败")
+    
+    # 保存嵌合体
+    species_repository.upsert(chimera)
+    
+    # 记录成就
+    achievement_service._unlock("chimera_creator", current_turn)
+    achievement_service._unlock("mad_scientist", current_turn)
+    
+    return {
+        "success": True,
+        "chimera": {
+            "lineage_code": chimera.lineage_code,
+            "latin_name": chimera.latin_name,
+            "common_name": chimera.common_name,
+            "description": chimera.description,
+            "fertility": chimera.hybrid_fertility,
+            "parent_codes": chimera.hybrid_parent_codes,
+            "taxonomic_rank": chimera.taxonomic_rank,
+            "stability": chimera.hidden_traits.get("genetic_stability", 0.5),
+        },
+        "energy_spent": FORCED_HYBRIDIZATION_COST,
+        "energy_remaining": energy_service.get_state().current,
+        "warnings": [
+            f"嵌合体可育性仅为 {chimera.hybrid_fertility:.1%}",
+            "基因不稳定可能导致后代变异或寿命缩短",
+        ],
     }
