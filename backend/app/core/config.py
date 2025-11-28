@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     """Global configuration for the evolutionary sandbox."""
 
     app_name: str = "Clade"
+    # 服务端口配置
+    backend_port: int = Field(default=8000, alias="BACKEND_PORT")
+    frontend_port: int = Field(default=5173, alias="FRONTEND_PORT")
     database_url: str = Field(default=f"sqlite:///{PROJECT_ROOT.as_posix()}/data/db/egame.db", alias="DATABASE_URL")
     embedding_provider: str = Field(default="local", alias="EMBEDDING_PROVIDER")
     report_model: str = Field(default="gpt-large", alias="REPORT_MODEL")

@@ -26,25 +26,25 @@ class MigrationAdvisor:
     """
 
     def __init__(self, 
-                 pressure_migration_threshold: float = 0.25,  # 【修复】从0.35降到0.25，更容易触发
-                 saturation_threshold: float = 0.85,          # 【修复】从0.9降到0.85
-                 overflow_growth_threshold: float = 1.15,     # 【修复】从1.2降到1.15
-                 overflow_pressure_threshold: float = 0.6,    # 【修复】从0.7降到0.6
-                 min_population: int = 100,                   # 【修复】从500降到100，微生物更容易迁徙
-                 prey_scarcity_threshold: float = 0.3,        # 猎物稀缺阈值（触发追踪迁徙）
-                 chronic_decline_threshold: float = 0.15,     # 【新增】慢性衰退阈值
-                 chronic_decline_turns: int = 2,              # 【新增】触发慢性衰退迁徙的连续回合数
+                 pressure_migration_threshold: float = 0.18,  # 【平衡v2】从0.25降到0.18，更早触发逃离
+                 saturation_threshold: float = 0.75,          # 【平衡v2】从0.85降到0.75，更早扩散
+                 overflow_growth_threshold: float = 1.10,     # 【平衡v2】从1.15降到1.10
+                 overflow_pressure_threshold: float = 0.50,   # 【平衡v2】从0.6降到0.50
+                 min_population: int = 50,                    # 【平衡v2】从100降到50
+                 prey_scarcity_threshold: float = 0.35,       # 【平衡v2】从0.3提高到0.35，更容易触发追踪
+                 chronic_decline_threshold: float = 0.12,     # 【平衡v2】从0.15降到0.12
+                 chronic_decline_turns: int = 2,              # 保持2回合
                  enable_actual_migration: bool = True) -> None:
         """初始化迁移顾问
         
-        【平衡修复】降低所有迁徙阈值，增加慢性衰退迁徙机制
+        【平衡修复v2】进一步降低迁徙阈值，让物种对压力更敏感
         
         调整后的逻辑：
-        - 压力驱动（逃离）：门槛25%，物种开始死亡就考虑迁徙
-        - 资源饱和（扩散）：门槛0.85，鼓励早期扩散
-        - 人口溢出（扩张）：门槛115%，轻微增长就扩张
-        - 猎物追踪：消费者追踪猎物分布
-        - 【新增】慢性衰退迁徙：连续多回合死亡率>繁殖率时触发
+        - 压力驱动（逃离）：门槛18%，轻微压力就开始考虑迁徙
+        - 资源饱和（扩散）：门槛0.75，种群达到75%承载力就开始扩散
+        - 人口溢出（扩张）：门槛110%，种群增长10%就考虑扩张
+        - 猎物追踪：猎物密度<35%就触发追踪迁徙
+        - 慢性衰退迁徙：死亡率>12%且连续2回合衰退就触发
         
         Args:
             prey_scarcity_threshold: 猎物稀缺阈值，当低于此值时触发追踪迁徙
@@ -159,8 +159,8 @@ class MigrationAdvisor:
         
         mortality_gradient = highest_rate - lowest_rate
         
-        # 如果梯度太小，不值得迁徙
-        if mortality_gradient < 0.15:
+        # 【平衡v2】如果梯度太小，不值得迁徙（从0.15降到0.08）
+        if mortality_gradient < 0.08:
             return mortality_gradient, "", ""
         
         # 生成区域描述（未来可以基于实际地块biome）
@@ -259,8 +259,8 @@ class MigrationAdvisor:
             # 当不同地块的死亡率差异显著时，从高死亡率地块迁往低死亡率地块
             if not migration_type:
                 gradient, high_area, low_area = self._analyze_tile_mortality_gradient(lineage_code)
-                # 【修复】降低梯度阈值从0.20到0.15
-                if gradient >= 0.15 and result.survivors >= effective_min_pop:
+                # 【平衡v2】降低梯度阈值从0.15到0.10，更容易触发梯度迁徙
+                if gradient >= 0.10 and result.survivors >= effective_min_pop:
                     migration_type = "tile_gradient"
                     origin = high_area
                     destination = low_area

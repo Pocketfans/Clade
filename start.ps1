@@ -33,15 +33,36 @@ if (Test-Path $langFile) {
         installingFrontend = "Installing frontend..."
         frontendReady = "Frontend ready"
         clearingPorts = "Clearing ports..."
-        startingBackend = "Starting backend (8000)..."
-        startingFrontend = "Starting frontend (5173)..."
+        startingBackend = "Starting backend ({0})..."
+        startingFrontend = "Starting frontend ({0})..."
         complete = "COMPLETE!"
         game = "Game"
         backend = "Backend"
         docs = "API Docs"
         tip1 = "Configure AI in Settings"
         tip2 = "Run stop.bat to stop"
+        tip3 = "Edit .env to change ports (BACKEND_PORT / FRONTEND_PORT)"
         pressAnyKey = "Press any key to close..."
+        portConfig = "Port config"
+    }
+}
+
+# ==================== 读取端口配置 ====================
+# 默认端口
+$BACKEND_PORT = 8000
+$FRONTEND_PORT = 5173
+
+# 从 .env 文件读取端口配置
+$envFile = Join-Path $PSScriptRoot ".env"
+if (Test-Path $envFile) {
+    $envContent = Get-Content $envFile -Encoding UTF8
+    foreach ($line in $envContent) {
+        if ($line -match '^\s*BACKEND_PORT\s*=\s*(\d+)') {
+            $BACKEND_PORT = [int]$Matches[1]
+        }
+        if ($line -match '^\s*FRONTEND_PORT\s*=\s*(\d+)') {
+            $FRONTEND_PORT = [int]$Matches[1]
+        }
     }
 }
 
@@ -274,18 +295,21 @@ Write-Status $lang.ok $lang.frontendReady $cSuccess
 Write-Step "5/6" $lang.step5
 Set-Location $scriptDir
 
+# 显示当前端口配置
+Write-Host "      [$($lang.portConfig)] Backend: $BACKEND_PORT, Frontend: $FRONTEND_PORT" -ForegroundColor $cInfo
+
 # 清理占用的端口
-$port8000 = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue
-$port5173 = Get-NetTCPConnection -LocalPort 5173 -ErrorAction SilentlyContinue
-if ($port8000 -or $port5173) {
+$portBackend = Get-NetTCPConnection -LocalPort $BACKEND_PORT -ErrorAction SilentlyContinue
+$portFrontend = Get-NetTCPConnection -LocalPort $FRONTEND_PORT -ErrorAction SilentlyContinue
+if ($portBackend -or $portFrontend) {
     Write-Status $lang.warn $lang.clearingPorts $cWarning
-    if ($port8000) { 
-        $port8000 | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { 
+    if ($portBackend) { 
+        $portBackend | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { 
             Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue 
         } 
     }
-    if ($port5173) { 
-        $port5173 | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { 
+    if ($portFrontend) { 
+        $portFrontend | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { 
             Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue 
         } 
     }
@@ -293,16 +317,17 @@ if ($port8000 -or $port5173) {
 }
 
 Write-Host ""
-Write-Status $lang.start $lang.startingBackend $cWarning
+Write-Status $lang.start ($lang.startingBackend -f $BACKEND_PORT) $cWarning
 
-$be = "Set-Location '$scriptDir\backend'; & .\venv\Scripts\Activate.ps1; python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+$be = "Set-Location '$scriptDir\backend'; & .\venv\Scripts\Activate.ps1; python -m uvicorn app.main:app --reload --host 0.0.0.0 --port $BACKEND_PORT"
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $be
 
 Start-Sleep -Seconds 4
 
-Write-Status $lang.start $lang.startingFrontend $cWarning
+Write-Status $lang.start ($lang.startingFrontend -f $FRONTEND_PORT) $cWarning
 
-$fe = "Set-Location '$scriptDir\frontend'; npm run dev"
+# 设置环境变量传递给前端
+$fe = "Set-Location '$scriptDir\frontend'; `$env:BACKEND_PORT='$BACKEND_PORT'; `$env:FRONTEND_PORT='$FRONTEND_PORT'; npm run dev -- --port $FRONTEND_PORT"
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $fe
 
 # ==================== Step 6: Complete ====================
@@ -314,17 +339,18 @@ Write-Host "  ============================================================" -For
 Write-Host "                      $($lang.complete)                      " -ForegroundColor $cSuccess
 Write-Host "  ============================================================" -ForegroundColor $cSuccess
 Write-Host ""
-Write-Host "     $($lang.game):     http://localhost:5173" -ForegroundColor Cyan
-Write-Host "     $($lang.backend):  http://localhost:8000" -ForegroundColor Cyan
-Write-Host "     $($lang.docs):     http://localhost:8000/docs" -ForegroundColor Cyan
+Write-Host "     $($lang.game):     http://localhost:$FRONTEND_PORT" -ForegroundColor Cyan
+Write-Host "     $($lang.backend):  http://localhost:$BACKEND_PORT" -ForegroundColor Cyan
+Write-Host "     $($lang.docs):     http://localhost:$BACKEND_PORT/docs" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  ------------------------------------------------------------" -ForegroundColor $cInfo
 Write-Host "     $($lang.tip1)" -ForegroundColor $cInfo
 Write-Host "     $($lang.tip2)" -ForegroundColor $cInfo
+Write-Host "     $($lang.tip3)" -ForegroundColor $cInfo
 Write-Host "  ------------------------------------------------------------" -ForegroundColor $cInfo
 Write-Host ""
 
-Start-Process "http://localhost:5173"
+Start-Process "http://localhost:$FRONTEND_PORT"
 
 Write-Host "  $($lang.pressAnyKey)" -ForegroundColor $cInfo
 [void][System.Console]::ReadKey($true)

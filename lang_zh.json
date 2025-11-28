@@ -1,5 +1,5 @@
 {
-    "startingFrontend":  "正在启动前端服务 (端口 5173)...",
+    "startingFrontend":  "正在启动前端服务 (端口 {0})...",
     "start":  "启动",
     "backend":  "后端API",
     "step2":  "检查 Node.js 环境...",
@@ -9,7 +9,7 @@
     "step5":  "启动服务...",
     "create":  "创建",
     "ok":  "完成",
-    "startingBackend":  "正在启动后端服务 (端口 8000)...",
+    "startingBackend":  "正在启动后端服务 (端口 {0})...",
     "installingFrontend":  "正在安装前端依赖...",
     "error":  "错误",
     "docs":  "API文档",
@@ -21,6 +21,7 @@
     "backendReady":  "后端环境就绪",
     "pythonNotFound":  "未找到 Python! 请安装 Python 3.11+",
     "tip2":  "关闭服务请运行 stop.bat",
+    "tip3":  "修改端口请编辑 .env 文件 (BACKEND_PORT / FRONTEND_PORT)",
     "clearingPorts":  "检测到端口被占用，正在清理...",
     "venvFailed":  "创建虚拟环境失败!",
     "creatingVenv":  "正在创建虚拟环境...",
@@ -32,5 +33,6 @@
     "step4":  "配置前端环境...",
     "pressEnter":  "按回车键退出",
     "warn":  "警告",
-    "tip1":  "首次使用请先配置 AI 服务 (设置 -\u003e AI 服务)"
+    "tip1":  "首次使用请先配置 AI 服务 (设置 -> AI 服务)",
+    "portConfig":  "端口配置"
 }

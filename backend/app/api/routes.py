@@ -69,6 +69,7 @@ from ..services.geo.map_manager import MapStateManager
 from ..services.species.migration import MigrationAdvisor
 from ..services.species.reproduction import ReproductionService
 from ..services.species.habitat_manager import habitat_manager
+from ..services.species.dispersal_engine import dispersal_engine  # 矩阵化扩散引擎
 from ..ai.model_router import ModelConfig, ModelRouter
 from ..services.species.niche import NicheAnalyzer
 from ..services.system.pressure import PressureEscalationService
@@ -1130,6 +1131,7 @@ async def create_save(request: CreateSaveRequest) -> dict:
         logger.debug(f"[存档API] 清除服务缓存和全局状态...")
         migration_advisor.clear_all_caches()
         habitat_manager.clear_all_caches()
+        dispersal_engine.clear_caches()  # 清空扩散引擎缓存
         pressure_queue.clear()
         watchlist.clear()
         
@@ -1349,6 +1351,7 @@ async def load_game(request: LoadGameRequest) -> dict:
         logger.info(f"[存档加载] 清除服务缓存和全局状态...")
         migration_advisor.clear_all_caches()
         habitat_manager.clear_all_caches()
+        dispersal_engine.clear_caches()  # 清空扩散引擎缓存
         pressure_queue.clear()
         watchlist.clear()
         

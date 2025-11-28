@@ -47,12 +47,13 @@ PRESSURE_RESPONSE_PROMPTS = {
 
 === 任务 ===
 1. 评估物种对当前压力的应对能力
-2. 判断是否处于紧急状态（死亡率>60%或连续3回合高危）
+2. 判断是否处于紧急状态（死亡率>50%或连续2回合高危）
 3. 如处于紧急状态，给出应急策略
+4. **重要**：对于不适应当前压力的物种，应大胆给出高修正系数（1.3-2.0）
 
 返回JSON：
 {{
-    "survival_modifier": 0.5-1.5,
+    "survival_modifier": 0.3-2.0,
     "modifier_reasoning": "修正系数的依据（30字内）",
     "response_strategy": "逃避/对抗/适应/忍耐/衰退",
     "key_factors": ["关键因素1", "关键因素2"],
@@ -63,7 +64,7 @@ PRESSURE_RESPONSE_PROMPTS = {
     "emergency_action": {{
         "primary_strategy": "migration/behavior_change/rapid_adaptation/diet_shift/none",
         "action_detail": "具体措施（如果is_emergency=true）",
-        "expected_benefit": 0.0-0.3
+        "expected_benefit": 0.0-0.4
     }},
     
     "should_migrate": true/false,
@@ -72,17 +73,27 @@ PRESSURE_RESPONSE_PROMPTS = {
     "brief_narrative": "60-80字描述物种当前状态和应对方式"
 }}
 
-=== 修正系数指南 ===
+=== 修正系数指南（扩大范围，鼓励极端判断）===
+⚠️ 高压力环境下必须大胆调整，不要过于保守！
+
+- 0.3-0.5: 物种完美适应当前压力（如极地物种遇到降温），死亡率大幅降低
 - 0.5-0.7: 物种特质与压力高度匹配，显著优势
 - 0.7-0.9: 物种有一定应对能力，小幅优势
 - 0.9-1.1: 中性，规则引擎计算基本准确
 - 1.1-1.3: 物种较脆弱，面临额外风险
-- 1.3-1.5: 物种与压力严重不匹配，高危状态
+- 1.3-1.6: 物种与压力严重不匹配，高危状态
+- 1.6-2.0: 物种完全不适应当前压力（如热带物种遇到极寒），濒临灭绝
 
-=== 紧急状态判定 ===
-- critical: 死亡率>70% 或 连续4+回合高危
-- warning: 死亡率50-70% 或 连续2-3回合高危
-- stable: 其他情况
+⚠️ 判断逻辑：
+- 如果总压力>5且物种缺乏对应抗性特质 → 应给1.3-2.0
+- 如果物种有多个对应的高抗性特质 → 应给0.3-0.7
+- 如果连续高危回合>=2 → emergency_level应为warning或critical
+- 如果死亡率>40% → should_migrate应为true
+
+=== 紧急状态判定（降低阈值）===
+- critical: 死亡率>60% 或 连续3+回合高危
+- warning: 死亡率40-60% 或 连续2回合高危  
+- stable: 死亡率<40%且无连续高危
 
 只返回JSON对象。
 """,

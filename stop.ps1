@@ -1,13 +1,32 @@
 ﻿# Clade Stop Services
 $Host.UI.RawUI.WindowTitle = "Clade - Stop"
 
+# ==================== 读取端口配置 ====================
+# 默认端口
+$BACKEND_PORT = 8000
+$FRONTEND_PORT = 5173
+
+# 从 .env 文件读取端口配置
+$envFile = Join-Path $PSScriptRoot ".env"
+if (Test-Path $envFile) {
+    $envContent = Get-Content $envFile -Encoding UTF8
+    foreach ($line in $envContent) {
+        if ($line -match '^\s*BACKEND_PORT\s*=\s*(\d+)') {
+            $BACKEND_PORT = [int]$Matches[1]
+        }
+        if ($line -match '^\s*FRONTEND_PORT\s*=\s*(\d+)') {
+            $FRONTEND_PORT = [int]$Matches[1]
+        }
+    }
+}
+
 # Load Chinese language
 $langFile = Join-Path $PSScriptRoot "lang_zh.json"
 if (Test-Path $langFile) {
     $lang = Get-Content $langFile -Raw -Encoding UTF8 | ConvertFrom-Json
     $stopTitle = "停止 Clade 服务"
-    $stoppingBackend = "停止后端服务 (端口 8000)..."
-    $stoppingFrontend = "停止前端服务 (端口 5173)..."
+    $stoppingBackend = "停止后端服务 (端口 $BACKEND_PORT)..."
+    $stoppingFrontend = "停止前端服务 (端口 $FRONTEND_PORT)..."
     $cleanup = "关闭相关窗口..."
     $stopped = "已停止"
     $notRunning = "未在运行"
@@ -16,8 +35,8 @@ if (Test-Path $langFile) {
     $closingWindow = "关闭窗口"
 } else {
     $stopTitle = "Stopping Clade Services"
-    $stoppingBackend = "Stopping backend (port 8000)..."
-    $stoppingFrontend = "Stopping frontend (port 5173)..."
+    $stoppingBackend = "Stopping backend (port $BACKEND_PORT)..."
+    $stoppingFrontend = "Stopping frontend (port $FRONTEND_PORT)..."
     $cleanup = "Closing windows..."
     $stopped = "Stopped"
     $notRunning = "Not running"
@@ -34,9 +53,9 @@ Write-Host "  ============================================================" -For
 Write-Host ""
 
 Write-Host "  [1/2] $stoppingBackend" -ForegroundColor Yellow
-$port8000 = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue
-if ($port8000) {
-    $port8000 | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object {
+$portBackend = Get-NetTCPConnection -LocalPort $BACKEND_PORT -ErrorAction SilentlyContinue
+if ($portBackend) {
+    $portBackend | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object {
         $proc = Get-Process -Id $_ -ErrorAction SilentlyContinue
         if ($proc) {
             Write-Host "        $stoppingProcess: $($proc.ProcessName) (PID: $_)" -ForegroundColor Gray
@@ -50,9 +69,9 @@ if ($port8000) {
 
 Write-Host ""
 Write-Host "  [2/2] $stoppingFrontend" -ForegroundColor Yellow
-$port5173 = Get-NetTCPConnection -LocalPort 5173 -ErrorAction SilentlyContinue
-if ($port5173) {
-    $port5173 | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object {
+$portFrontend = Get-NetTCPConnection -LocalPort $FRONTEND_PORT -ErrorAction SilentlyContinue
+if ($portFrontend) {
+    $portFrontend | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object {
         $proc = Get-Process -Id $_ -ErrorAction SilentlyContinue
         if ($proc) {
             Write-Host "        $stoppingProcess: $($proc.ProcessName) (PID: $_)" -ForegroundColor Gray

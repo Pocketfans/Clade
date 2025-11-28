@@ -43,6 +43,7 @@ from ..services.analytics.exporter import ExportService
 from ..services.system.embedding import EmbeddingService
 from ..services.analytics.focus_processor import FocusBatchProcessor
 from ..services.species.habitat_manager import habitat_manager  # 新增：栖息地管理器
+from ..services.species.dispersal_engine import dispersal_engine, process_batch_dispersal  # 新增：矩阵化扩散引擎
 from ..services.geo.map_evolution import MapEvolutionService
 from ..services.geo.map_manager import MapStateManager
 from ..services.geo.vegetation_cover import vegetation_cover_service
@@ -600,6 +601,33 @@ class SimulationEngine:
                     self._emit_event("info", f"{migration_count} 个物种完成迁徙", "生态")
                 else:
                     logger.debug(f"[迁徙] 生成了 {len(migration_events)} 个迁徙建议（未执行或无迁徙）")
+                
+                # 【平衡v2 新增】被动扩散机制 - 让物种更容易散布到地图各处
+                # 每回合检查所有物种，部分触发被动扩散
+                logger.debug(f"【阶段2.5】执行被动扩散...")
+                try:
+                    # 准备死亡率数据
+                    mortality_data = {r.species.lineage_code: r.death_rate for r in preliminary_critical_results + preliminary_focus_results}
+                    for r in background_results if 'background_results' in dir() else []:
+                        mortality_data[r.species.lineage_code] = r.death_rate
+                    
+                    # 执行批量扩散
+                    all_habitats = environment_repository.latest_habitats()
+                    dispersal_results = process_batch_dispersal(
+                        species_batch,
+                        all_tiles,
+                        all_habitats,
+                        mortality_data,
+                        self.turn_counter,
+                        embedding_service=self._embedding_integration
+                    )
+                    
+                    if dispersal_results:
+                        dispersal_count = len(dispersal_results)
+                        logger.info(f"【阶段2.5】被动扩散完成: {dispersal_count} 个物种扩散到新地块")
+                        self._emit_event("info", f"{dispersal_count} 个物种被动扩散", "生态")
+                except Exception as e:
+                    logger.warning(f"[扩散引擎] 被动扩散失败: {e}")
                 
                 # ========== 【方案B：第三阶段】重新评估死亡率（基于迁徙后的栖息地） ==========
                 # 7. 第二次生态位分析（基于迁徙后的新栖息地）
@@ -1567,13 +1595,14 @@ class SimulationEngine:
     ) -> None:
         """检测灭绝条件并更新物种状态。
         
-        【优化】与种群计算分离，只负责灭绝判定
+        【平衡修复v2】降低灭绝阈值，让高压力真正导致灭绝
         
         灭绝条件（50万年时间尺度）：
-        - 单回合死亡率≥90%：灾难性死亡，直接灭绝
-        - 死亡率≥70%且连续2回合：种群衰退严重，灭绝
-        - 死亡率≥60%且连续3回合：长期不适应环境，灭绝
-        - 【新增】种群<100且死亡率>50%：种群过小，无法恢复
+        - 单回合死亡率≥80%：灾难性死亡，直接灭绝（原90%）
+        - 死亡率≥60%且连续2回合：种群衰退严重，灭绝（原70%）
+        - 死亡率≥50%且连续3回合：长期不适应环境，灭绝（原60%）
+        - 死亡率≥40%且连续4回合：慢性衰退，灭绝（新增）
+        - 种群<100且死亡率>40%：种群过小，无法恢复（原50%）
         
         Args:
             mortality_results: 死亡率计算结果
@@ -1586,8 +1615,8 @@ class SimulationEngine:
             streak_key = "mortality_streak"
             mortality_streak = int(species.morphology_stats.get(streak_key, 0) or 0)
             
-            # 追踪连续高死亡率
-            if death_rate >= 0.60:
+            # 【平衡v2】追踪连续高死亡率（从60%降到40%开始计数）
+            if death_rate >= 0.40:
                 mortality_streak += 1
             else:
                 mortality_streak = 0
@@ -1596,20 +1625,24 @@ class SimulationEngine:
             extinction_triggered = False
             extinction_reason = ""
             
-            # 条件1：单回合死亡率≥90%
-            if death_rate >= 0.90:
+            # 【平衡v2】条件1：单回合死亡率≥80%（原90%）
+            if death_rate >= 0.80:
                 extinction_triggered = True
                 extinction_reason = f"单回合死亡率{death_rate:.1%}，种群崩溃"
-            # 条件2：死亡率≥70%且连续2回合
-            elif death_rate >= 0.70 and mortality_streak >= 2:
+            # 【平衡v2】条件2：死亡率≥60%且连续2回合（原70%）
+            elif death_rate >= 0.60 and mortality_streak >= 2:
                 extinction_triggered = True
-                extinction_reason = f"连续{mortality_streak}回合高死亡率（≥70%），种群衰退"
-            # 条件3：死亡率≥60%且连续3回合
-            elif death_rate >= 0.60 and mortality_streak >= 3:
+                extinction_reason = f"连续{mortality_streak}回合高死亡率（≥60%），种群衰退"
+            # 【平衡v2】条件3：死亡率≥50%且连续3回合（原60%）
+            elif death_rate >= 0.50 and mortality_streak >= 3:
                 extinction_triggered = True
-                extinction_reason = f"连续{mortality_streak}回合中高死亡率（≥60%），长期不适应环境"
-            # 【新增】条件4：种群过小且高死亡率
-            elif final_pop < 100 and death_rate > 0.50:
+                extinction_reason = f"连续{mortality_streak}回合中高死亡率（≥50%），长期不适应环境"
+            # 【新增】条件4：死亡率≥40%且连续4回合（慢性衰退）
+            elif death_rate >= 0.40 and mortality_streak >= 4:
+                extinction_triggered = True
+                extinction_reason = f"连续{mortality_streak}回合持续衰退（≥40%），无法恢复"
+            # 【平衡v2】条件5：种群过小且死亡率>40%（原50%）
+            elif final_pop < 100 and death_rate > 0.40:
                 extinction_triggered = True
                 extinction_reason = f"种群过小({final_pop})且死亡率高({death_rate:.1%})，无法恢复"
             

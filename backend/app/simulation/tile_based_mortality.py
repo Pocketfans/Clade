@@ -703,81 +703,84 @@ class TileBasedMortalityEngine:
         # 【新增】计算并缓存食草压力（供结果汇总使用）
         self._compute_and_cache_herbivory_pressure(species_list)
         
-        # ========== 【平衡修复】7. 使用混合模型替代纯乘法 ==========
-        # 问题：纯乘法会导致累积死亡率过高
-        #   例：0.2 × 0.3 × 0.2 × 0.3 × 0.2 = 0.000072 存活率 = 99.99% 死亡
-        # 解决：使用加权和 + 乘法混合，并降低各因素上限
+        # ========== 【平衡修复v2】提高压力敏感度，减少过度减免 ==========
+        # 问题诊断：原方案压力上限太低 + 抗性减免太多，导致高压力下死亡率仍然很低
+        # 
+        # 修复方向：
+        # 1. 提高各压力因素的上限
+        # 2. 减少抗性减免的幅度
+        # 3. 让高压力环境真正产生高死亡率
         
-        # 更合理的上限（降低每个因素的最大贡献）
-        env_capped = np.minimum(0.50, env_pressure)          # 从0.8降到0.5
-        competition_capped = np.minimum(0.40, competition_pressure)  # 从0.6降到0.4
-        trophic_capped = np.minimum(0.50, trophic_pressure)  # 从0.7降到0.5
-        resource_capped = np.minimum(0.45, resource_pressure)  # 从0.65降到0.45
-        predation_capped = np.minimum(0.50, predation_network_pressure)  # 从0.7降到0.5
-        plant_competition_capped = np.minimum(0.35, plant_competition_pressure)  # 植物竞争上限0.35
+        # 【修复1】提高压力上限，让极端环境真正危险
+        env_capped = np.minimum(0.65, env_pressure)          # 从0.50提高到0.65
+        competition_capped = np.minimum(0.50, competition_pressure)  # 从0.40提高到0.50
+        trophic_capped = np.minimum(0.60, trophic_pressure)  # 从0.50提高到0.60
+        resource_capped = np.minimum(0.55, resource_pressure)  # 从0.45提高到0.55
+        predation_capped = np.minimum(0.60, predation_network_pressure)  # 从0.50提高到0.60
+        plant_competition_capped = np.minimum(0.40, plant_competition_pressure)  # 从0.35提高到0.40
         
-        # 【新增】计算体型/繁殖抗性
-        # 微生物和快速繁殖物种应该有更好的生存率
+        # 【修复2】大幅降低体型/繁殖抗性
+        # 原方案抗性太高（微生物0.4+0.35），导致死亡率被减少60%以上
         body_size = species_arrays['body_size']
         generation_time = species_arrays['generation_time']
         
-        # 体型抗性：越小越抗压（繁殖快、适应强）
-        # body_size < 0.01cm (微生物) -> 0.4 抗性
-        # body_size 0.01-0.1cm -> 0.3 抗性
-        # body_size 0.1-1cm -> 0.2 抗性
-        # body_size > 1cm -> 0.1 抗性
+        # 体型抗性：降低所有档位
+        # body_size < 0.01cm (微生物) -> 0.20 抗性（原0.40）
+        # body_size 0.01-0.1cm -> 0.15 抗性（原0.30）
+        # body_size 0.1-1cm -> 0.10 抗性（原0.20）
+        # body_size > 1cm -> 0.05 抗性（原0.10）
         size_resistance = np.where(
-            body_size < 0.01, 0.40,
-            np.where(body_size < 0.1, 0.30,
-                np.where(body_size < 1.0, 0.20, 0.10))
+            body_size < 0.01, 0.20,
+            np.where(body_size < 0.1, 0.15,
+                np.where(body_size < 1.0, 0.10, 0.05))
         )
         
-        # 繁殖速度抗性：繁殖越快越抗压
-        # generation_time < 7天 -> 0.35 抗性
-        # generation_time 7-30天 -> 0.25 抗性
-        # generation_time 30-365天 -> 0.15 抗性
-        # generation_time > 365天 -> 0.05 抗性
+        # 繁殖速度抗性：同样降低
+        # generation_time < 7天 -> 0.18 抗性（原0.35）
+        # generation_time 7-30天 -> 0.12 抗性（原0.25）
+        # generation_time 30-365天 -> 0.08 抗性（原0.15）
+        # generation_time > 365天 -> 0.03 抗性（原0.05）
         repro_resistance = np.where(
-            generation_time < 7, 0.35,
-            np.where(generation_time < 30, 0.25,
-                np.where(generation_time < 365, 0.15, 0.05))
+            generation_time < 7, 0.18,
+            np.where(generation_time < 30, 0.12,
+                np.where(generation_time < 365, 0.08, 0.03))
         )
         
-        # 综合抗性（取两者的加权平均）
-        total_resistance = size_resistance * 0.6 + repro_resistance * 0.4
+        # 【修复3】降低综合抗性上限
+        # 最大抗性从约38%降到约20%
+        total_resistance = size_resistance * 0.5 + repro_resistance * 0.5
         # 广播到矩阵形状 (n_tiles, n_species)
         resistance_matrix = total_resistance[np.newaxis, :]
         
-        # 【新模型】混合死亡率计算
-        # 方法1：加权和模型（更可控）
-        # 各因素权重，总和约2.5，使得满压力时死亡率约80%
+        # 【修复4】提高加权和系数，让压力更容易导致高死亡率
+        # 各因素权重提高，使得中等压力就能产生30-50%死亡率
         weighted_sum = (
-            env_capped * 0.50 +           # 环境占比高
-            competition_capped * 0.35 +   # 竞争次之
-            trophic_capped * 0.45 +       # 营养级重要
-            resource_capped * 0.40 +      # 资源重要
-            predation_capped * 0.40 +     # 捕食重要
-            plant_competition_capped * 0.30  # 【新增】植物竞争（光照+养分）
-        )  # 总权重 = 2.4
+            env_capped * 0.60 +           # 从0.50提高到0.60
+            competition_capped * 0.45 +   # 从0.35提高到0.45
+            trophic_capped * 0.55 +       # 从0.45提高到0.55
+            resource_capped * 0.50 +      # 从0.40提高到0.50
+            predation_capped * 0.50 +     # 从0.40提高到0.50
+            plant_competition_capped * 0.35  # 从0.30提高到0.35
+        )  # 总权重 = 2.95（原2.4）
         
-        # 方法2：修正的乘法模型（保留一定的累积效应，但更温和）
-        # 使用开方来减弱乘法效应
+        # 【修复5】提高乘法模型的压力系数
         survival_product = (
-            (1.0 - env_capped * 0.6) *        # 降低系数
-            (1.0 - competition_capped * 0.5) *
-            (1.0 - trophic_capped * 0.6) *
-            (1.0 - resource_capped * 0.5) *
-            (1.0 - predation_capped * 0.6) *
-            (1.0 - plant_competition_capped * 0.4)  # 【新增】植物竞争
+            (1.0 - env_capped * 0.70) *        # 从0.6提高到0.70
+            (1.0 - competition_capped * 0.60) * # 从0.5提高到0.60
+            (1.0 - trophic_capped * 0.70) *    # 从0.6提高到0.70
+            (1.0 - resource_capped * 0.60) *   # 从0.5提高到0.60
+            (1.0 - predation_capped * 0.70) *  # 从0.6提高到0.70
+            (1.0 - plant_competition_capped * 0.50)  # 从0.4提高到0.50
         )
         multiplicative_mortality = 1.0 - survival_product
         
-        # 混合两种模型（加权和占70%，乘法占30%）
-        raw_mortality = weighted_sum * 0.70 + multiplicative_mortality * 0.30
+        # 【修复6】调整混合比例，增加乘法模型权重让高压力更致命
+        # 加权和占60%，乘法占40%（原70%/30%）
+        raw_mortality = weighted_sum * 0.60 + multiplicative_mortality * 0.40
         
-        # 应用抗性减免
-        # 抗性直接减少死亡率，最多减少40%
-        mortality = raw_mortality * (1.0 - resistance_matrix)
+        # 【修复7】降低抗性减免幅度
+        # 抗性最多减少25%死亡率（原40%）
+        mortality = raw_mortality * (1.0 - resistance_matrix * 0.6)
         
         # ========== 7. 应用世代累积死亡率 ==========
         if _settings.enable_generational_mortality:
@@ -1459,16 +1462,15 @@ class TileBasedMortalityEngine:
         species_arrays: dict[str, np.ndarray],
         mortality: np.ndarray,
     ) -> np.ndarray:
-        """【修复】应用世代适应性加成
+        """【平衡修复v2】应用世代适应性加成 - 大幅降低减免
         
         50万年时间尺度说明：
         - 微生物（1天1代）：约1.8亿代，有充足时间演化适应
         - 昆虫（1月1代）：约600万代
         - 哺乳动物（1年1代）：约50万代
         
-        核心逻辑：世代越多，演化适应能力越强，死亡率应该降低
-        - 不是重新计算累积死亡率（那个逻辑是错误的）
-        - 而是给快繁殖物种额外的抗性加成
+        【平衡修复】原方案减免太多（最高50%），导致高压力下死亡率仍然很低
+        调整后最高减免从50%降到25%
         """
         n_tiles, n_species = mortality.shape
         
@@ -1479,41 +1481,37 @@ class TileBasedMortalityEngine:
         # 计算50万年内的世代数 (n_species,)
         num_generations = (_settings.turn_years * 365) / np.maximum(1.0, generation_time)
         
-        # 【新逻辑】基于世代数的适应性加成
-        # 世代越多，演化适应能力越强
-        # 使用对数缩放，避免微生物获得过高加成
-        # log10(1e8) = 8, log10(1e6) = 6, log10(5e5) = 5.7
+        # 基于世代数的适应性加成（大幅降低）
+        # 使用对数缩放
         log_generations = np.log10(np.maximum(1.0, num_generations))
         
-        # 演化适应加成：
-        # 1亿代(log=8) -> 0.35加成（死亡率降低35%）
-        # 100万代(log=6) -> 0.25加成
-        # 50万代(log=5.7) -> 0.22加成
-        # 1万代(log=4) -> 0.12加成
-        # 1千代(log=3) -> 0.05加成
-        evolution_bonus = np.clip((log_generations - 3.0) / 5.0 * 0.35, 0.0, 0.40)
+        # 【修复】演化适应加成大幅降低：
+        # 1亿代(log=8) -> 0.15加成（原0.35）
+        # 100万代(log=6) -> 0.10加成（原0.25）
+        # 50万代(log=5.7) -> 0.09加成（原0.22）
+        # 1万代(log=4) -> 0.04加成（原0.12）
+        evolution_bonus = np.clip((log_generations - 3.0) / 5.0 * 0.15, 0.0, 0.18)
         
-        # 体型抗性（小体型物种繁殖恢复快）
+        # 【修复】体型抗性降低
         size_bonus = np.where(
-            body_size < 0.01, 0.15,  # 微生物
-            np.where(body_size < 0.1, 0.10,  # 小型
-                np.where(body_size < 1.0, 0.05, 0.0))  # 中型
+            body_size < 0.01, 0.06,  # 微生物（原0.15）
+            np.where(body_size < 0.1, 0.04,  # 小型（原0.10）
+                np.where(body_size < 1.0, 0.02, 0.0))  # 中型（原0.05）
         )
         
-        # 种群规模抗性（大种群有更高基因多样性）
+        # 【修复】种群规模抗性降低
         pop_bonus = np.where(
-            population > 1_000_000, 0.10,
-            np.where(population > 100_000, 0.05, 0.0)
+            population > 1_000_000, 0.04,  # 原0.10
+            np.where(population > 100_000, 0.02, 0.0)  # 原0.05
         )
         
-        # 综合抗性（不要累加太多，最多50%减免）
-        total_resistance = np.minimum(0.50, evolution_bonus + size_bonus + pop_bonus)
+        # 【修复】综合抗性上限从50%降到25%
+        total_resistance = np.minimum(0.25, evolution_bonus + size_bonus + pop_bonus)
         
         # 广播到矩阵形状 (n_tiles, n_species)
         resistance_matrix = total_resistance[np.newaxis, :]
         
         # 应用抗性：降低死亡率
-        # mortality_new = mortality_old * (1 - resistance)
         adjusted_mortality = mortality * (1.0 - resistance_matrix)
         
         return np.clip(adjusted_mortality, 0.0, 0.98)
