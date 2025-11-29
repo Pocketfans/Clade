@@ -924,6 +924,7 @@ class HabitatManager:
         species_list: Sequence[Species],
         tiles: list[MapTile],
         turn_index: int,
+        dispersal_engine: 'DispersalEngine | None' = None,
     ) -> dict[str, int]:
         """处理海陆变化导致的物种强制迁徙
         
@@ -931,16 +932,28 @@ class HabitatManager:
         - 海洋生物必须迁离变成陆地的地块
         - 陆生生物必须迁离变成海洋的地块
         
+        使用矩阵计算寻找最佳迁徙目的地（如果提供了dispersal_engine）
+        
         Returns:
             {"forced_relocations": int, "extinctions": int}
         """
+        import numpy as np
+        
         habitats = self.repo.latest_habitats()
         if not habitats:
             return {"forced_relocations": 0, "extinctions": 0}
         
         # 构建地块映射
         tile_map = {t.id: t for t in tiles}
+        coord_to_tile = {(t.x, t.y): t for t in tiles}
         species_map = {sp.id: sp for sp in species_list if sp.id}
+        
+        # 更新扩散引擎的地块缓存（如果可用）
+        if dispersal_engine:
+            dispersal_engine.update_tile_cache(tiles)
+        
+        # 预计算地块的水/陆状态
+        tile_is_water = {t.id: t.elevation < 0 for t in tiles}
         
         # 按物种分组栖息地
         species_habitats: dict[int, list[HabitatPopulation]] = {}
@@ -952,7 +965,7 @@ class HabitatManager:
         relocations = 0
         extinctions = 0
         updated_habitats: list[HabitatPopulation] = []
-        removed_habitats: list[tuple[int, int]] = []  # (tile_id, species_id)
+        removed_habitats: list[tuple[int, int]] = []
         
         for species_id, sp_habitats in species_habitats.items():
             species = species_map.get(species_id)
@@ -966,34 +979,76 @@ class HabitatManager:
             invalid_habitats = []
             
             for hab in sp_habitats:
-                tile = tile_map.get(hab.tile_id)
-                if not tile:
-                    continue
-                
-                tile_is_water = tile.elevation < 0
+                is_water = tile_is_water.get(hab.tile_id, False)
                 
                 # 检查物种是否还能在这个地块生存
-                if is_aquatic and not tile_is_water:
-                    # 水生生物在陆地上无法生存
+                if is_aquatic and not is_water:
                     invalid_habitats.append(hab)
-                elif not is_aquatic and tile_is_water and habitat_type != 'amphibious':
-                    # 陆生生物在水中无法生存（两栖除外）
+                elif not is_aquatic and is_water and habitat_type != 'amphibious':
                     invalid_habitats.append(hab)
                 else:
                     valid_habitats.append(hab)
             
-            if invalid_habitats:
-                # 需要迁移
-                if valid_habitats:
-                    # 将种群转移到有效栖息地
-                    total_displaced = sum(h.population for h in invalid_habitats)
-                    total_valid_suit = sum(h.suitability for h in valid_habitats) or 1.0
+            if not invalid_habitats:
+                continue
+            
+            # 需要迁移
+            total_displaced = sum(h.population for h in invalid_habitats)
+            
+            if valid_habitats:
+                # === 使用矩阵计算分配种群 ===
+                if dispersal_engine and dispersal_engine._tile_matrix is not None:
+                    # 使用扩散引擎计算适宜度
+                    suitability = dispersal_engine.compute_suitability_matrix(
+                        species, 
+                        exclude_tiles={h.tile_id for h in invalid_habitats}
+                    )
                     
-                    for valid_hab in valid_habitats:
-                        # 按适宜度比例分配迁入种群
-                        portion = valid_hab.suitability / total_valid_suit
-                        added_pop = int(total_displaced * portion * 0.7)  # 迁移损失30%
+                    # 只考虑有效栖息地
+                    valid_tile_ids = {h.tile_id for h in valid_habitats}
+                    valid_indices = [
+                        dispersal_engine._tile_map.get(tid, -1) 
+                        for tid in valid_tile_ids
+                    ]
+                    valid_indices = [i for i in valid_indices if i >= 0]
+                    
+                    if valid_indices:
+                        valid_scores = suitability[valid_indices]
+                        total_score = valid_scores.sum() or 1.0
                         
+                        for i, valid_hab in enumerate(valid_habitats):
+                            idx = dispersal_engine._tile_map.get(valid_hab.tile_id, -1)
+                            if idx >= 0 and idx in valid_indices:
+                                portion = suitability[idx] / total_score
+                            else:
+                                portion = 1.0 / len(valid_habitats)
+                            
+                            added_pop = int(total_displaced * portion * 0.7)
+                            updated_habitats.append(HabitatPopulation(
+                                tile_id=valid_hab.tile_id,
+                                species_id=species_id,
+                                population=valid_hab.population + added_pop,
+                                suitability=valid_hab.suitability,
+                                turn_index=turn_index,
+                            ))
+                    else:
+                        # fallback: 简单分配
+                        for valid_hab in valid_habitats:
+                            portion = 1.0 / len(valid_habitats)
+                            added_pop = int(total_displaced * portion * 0.7)
+                            updated_habitats.append(HabitatPopulation(
+                                tile_id=valid_hab.tile_id,
+                                species_id=species_id,
+                                population=valid_hab.population + added_pop,
+                                suitability=valid_hab.suitability,
+                                turn_index=turn_index,
+                            ))
+                else:
+                    # 无扩散引擎：按适宜度比例分配
+                    total_valid_suit = sum(h.suitability for h in valid_habitats) or 1.0
+                    for valid_hab in valid_habitats:
+                        portion = valid_hab.suitability / total_valid_suit
+                        added_pop = int(total_displaced * portion * 0.7)
                         updated_habitats.append(HabitatPopulation(
                             tile_id=valid_hab.tile_id,
                             species_id=species_id,
@@ -1001,17 +1056,49 @@ class HabitatManager:
                             suitability=valid_hab.suitability,
                             turn_index=turn_index,
                         ))
+                
+                relocations += len(invalid_habitats)
+                logger.info(f"[栖息地] {species.common_name} 从 {len(invalid_habitats)} 个不适宜地块迁出")
+            else:
+                # 没有有效栖息地，尝试寻找新栖息地
+                if dispersal_engine and dispersal_engine._tile_matrix is not None:
+                    # 使用矩阵计算找到最适宜的新地块
+                    suitability = dispersal_engine.compute_suitability_matrix(
+                        species,
+                        exclude_tiles={h.tile_id for h in invalid_habitats}
+                    )
                     
-                    relocations += len(invalid_habitats)
-                    logger.info(f"[栖息地] {species.common_name} 从 {len(invalid_habitats)} 个不适宜地块迁出")
+                    # 找到最适宜的地块
+                    best_indices = np.argsort(suitability)[-5:][::-1]  # top 5
+                    best_indices = [i for i in best_indices if suitability[i] > 0.3]
+                    
+                    if best_indices:
+                        total_score = sum(suitability[i] for i in best_indices)
+                        for idx in best_indices:
+                            tile_id = dispersal_engine._tile_ids[idx]
+                            portion = suitability[idx] / total_score
+                            added_pop = int(total_displaced * portion * 0.5)  # 紧急迁徙损失更大
+                            
+                            updated_habitats.append(HabitatPopulation(
+                                tile_id=tile_id,
+                                species_id=species_id,
+                                population=added_pop,
+                                suitability=float(suitability[idx]),
+                                turn_index=turn_index,
+                            ))
+                        
+                        relocations += len(invalid_habitats)
+                        logger.info(f"[栖息地] {species.common_name} 紧急迁徙到 {len(best_indices)} 个新地块")
+                    else:
+                        extinctions += 1
+                        logger.warning(f"[栖息地] {species.common_name} 找不到适宜栖息地！")
                 else:
-                    # 没有有效栖息地，物种面临严重危机
                     extinctions += 1
                     logger.warning(f"[栖息地] {species.common_name} 所有栖息地变得不适宜！")
-                
-                # 标记需要移除的栖息地
-                for inv_hab in invalid_habitats:
-                    removed_habitats.append((inv_hab.tile_id, species_id))
+            
+            # 标记需要移除的栖息地
+            for inv_hab in invalid_habitats:
+                removed_habitats.append((inv_hab.tile_id, species_id))
         
         # 保存更新
         if updated_habitats:
@@ -1019,16 +1106,16 @@ class HabitatManager:
         
         # 移除不适宜的栖息地记录
         if removed_habitats:
+            remove_records = []
             for tile_id, species_id in removed_habitats:
-                # 将种群设为0
-                updated_habitats.append(HabitatPopulation(
+                remove_records.append(HabitatPopulation(
                     tile_id=tile_id,
                     species_id=species_id,
                     population=0,
                     suitability=0.0,
                     turn_index=turn_index,
                 ))
-            self.repo.write_habitats(updated_habitats)
+            self.repo.write_habitats(remove_records)
         
         if relocations > 0 or extinctions > 0:
             logger.info(f"[栖息地] 海陆变化: {relocations} 次迁移, {extinctions} 个物种危机")

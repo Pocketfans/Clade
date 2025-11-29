@@ -502,9 +502,10 @@ class SimulationEngine:
                                 )
                                 logger.info(f"[板块系统] 水体重新分类完成（湖泊检测）")
                                 
-                                # 处理海陆变化导致的物种强制迁徙
+                                # 处理海陆变化导致的物种强制迁徙（使用矩阵计算）
                                 relocation_result = habitat_manager.handle_terrain_type_changes(
-                                    alive_species, updated_tiles, self.turn_counter
+                                    alive_species, updated_tiles, self.turn_counter,
+                                    dispersal_engine=dispersal_engine
                                 )
                                 if relocation_result["forced_relocations"] > 0:
                                     self._emit_event(
