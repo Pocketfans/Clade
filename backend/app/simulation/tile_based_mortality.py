@@ -909,93 +909,93 @@ class TileBasedMortalityEngine:
         # 【新增】计算并缓存食草压力（供结果汇总使用）
         self._compute_and_cache_herbivory_pressure(species_list)
         
-        # ========== 【平衡修复v2】提高压力敏感度，减少过度减免 ==========
-        # 问题诊断：原方案压力上限太低 + 抗性减免太多，导致高压力下死亡率仍然很低
+        # ========== 【平衡修复v3】重新平衡死亡率计算 ==========
+        # 问题诊断：之前的修复让死亡率太高，即使在适宜条件下也有44%+
         # 
         # 修复方向：
-        # 1. 提高各压力因素的上限
-        # 2. 减少抗性减免的幅度
-        # 3. 让高压力环境真正产生高死亡率
+        # 1. 降低各压力因素的上限和权重
+        # 2. 恢复部分抗性减免
+        # 3. 让适宜环境真正安全（死亡率 < 15%）
+        # 4. 极端环境仍然危险（死亡率 > 50%）
         
-        # 【修复1】提高压力上限，让极端环境真正危险
-        env_capped = np.minimum(0.65, env_pressure)          # 从0.50提高到0.65
-        competition_capped = np.minimum(0.50, competition_pressure)  # 从0.40提高到0.50
-        trophic_capped = np.minimum(0.60, trophic_pressure)  # 从0.50提高到0.60
-        resource_capped = np.minimum(0.55, resource_pressure)  # 从0.45提高到0.55
-        predation_capped = np.minimum(0.60, predation_network_pressure)  # 从0.50提高到0.60
-        plant_competition_capped = np.minimum(0.40, plant_competition_pressure)  # 从0.35提高到0.40
+        # 【修复1】降低压力上限，让适宜环境更安全
+        env_capped = np.minimum(0.50, env_pressure)          # 从0.65降到0.50
+        competition_capped = np.minimum(0.40, competition_pressure)  # 从0.50降到0.40
+        trophic_capped = np.minimum(0.45, trophic_pressure)  # 从0.60降到0.45
+        resource_capped = np.minimum(0.40, resource_pressure)  # 从0.55降到0.40
+        predation_capped = np.minimum(0.50, predation_network_pressure)  # 从0.60降到0.50
+        plant_competition_capped = np.minimum(0.30, plant_competition_pressure)  # 从0.40降到0.30
         
-        # 【修复2】大幅降低体型/繁殖抗性
-        # 原方案抗性太高（微生物0.4+0.35），导致死亡率被减少60%以上
+        # 【修复2】恢复部分抗性
         body_size = species_arrays['body_size']
         generation_time = species_arrays['generation_time']
         
-        # 体型抗性：降低所有档位
-        # body_size < 0.01cm (微生物) -> 0.20 抗性（原0.40）
-        # body_size 0.01-0.1cm -> 0.15 抗性（原0.30）
-        # body_size 0.1-1cm -> 0.10 抗性（原0.20）
-        # body_size > 1cm -> 0.05 抗性（原0.10）
+        # 体型抗性：恢复到中等水平
+        # body_size < 0.01cm (微生物) -> 0.30 抗性
+        # body_size 0.01-0.1cm -> 0.22 抗性
+        # body_size 0.1-1cm -> 0.15 抗性
+        # body_size > 1cm -> 0.08 抗性
         size_resistance = np.where(
-            body_size < 0.01, 0.20,
-            np.where(body_size < 0.1, 0.15,
-                np.where(body_size < 1.0, 0.10, 0.05))
+            body_size < 0.01, 0.30,
+            np.where(body_size < 0.1, 0.22,
+                np.where(body_size < 1.0, 0.15, 0.08))
         )
         
-        # 繁殖速度抗性：同样降低
-        # generation_time < 7天 -> 0.18 抗性（原0.35）
-        # generation_time 7-30天 -> 0.12 抗性（原0.25）
-        # generation_time 30-365天 -> 0.08 抗性（原0.15）
-        # generation_time > 365天 -> 0.03 抗性（原0.05）
+        # 繁殖速度抗性：恢复到中等水平
+        # generation_time < 7天 -> 0.25 抗性
+        # generation_time 7-30天 -> 0.18 抗性
+        # generation_time 30-365天 -> 0.12 抗性
+        # generation_time > 365天 -> 0.05 抗性
         repro_resistance = np.where(
-            generation_time < 7, 0.18,
-            np.where(generation_time < 30, 0.12,
-                np.where(generation_time < 365, 0.08, 0.03))
+            generation_time < 7, 0.25,
+            np.where(generation_time < 30, 0.18,
+                np.where(generation_time < 365, 0.12, 0.05))
         )
         
-        # 【修复3】降低综合抗性上限
-        # 最大抗性从约38%降到约20%
+        # 【修复3】综合抗性上限恢复
+        # 微生物最大抗性约28%
         total_resistance = size_resistance * 0.5 + repro_resistance * 0.5
         # 广播到矩阵形状 (n_tiles, n_species)
         resistance_matrix = total_resistance[np.newaxis, :]
         
-        # 【修复4】提高加权和系数，让压力更容易导致高死亡率
-        # 各因素权重提高，使得中等压力就能产生30-50%死亡率
+        # 【修复4】降低加权和系数，让低压力环境更安全
+        # 目标：所有压力都是0.1时，加权和约0.15
         weighted_sum = (
-            env_capped * 0.60 +           # 从0.50提高到0.60
-            competition_capped * 0.45 +   # 从0.35提高到0.45
-            trophic_capped * 0.55 +       # 从0.45提高到0.55
-            resource_capped * 0.50 +      # 从0.40提高到0.50
-            predation_capped * 0.50 +     # 从0.40提高到0.50
-            plant_competition_capped * 0.35  # 从0.30提高到0.35
-        )  # 总权重 = 2.95（原2.4）
+            env_capped * 0.40 +           # 从0.60降到0.40
+            competition_capped * 0.30 +   # 从0.45降到0.30
+            trophic_capped * 0.40 +       # 从0.55降到0.40
+            resource_capped * 0.35 +      # 从0.50降到0.35
+            predation_capped * 0.35 +     # 从0.50降到0.35
+            plant_competition_capped * 0.25  # 从0.35降到0.25
+        )  # 总权重 = 2.05（从2.95降低）
         
-        # 【修复5】提高乘法模型的压力系数
+        # 【修复5】降低乘法模型的压力系数
         survival_product = (
-            (1.0 - env_capped * 0.70) *        # 从0.6提高到0.70
-            (1.0 - competition_capped * 0.60) * # 从0.5提高到0.60
-            (1.0 - trophic_capped * 0.70) *    # 从0.6提高到0.70
-            (1.0 - resource_capped * 0.60) *   # 从0.5提高到0.60
-            (1.0 - predation_capped * 0.70) *  # 从0.6提高到0.70
-            (1.0 - plant_competition_capped * 0.50)  # 从0.4提高到0.50
+            (1.0 - env_capped * 0.50) *        # 从0.70降到0.50
+            (1.0 - competition_capped * 0.45) * # 从0.60降到0.45
+            (1.0 - trophic_capped * 0.55) *    # 从0.70降到0.55
+            (1.0 - resource_capped * 0.45) *   # 从0.60降到0.45
+            (1.0 - predation_capped * 0.55) *  # 从0.70降到0.55
+            (1.0 - plant_competition_capped * 0.35)  # 从0.50降到0.35
         )
         multiplicative_mortality = 1.0 - survival_product
         
-        # 【修复6】调整混合比例，增加乘法模型权重让高压力更致命
-        # 加权和占60%，乘法占40%（原70%/30%）
-        raw_mortality = weighted_sum * 0.60 + multiplicative_mortality * 0.40
+        # 【修复6】增加加权和比例（更稳定）
+        # 加权和占70%，乘法占30%
+        raw_mortality = weighted_sum * 0.70 + multiplicative_mortality * 0.30
         
-        # 【修复7】降低抗性减免幅度
-        # 抗性最多减少25%死亡率（原40%）
-        mortality = raw_mortality * (1.0 - resistance_matrix * 0.6)
+        # 【修复7】增加抗性减免幅度
+        # 抗性最多减少35%死亡率
+        mortality = raw_mortality * (1.0 - resistance_matrix * 0.70)
         
         # ========== 7. 应用世代累积死亡率 ==========
         if _settings.enable_generational_mortality:
             mortality = self._apply_generational_mortality(species_arrays, mortality)
         
         # ========== 8. 边界约束 ==========
-        # 【修复】最低死亡率从3%降到2%，给快繁殖物种更多生存空间
+        # 【平衡v3】最低死亡率降到1%，给适宜条件下的物种更多生存空间
         # 最高死亡率保持98%
-        mortality = np.clip(mortality, 0.02, 0.98)
+        mortality = np.clip(mortality, 0.01, 0.98)
         
         return mortality
     
@@ -1338,37 +1338,42 @@ class TileBasedMortalityEngine:
         safe_t3 = np.maximum(t3, MIN_BIOMASS)
         safe_t4 = np.maximum(t4, MIN_BIOMASS)
         
+        # 【平衡修复v3】降低无食物时的稀缺压力
+        # 原来2.0太高，导致新物种在第一回合就有44%+的死亡率
+        # 修改为1.0，让稀缺压力更温和
+        SCARCITY_MAX = 1.0  # 从2.0降到1.0
+        
         # === T1 受 T2 采食 ===
         req_t1 = np.where(t2 > 0, t2 / EFFICIENCY, 0)
         grazing_ratio = np.divide(req_t1, safe_t1, out=np.zeros_like(req_t1), where=t1 > MIN_BIOMASS)
         grazing = np.minimum(grazing_ratio * 0.5, 0.8)
         scarcity_t2 = np.where(t1 > MIN_BIOMASS, 
-                               np.clip(grazing_ratio - 1.0, 0, 2.0),
-                               np.where(t2 > 0, 2.0, 0.0))
+                               np.clip(grazing_ratio - 1.0, 0, SCARCITY_MAX),
+                               np.where(t2 > 0, SCARCITY_MAX, 0.0))
         
         # === T2 受 T3 捕食 ===
         req_t2 = np.where(t3 > 0, t3 / EFFICIENCY, 0)
         ratio_t2 = np.divide(req_t2, safe_t2, out=np.zeros_like(req_t2), where=t2 > MIN_BIOMASS)
         pred_t3 = np.minimum(ratio_t2 * 0.5, 0.8)
         scarcity_t3 = np.where(t2 > MIN_BIOMASS,
-                               np.clip(ratio_t2 - 1.0, 0, 2.0),
-                               np.where(t3 > 0, 2.0, 0.0))
+                               np.clip(ratio_t2 - 1.0, 0, SCARCITY_MAX),
+                               np.where(t3 > 0, SCARCITY_MAX, 0.0))
         
         # === T3 受 T4 捕食 ===
         req_t3 = np.where(t4 > 0, t4 / EFFICIENCY, 0)
         ratio_t3 = np.divide(req_t3, safe_t3, out=np.zeros_like(req_t3), where=t3 > MIN_BIOMASS)
         pred_t4 = np.minimum(ratio_t3 * 0.5, 0.8)
         scarcity_t4 = np.where(t3 > MIN_BIOMASS,
-                               np.clip(ratio_t3 - 1.0, 0, 2.0),
-                               np.where(t4 > 0, 2.0, 0.0))
+                               np.clip(ratio_t3 - 1.0, 0, SCARCITY_MAX),
+                               np.where(t4 > 0, SCARCITY_MAX, 0.0))
         
         # === T4 受 T5 捕食 ===
         req_t4 = np.where(t5 > 0, t5 / EFFICIENCY, 0)
         ratio_t4 = np.divide(req_t4, safe_t4, out=np.zeros_like(req_t4), where=t4 > MIN_BIOMASS)
         pred_t5 = np.minimum(ratio_t4 * 0.5, 0.8)
         scarcity_t5 = np.where(t4 > MIN_BIOMASS,
-                               np.clip(ratio_t4 - 1.0, 0, 2.0),
-                               np.where(t5 > 0, 2.0, 0.0))
+                               np.clip(ratio_t4 - 1.0, 0, SCARCITY_MAX),
+                               np.where(t5 > 0, SCARCITY_MAX, 0.0))
         
         # 将压力分配到各物种
         for sp_idx in range(n_species):
