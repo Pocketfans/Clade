@@ -377,6 +377,7 @@ class SimulationEngine:
                 # ========== 【回合初始化】清理各服务缓存 ==========
                 self.speciation.clear_tile_cache()
                 self.migration_advisor.clear_tile_mortality_cache()
+                self.tile_mortality.clear_accumulated_data()  # 清空地块存活数据累积
                 
                 temp_delta_for_habitats = 0.0
                 sea_delta_for_habitats = 0.0

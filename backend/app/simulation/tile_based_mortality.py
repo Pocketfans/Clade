@@ -152,6 +152,11 @@ class TileBasedMortalityEngine:
         self._last_mortality_matrix: np.ndarray | None = None
         self._last_species_lineage_to_idx: dict[str, int] = {}
         
+        # 【修复】累积存活数据（跨多个evaluate批次）
+        self._accumulated_tile_survivors: dict[str, dict[int, int]] = {}
+        self._accumulated_tile_mortality: dict[str, dict[int, float]] = {}
+        self._accumulated_tile_population: dict[str, dict[int, float]] = {}
+        
         # 【新增】地块邻接关系
         self._tile_adjacency: dict[int, set[int]] = {}
         
@@ -388,6 +393,45 @@ class TileBasedMortalityEngine:
         
         logger.debug(f"[地块邻接] 构建了 {len(self._tile_adjacency)} 个地块的邻接关系")
     
+    def clear_accumulated_data(self) -> None:
+        """清空累积的存活数据（每回合开始时调用）"""
+        self._accumulated_tile_survivors.clear()
+        self._accumulated_tile_mortality.clear()
+        self._accumulated_tile_population.clear()
+    
+    def _accumulate_batch_results(
+        self, 
+        species_list: list[Species],
+        population_matrix: np.ndarray,
+        mortality_matrix: np.ndarray
+    ) -> None:
+        """累积当前批次的存活数据
+        
+        每次调用 evaluate 后，将结果累积到全局字典中，
+        而不是覆盖之前的数据。
+        """
+        for sp_idx, species in enumerate(species_list):
+            lineage_code = species.lineage_code
+            
+            # 初始化该物种的字典
+            if lineage_code not in self._accumulated_tile_survivors:
+                self._accumulated_tile_survivors[lineage_code] = {}
+            if lineage_code not in self._accumulated_tile_mortality:
+                self._accumulated_tile_mortality[lineage_code] = {}
+            if lineage_code not in self._accumulated_tile_population:
+                self._accumulated_tile_population[lineage_code] = {}
+            
+            for tile_id, tile_idx in self._tile_id_to_idx.items():
+                pop = population_matrix[tile_idx, sp_idx]
+                if pop > 0:
+                    mortality_rate = mortality_matrix[tile_idx, sp_idx]
+                    survivors = int(pop * (1.0 - mortality_rate))
+                    
+                    self._accumulated_tile_population[lineage_code][tile_id] = float(pop)
+                    self._accumulated_tile_mortality[lineage_code][tile_id] = float(mortality_rate)
+                    if survivors > 0:
+                        self._accumulated_tile_survivors[lineage_code][tile_id] = survivors
+    
     def get_tile_adjacency(self) -> dict[int, set[int]]:
         """获取地块邻接关系（供其他服务使用）"""
         return self._tile_adjacency
@@ -419,9 +463,16 @@ class TileBasedMortalityEngine:
     def get_all_species_tile_mortality(self) -> dict[str, dict[int, float]]:
         """获取所有物种在各地块的死亡率
         
+        【修复】使用累积数据，包含所有批次的物种
+        
         Returns:
             {lineage_code: {tile_id: death_rate}} 嵌套字典
         """
+        # 使用累积的数据
+        if self._accumulated_tile_mortality:
+            return self._accumulated_tile_mortality.copy()
+        
+        # 回退：使用旧逻辑
         if self._last_mortality_matrix is None:
             return {}
         
@@ -464,9 +515,16 @@ class TileBasedMortalityEngine:
     def get_all_species_tile_population(self) -> dict[str, dict[int, float]]:
         """获取所有物种在各地块的种群分布
         
+        【修复】使用累积数据，包含所有批次的物种
+        
         Returns:
             {lineage_code: {tile_id: population}} 嵌套字典
         """
+        # 使用累积的数据
+        if self._accumulated_tile_population:
+            return self._accumulated_tile_population.copy()
+        
+        # 回退：使用旧逻辑
         if self._population_matrix is None:
             return {}
         
@@ -483,14 +541,21 @@ class TileBasedMortalityEngine:
         return result
     
     def get_all_species_tile_survivors(self) -> dict[str, dict[int, int]]:
-        """【新增】获取所有物种在各地块的存活数（死亡率计算后）
+        """【修复】获取所有物种在各地块的存活数（死亡率计算后）
         
         这是关键方法：返回每个地块的实际存活数量，用于更新栖息地种群。
-        计算公式：survivors = population * (1 - mortality_rate)
+        
+        【重要修复】使用累积的数据而不是仅最后一批的数据，
+        确保所有批次（critical, focus, background）的物种都被正确处理。
         
         Returns:
             {lineage_code: {tile_id: survivors}} 嵌套字典
         """
+        # 使用累积的数据（包含所有批次的物种）
+        if self._accumulated_tile_survivors:
+            return self._accumulated_tile_survivors.copy()
+        
+        # 回退：如果没有累积数据，使用旧逻辑（仅最后一批）
         if self._population_matrix is None or self._last_mortality_matrix is None:
             return {}
         
@@ -716,6 +781,9 @@ class TileBasedMortalityEngine:
         self._last_species_lineage_to_idx = {
             sp.lineage_code: i for i, sp in enumerate(species_list)
         }
+        
+        # 【修复】累积本批次的存活数据（而不是只保留最后一批）
+        self._accumulate_batch_results(species_list, batch_population_matrix, mortality_matrix)
         
         # ========== 阶段3: 汇总各地块结果 ==========
         results = self._aggregate_tile_results(
