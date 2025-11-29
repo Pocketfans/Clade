@@ -755,6 +755,20 @@ class SimulationEngine:
                 except Exception as e:
                     logger.warning(f"[扩散引擎] 被动扩散失败: {e}")
                 
+                # ========== 【改进v4】饥饿迁徙：消费者追踪猎物 ==========
+                # 检查消费者是否远离食物源，触发向猎物的迁徙
+                try:
+                    hunger_migrations = habitat_manager.trigger_hunger_migration(
+                        species_batch, all_tiles, self.turn_counter,
+                        dispersal_engine=dispersal_engine
+                    )
+                    if hunger_migrations > 0:
+                        migration_count += hunger_migrations
+                        logger.info(f"【阶段2.6】饥饿迁徙: {hunger_migrations} 个消费者向猎物迁移")
+                        self._emit_event("info", f"🍖 {hunger_migrations} 个消费者追踪猎物", "生态")
+                except Exception as e:
+                    logger.warning(f"[饥饿迁徙] 执行失败: {e}")
+                
                 # ========== 【方案B：第三阶段】重新评估死亡率（基于迁徙后的栖息地） ==========
                 # 7. 第二次生态位分析（基于迁徙后的新栖息地）
                 if migration_count > 0:

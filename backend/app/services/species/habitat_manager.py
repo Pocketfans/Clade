@@ -1120,7 +1120,291 @@ class HabitatManager:
         if relocations > 0 or extinctions > 0:
             logger.info(f"[栖息地] 海陆变化: {relocations} 次迁移, {extinctions} 个物种危机")
         
-        return {"forced_relocations": relocations, "extinctions": extinctions}
+        # 【改进v4】地质变化后检查消费者的食物来源
+        hunger_migrations = self.trigger_hunger_migration(
+            species_list, tiles, turn_index, dispersal_engine
+        )
+        
+        return {
+            "forced_relocations": relocations, 
+            "extinctions": extinctions,
+            "hunger_migrations": hunger_migrations
+        }
+    
+    def check_consumer_food_availability(
+        self,
+        species_list: Sequence[Species],
+        tiles: list[MapTile],
+    ) -> dict[int, dict]:
+        """检查消费者是否有食物来源
+        
+        返回每个消费者的食物可用性状态：
+        {species_id: {
+            "has_food": bool,
+            "prey_overlap_ratio": float,  # 与猎物重叠的地块比例
+            "nearest_prey_distance": float,  # 最近猎物的距离
+            "prey_tiles": set[int]  # 猎物所在地块
+        }}
+        """
+        import math
+        
+        habitats = self.repo.latest_habitats()
+        if not habitats:
+            return {}
+        
+        # 更新地块坐标缓存
+        self._update_tile_coords_cache(tiles)
+        
+        # 构建物种映射
+        species_map = {sp.id: sp for sp in species_list if sp.id}
+        
+        # 按物种分组栖息地
+        species_habitats: dict[int, set[int]] = {}
+        for h in habitats:
+            if h.species_id not in species_habitats:
+                species_habitats[h.species_id] = set()
+            species_habitats[h.species_id].add(h.tile_id)
+        
+        def _get_trophic_range(trophic: float) -> float:
+            return math.floor(trophic * 2) / 2.0
+        
+        # 构建各营养级的分布
+        trophic_tiles: dict[float, set[int]] = {}
+        for species_id, tile_ids in species_habitats.items():
+            sp = species_map.get(species_id)
+            if sp:
+                trophic = getattr(sp, 'trophic_level', 1.0) or 1.0
+                trophic_range = _get_trophic_range(trophic)
+                if trophic_range not in trophic_tiles:
+                    trophic_tiles[trophic_range] = set()
+                trophic_tiles[trophic_range].update(tile_ids)
+        
+        def _get_prey_tiles(consumer_trophic: float) -> set[int]:
+            """根据消费者营养级获取猎物地块"""
+            consumer_range = _get_trophic_range(consumer_trophic)
+            prey_set: set[int] = set()
+            
+            if consumer_range >= 5.0:
+                prey_ranges = [4.0, 4.5, 3.5, 3.0]
+            elif consumer_range >= 4.0:
+                prey_ranges = [3.0, 3.5, 2.5, 2.0]
+            elif consumer_range >= 3.0:
+                prey_ranges = [2.0, 2.5, 1.5]
+            elif consumer_range >= 2.0:
+                prey_ranges = [1.0, 1.5]
+            else:
+                prey_ranges = []
+            
+            for pr in prey_ranges:
+                if pr in trophic_tiles:
+                    prey_set.update(trophic_tiles[pr])
+            return prey_set
+        
+        # 检查每个消费者
+        result: dict[int, dict] = {}
+        
+        for species_id, my_tiles in species_habitats.items():
+            sp = species_map.get(species_id)
+            if not sp:
+                continue
+            
+            trophic = getattr(sp, 'trophic_level', 1.0) or 1.0
+            if trophic < 2.0:
+                # 生产者不需要检查食物
+                continue
+            
+            prey_tiles = _get_prey_tiles(trophic)
+            
+            # 计算重叠比例
+            overlap = my_tiles & prey_tiles
+            overlap_ratio = len(overlap) / len(my_tiles) if my_tiles else 0.0
+            
+            # 计算最近猎物距离
+            if prey_tiles and my_tiles:
+                min_distance = float('inf')
+                for my_tile in my_tiles:
+                    for prey_tile in prey_tiles:
+                        dist = self._calculate_tile_distance(my_tile, prey_tile)
+                        if dist < min_distance:
+                            min_distance = dist
+            else:
+                min_distance = float('inf')
+            
+            has_food = overlap_ratio > 0.1 or (prey_tiles and min_distance <= 3)
+            
+            result[species_id] = {
+                "has_food": has_food,
+                "prey_overlap_ratio": overlap_ratio,
+                "nearest_prey_distance": min_distance,
+                "prey_tiles": prey_tiles,
+                "my_tiles": my_tiles,
+            }
+            
+            if not has_food and prey_tiles:
+                logger.debug(
+                    f"[栖息地] {sp.common_name} (T{trophic:.1f}) 缺少食物! "
+                    f"重叠率={overlap_ratio:.1%}, 最近猎物距离={min_distance}"
+                )
+        
+        return result
+    
+    def trigger_hunger_migration(
+        self,
+        species_list: Sequence[Species],
+        tiles: list[MapTile],
+        turn_index: int,
+        dispersal_engine: 'DispersalEngine | None' = None,
+    ) -> int:
+        """触发饥饿迁徙：消费者向猎物方向迁移
+        
+        当消费者的栖息地与猎物不重叠时，触发向猎物方向的迁徙
+        
+        Returns:
+            迁徙的物种数量
+        """
+        food_status = self.check_consumer_food_availability(species_list, tiles)
+        
+        if not food_status:
+            return 0
+        
+        species_map = {sp.id: sp for sp in species_list if sp.id}
+        habitats = self.repo.latest_habitats()
+        
+        # 按物种分组栖息地
+        species_habitats: dict[int, list[HabitatPopulation]] = {}
+        for h in habitats:
+            if h.species_id not in species_habitats:
+                species_habitats[h.species_id] = []
+            species_habitats[h.species_id].append(h)
+        
+        migrations = 0
+        updated_habitats: list[HabitatPopulation] = []
+        
+        for species_id, status in food_status.items():
+            if status["has_food"]:
+                continue  # 有食物，不需要迁徙
+            
+            prey_tiles = status["prey_tiles"]
+            my_tiles = status["my_tiles"]
+            
+            if not prey_tiles:
+                # 完全没有猎物（可能猎物灭绝了）
+                continue
+            
+            sp = species_map.get(species_id)
+            if not sp:
+                continue
+            
+            sp_habitats = species_habitats.get(species_id, [])
+            if not sp_habitats:
+                continue
+            
+            # 计算迁徙目标：最靠近猎物的地块
+            # 策略：将部分种群迁移到有猎物的地块
+            
+            # 筛选适合该物种的地块
+            habitat_type = getattr(sp, 'habitat_type', 'terrestrial')
+            tile_map = {t.id: t for t in tiles}
+            
+            # 找到适合迁徙的猎物地块
+            valid_prey_tiles = []
+            for prey_tile_id in prey_tiles:
+                prey_tile = tile_map.get(prey_tile_id)
+                if not prey_tile:
+                    continue
+                
+                # 检查地形是否适合
+                biome = prey_tile.biome.lower() if prey_tile.biome else ""
+                is_water = prey_tile.elevation < 0
+                
+                if habitat_type == "marine" and is_water:
+                    valid_prey_tiles.append(prey_tile_id)
+                elif habitat_type == "terrestrial" and not is_water:
+                    valid_prey_tiles.append(prey_tile_id)
+                elif habitat_type in ("amphibious", "coastal"):
+                    valid_prey_tiles.append(prey_tile_id)
+            
+            if not valid_prey_tiles:
+                logger.debug(f"[栖息地] {sp.common_name} 没有可迁徙的猎物地块（地形不兼容）")
+                continue
+            
+            # 计算总种群
+            total_pop = sum(h.population for h in sp_habitats)
+            
+            # 迁徙比例：根据饥饿程度决定
+            overlap_ratio = status["prey_overlap_ratio"]
+            if overlap_ratio == 0:
+                migrate_ratio = 0.6  # 完全没有重叠，迁徙60%
+            elif overlap_ratio < 0.1:
+                migrate_ratio = 0.4  # 少量重叠，迁徙40%
+            else:
+                migrate_ratio = 0.2  # 有一些重叠，迁徙20%
+            
+            migrate_pop = int(total_pop * migrate_ratio)
+            if migrate_pop < 10:
+                continue
+            
+            # 从各地块按比例抽取迁徙种群
+            remaining_pop = migrate_pop
+            for habitat in sp_habitats:
+                if remaining_pop <= 0:
+                    break
+                
+                take = min(int(habitat.population * migrate_ratio), remaining_pop)
+                if take > 0:
+                    # 减少原地块种群
+                    updated_habitats.append(HabitatPopulation(
+                        tile_id=habitat.tile_id,
+                        species_id=species_id,
+                        population=habitat.population - take,
+                        suitability=habitat.suitability,
+                        turn_index=turn_index,
+                    ))
+                    remaining_pop -= take
+            
+            # 分配到猎物地块
+            actual_migrate = migrate_pop - remaining_pop
+            if actual_migrate > 0:
+                # 优先选择最近的猎物地块
+                if my_tiles and self._tile_coords_cache:
+                    # 按距离排序
+                    distances = []
+                    for prey_tid in valid_prey_tiles:
+                        min_dist = float('inf')
+                        for my_tid in my_tiles:
+                            d = self._calculate_tile_distance(my_tid, prey_tid)
+                            if d < min_dist:
+                                min_dist = d
+                        distances.append((prey_tid, min_dist))
+                    distances.sort(key=lambda x: x[1])
+                    target_tiles = [tid for tid, _ in distances[:5]]  # 最近的5个地块
+                else:
+                    target_tiles = list(valid_prey_tiles)[:5]
+                
+                pop_per_tile = actual_migrate // len(target_tiles)
+                remainder = actual_migrate % len(target_tiles)
+                
+                for i, tile_id in enumerate(target_tiles):
+                    tile_pop = pop_per_tile + (1 if i < remainder else 0)
+                    if tile_pop > 0:
+                        updated_habitats.append(HabitatPopulation(
+                            tile_id=tile_id,
+                            species_id=species_id,
+                            population=tile_pop,
+                            suitability=0.6,  # 新迁入地块的适宜度
+                            turn_index=turn_index,
+                        ))
+                
+                migrations += 1
+                logger.info(
+                    f"[栖息地] {sp.common_name} 饥饿迁徙: {actual_migrate} 个体迁移到 "
+                    f"{len(target_tiles)} 个有猎物的地块"
+                )
+        
+        if updated_habitats:
+            self.repo.write_habitats(updated_habitats)
+        
+        return migrations
     
     def adjust_habitats_for_climate(
         self,

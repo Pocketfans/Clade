@@ -1080,25 +1080,27 @@ export function EnhancedCreateSpeciesModal({ onClose, onSuccess }: Props) {
           padding: 0 4px;
         }
 
-        /* 紧凑模板网格 */
+        /* 紧凑模板网格 - 使用CSS Grid确保均匀分布 */
         .template-grid-compact {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+          gap: 8px;
         }
 
         .template-chip {
           display: flex;
           align-items: center;
-          gap: 5px;
-          padding: 6px 10px;
+          justify-content: center;
+          gap: 6px;
+          padding: 8px 12px;
           background: rgba(255, 255, 255, 0.04);
           border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 16px;
+          border-radius: 8px;
           cursor: pointer;
           transition: all 0.15s;
           color: rgba(255, 255, 255, 0.7);
           font-size: 0.8rem;
+          white-space: nowrap;
         }
 
         .template-chip:hover {
@@ -1203,28 +1205,31 @@ export function EnhancedCreateSpeciesModal({ onClose, onSuccess }: Props) {
         }
 
         .option-chips-row {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 5px;
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+          gap: 6px;
         }
 
         .option-chip-sm {
           display: flex;
           align-items: center;
-          gap: 4px;
-          padding: 5px 10px;
+          justify-content: center;
+          gap: 5px;
+          padding: 8px 10px;
           background: rgba(255, 255, 255, 0.04);
           border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 14px;
+          border-radius: 8px;
           color: rgba(255, 255, 255, 0.6);
           cursor: pointer;
           transition: all 0.15s;
-          font-size: 0.75rem;
+          font-size: 0.78rem;
+          white-space: nowrap;
         }
 
         .option-chip-sm svg {
-          width: 12px;
-          height: 12px;
+          width: 14px;
+          height: 14px;
+          flex-shrink: 0;
         }
 
         .option-chip-sm:hover {
@@ -1241,23 +1246,25 @@ export function EnhancedCreateSpeciesModal({ onClose, onSuccess }: Props) {
 
         /* 植物阶段选择 - 紧凑版 */
         .plant-stages-row {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 5px;
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+          gap: 6px;
         }
 
         .plant-stage-chip {
           display: flex;
           align-items: center;
-          gap: 4px;
-          padding: 5px 10px;
+          justify-content: center;
+          gap: 5px;
+          padding: 8px 10px;
           background: rgba(255, 255, 255, 0.04);
           border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 14px;
+          border-radius: 8px;
           color: rgba(255, 255, 255, 0.6);
           cursor: pointer;
           transition: all 0.15s;
-          font-size: 0.75rem;
+          font-size: 0.78rem;
+          white-space: nowrap;
         }
 
         .plant-stage-chip:hover {

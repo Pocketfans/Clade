@@ -11,7 +11,7 @@ import { useState } from "react";
 import { 
   Sparkles, Leaf, Bug, Bird, Fish, Sun, 
   Mountain, Waves, Droplets, ChevronDown, ChevronUp,
-  TreeDeciduous, Crown, Shrub, X
+  TreeDeciduous, Crown, Shrub, X, RefreshCw
 } from "lucide-react";
 
 export interface SpeciesInputData {
@@ -55,6 +55,17 @@ const QUICK_TEMPLATES = [
     plantStage: 0
   },
   { 
+    id: "moss", 
+    name: "苔藓植物",
+    icon: <TreeDeciduous size={14} />, 
+    color: "#16a34a",
+    prompt: "一种低矮的苔藓植物，贴附在潮湿的岩石或土壤表面生长，是陆地植物的先驱",
+    habitat: "terrestrial", 
+    diet: "autotroph",
+    isPlant: true,
+    plantStage: 3
+  },
+  { 
     id: "filter", 
     name: "滤食动物",
     icon: <Bug size={14} />, 
@@ -65,7 +76,7 @@ const QUICK_TEMPLATES = [
   },
   { 
     id: "grazer", 
-    name: "陆地草食者",
+    name: "陆地食草者",
     icon: <Bug size={14} />, 
     color: "#84cc16",
     prompt: "一种以植物为食的陆生动物，拥有适合咀嚼纤维的口器",
@@ -90,15 +101,35 @@ const QUICK_TEMPLATES = [
     habitat: "terrestrial", 
     diet: "carnivore"
   },
+  { 
+    id: "opportunist", 
+    name: "机会主义者",
+    icon: <Fish size={14} />, 
+    color: "#f97316",
+    prompt: "一种适应性强的杂食动物，既能捕食小型动物，也能摄取植物和有机碎屑",
+    habitat: "coastal", 
+    diet: "omnivore"
+  },
+  { 
+    id: "decomposer", 
+    name: "分解者",
+    icon: <Shrub size={14} />, 
+    color: "#78716c",
+    prompt: "一种以死亡有机物为食的分解者，在生态系统中扮演物质循环的重要角色",
+    habitat: "terrestrial", 
+    diet: "detritivore"
+  },
 ];
 
 // 栖息地选项
 const HABITATS = [
-  { id: "marine", name: "海洋", icon: <Waves size={12} /> },
-  { id: "deep_sea", name: "深海", icon: <Waves size={12} /> },
-  { id: "coastal", name: "海岸", icon: <Waves size={12} /> },
-  { id: "freshwater", name: "淡水", icon: <Droplets size={12} /> },
-  { id: "terrestrial", name: "陆地", icon: <Mountain size={12} /> },
+  { id: "marine", name: "海洋", icon: <Waves size={14} /> },
+  { id: "deep_sea", name: "深海", icon: <Waves size={14} /> },
+  { id: "coastal", name: "海岸", icon: <Waves size={14} /> },
+  { id: "freshwater", name: "淡水", icon: <Droplets size={14} /> },
+  { id: "amphibious", name: "两栖", icon: <Droplets size={14} /> },
+  { id: "terrestrial", name: "陆生", icon: <Mountain size={14} /> },
+  { id: "aerial", name: "空中", icon: <Bird size={14} /> },
 ];
 
 // 食性选项
@@ -107,6 +138,7 @@ const DIETS = [
   { id: "herbivore", name: "草食", desc: "T2" },
   { id: "carnivore", name: "肉食", desc: "T3+" },
   { id: "omnivore", name: "杂食", desc: "T2.5" },
+  { id: "detritivore", name: "腐食", desc: "T1.5" },
 ];
 
 export function SpeciesInputCard({ index, required, value, onChange, onRemove }: Props) {
@@ -170,6 +202,17 @@ export function SpeciesInputCard({ index, required, value, onChange, onRemove }:
                 <span>{t.name}</span>
               </button>
             ))}
+            <button
+              className="template-btn randomize"
+              style={{ '--t-color': '#a855f7' } as React.CSSProperties}
+              onClick={() => {
+                const randomTemplate = QUICK_TEMPLATES[Math.floor(Math.random() * QUICK_TEMPLATES.length)];
+                handleTemplateClick(randomTemplate);
+              }}
+            >
+              <RefreshCw size={14} />
+              <span>随机</span>
+            </button>
           </div>
         </div>
       )}
@@ -360,23 +403,25 @@ export function SpeciesInputCard({ index, required, value, onChange, onRemove }:
         }
 
         .templates-grid {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+          gap: 8px;
         }
 
         .template-btn {
           display: flex;
           align-items: center;
-          gap: 5px;
-          padding: 6px 10px;
+          justify-content: center;
+          gap: 6px;
+          padding: 8px 12px;
           background: rgba(255, 255, 255, 0.05);
           border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 6px;
+          border-radius: 8px;
           color: rgba(255, 255, 255, 0.7);
           font-size: 0.8rem;
           cursor: pointer;
           transition: all 0.15s;
+          white-space: nowrap;
         }
 
         .template-btn:hover {
@@ -463,23 +508,25 @@ export function SpeciesInputCard({ index, required, value, onChange, onRemove }:
         }
 
         .option-chips {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+          gap: 8px;
         }
 
         .chip {
           display: flex;
           align-items: center;
-          gap: 4px;
-          padding: 5px 10px;
+          justify-content: center;
+          gap: 5px;
+          padding: 8px 10px;
           background: rgba(255, 255, 255, 0.05);
           border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 16px;
+          border-radius: 8px;
           color: rgba(255, 255, 255, 0.6);
           font-size: 0.8rem;
           cursor: pointer;
           transition: all 0.15s;
+          white-space: nowrap;
         }
 
         .chip:hover {
@@ -499,19 +546,22 @@ export function SpeciesInputCard({ index, required, value, onChange, onRemove }:
         }
 
         .plant-stages {
-          display: flex;
-          gap: 6px;
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+          gap: 8px;
         }
 
         .stage-btn {
-          padding: 5px 10px;
+          padding: 8px 10px;
           background: rgba(255, 255, 255, 0.05);
           border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 6px;
+          border-radius: 8px;
           color: rgba(255, 255, 255, 0.6);
           font-size: 0.8rem;
           cursor: pointer;
           transition: all 0.15s;
+          white-space: nowrap;
+          text-align: center;
         }
 
         .stage-btn:hover {
