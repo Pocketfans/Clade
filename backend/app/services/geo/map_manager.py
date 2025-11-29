@@ -197,28 +197,68 @@ class MapStateManager:
         logger.debug(f"[地图管理器] 强制重算模式，为 {len(species_list)} 个物种初始化栖息地分布")
         habitats: list[HabitatPopulation] = []
         
-        # 【优化】使用统一的生产者/消费者分离函数
-        # 分两阶段处理：先生产者，再消费者（消费者需要知道猎物在哪）
-        producers, consumers = separate_producers_consumers(species_list)
+        # 【改进v4】按营养级从低到高排序，确保猎物先分布
+        # 这样高营养级消费者可以知道低营养级猎物的确切位置
+        alive_species = [sp for sp in species_list if getattr(sp, 'status', 'alive') == 'alive']
+        sorted_species = sorted(alive_species, key=lambda sp: getattr(sp, 'trophic_level', 1.0) or 1.0)
         
-        # 记录生产者所在的地块（供消费者参考）
-        producer_tiles: set[int] = set()
+        # 按营养级分组记录各层级物种的分布
+        # {trophic_range: {tile_id: total_suitability}}
+        trophic_tile_map: dict[float, dict[int, float]] = {}
         
-        # 第一阶段：处理生产者
-        for species in producers:
+        def _get_trophic_range(trophic: float) -> float:
+            """将营养级映射到0.5间隔"""
+            import math
+            return math.floor(trophic * 2) / 2.0
+        
+        def _get_prey_tiles_for_trophic(consumer_trophic: float) -> set[int]:
+            """获取指定营养级消费者的猎物地块"""
+            consumer_range = _get_trophic_range(consumer_trophic)
+            prey_tiles: set[int] = set()
+            
+            # 确定猎物的营养级范围
+            if consumer_range >= 5.0:
+                prey_ranges = [4.0, 4.5, 3.5, 3.0]
+            elif consumer_range >= 4.0:
+                prey_ranges = [3.0, 3.5, 2.5, 2.0]
+            elif consumer_range >= 3.0:
+                prey_ranges = [2.0, 2.5, 1.5]
+            elif consumer_range >= 2.0:
+                prey_ranges = [1.0, 1.5]
+            else:
+                prey_ranges = []
+            
+            for prey_range in prey_ranges:
+                if prey_range in trophic_tile_map:
+                    prey_tiles.update(trophic_tile_map[prey_range].keys())
+            
+            return prey_tiles
+        
+        # 逐个处理物种（按营养级从低到高）
+        for species in sorted_species:
             total = int(species.morphology_stats.get("population", 0) or 0)
             if total <= 0:
                 total = 1000
                 logger.warning(f"[地图管理器] {species.common_name} 种群为0，使用默认值1000初始化栖息地")
             
             habitat_type = getattr(species, 'habitat_type', 'terrestrial')
-            suitable_tiles = self._filter_tiles_by_habitat_type(tiles, habitat_type)
+            trophic_level = getattr(species, 'trophic_level', 1.0) or 1.0
+            trophic_range = _get_trophic_range(trophic_level)
             
+            suitable_tiles = self._filter_tiles_by_habitat_type(tiles, habitat_type)
             if not suitable_tiles:
                 continue
             
+            # 【改进】根据营养级获取实际猎物位置
+            if trophic_level >= 2.0:
+                prey_tiles = _get_prey_tiles_for_trophic(trophic_level)
+                if prey_tiles:
+                    logger.debug(f"[地图管理器] {species.common_name} (T{trophic_level:.1f}) 发现 {len(prey_tiles)} 个有猎物的地块")
+            else:
+                prey_tiles = None
+            
             suitability = [
-                (tile, self._suitability_score(species, tile, None)) for tile in suitable_tiles
+                (tile, self._suitability_score(species, tile, prey_tiles)) for tile in suitable_tiles
             ]
             suitability = [item for item in suitability if item[1] > 0]
             if not suitability:
@@ -226,14 +266,39 @@ class MapStateManager:
             
             suitability.sort(key=lambda item: item[1], reverse=True)
             top_count = self._get_distribution_count(habitat_type)
-            top_tiles = suitability[:top_count]
+            
+            # 【改进】消费者优先选择与猎物重叠的地块
+            if prey_tiles and trophic_level >= 2.0:
+                # 筛选有猎物的地块
+                prey_suitability = [(t, s) for t, s in suitability if t.id in prey_tiles]
+                non_prey_suitability = [(t, s) for t, s in suitability if t.id not in prey_tiles]
+                
+                # 优先使用有猎物的地块，不足时再用其他地块
+                if len(prey_suitability) >= top_count // 2:
+                    # 有足够的猎物地块，主要用这些
+                    top_tiles = prey_suitability[:top_count]
+                elif prey_suitability:
+                    # 猎物地块不足，混合使用
+                    needed = top_count - len(prey_suitability)
+                    top_tiles = prey_suitability + non_prey_suitability[:needed]
+                else:
+                    # 没有猎物地块（异常情况），使用普通逻辑
+                    top_tiles = suitability[:top_count]
+                    logger.warning(f"[地图管理器] {species.common_name} (T{trophic_level:.1f}) 没有找到有猎物的地块！")
+            else:
+                top_tiles = suitability[:top_count]
+            
             score_sum = sum(score for _, score in top_tiles) or 1.0
+            
+            # 记录该物种分布到的地块（供更高营养级参考）
+            if trophic_range not in trophic_tile_map:
+                trophic_tile_map[trophic_range] = {}
+            
+            species_tiles_count = 0
             
             for tile, score in top_tiles:
                 if tile.id is None or species.id is None:
                     continue
-                
-                producer_tiles.add(tile.id)  # 记录生产者位置
                 
                 portion = score / score_sum
                 tile_biomass = int(total * portion)
@@ -247,53 +312,19 @@ class MapStateManager:
                             turn_index=turn_index,
                         )
                     )
-        
-        logger.debug(f"[地图管理器] 生产者分布完成，覆盖 {len(producer_tiles)} 个地块")
-        
-        # 第二阶段：处理消费者（可以参考生产者位置）
-        for species in consumers:
-            total = int(species.morphology_stats.get("population", 0) or 0)
-            if total <= 0:
-                total = 1000
-                logger.warning(f"[地图管理器] {species.common_name} 种群为0，使用默认值1000初始化栖息地")
+                    
+                    # 【改进】记录到营养级地图，供更高营养级参考
+                    if tile.id not in trophic_tile_map[trophic_range]:
+                        trophic_tile_map[trophic_range][tile.id] = 0.0
+                    trophic_tile_map[trophic_range][tile.id] += score
+                    species_tiles_count += 1
             
-            habitat_type = getattr(species, 'habitat_type', 'terrestrial')
-            suitable_tiles = self._filter_tiles_by_habitat_type(tiles, habitat_type)
-            
-            if not suitable_tiles:
-                continue
-            
-            # 消费者：传入猎物（生产者）所在地块
-            suitability = [
-                (tile, self._suitability_score(species, tile, producer_tiles)) for tile in suitable_tiles
-            ]
-            suitability = [item for item in suitability if item[1] > 0]
-            if not suitability:
-                continue
-            
-            suitability.sort(key=lambda item: item[1], reverse=True)
-            top_count = self._get_distribution_count(habitat_type)
-            top_tiles = suitability[:top_count]
-            score_sum = sum(score for _, score in top_tiles) or 1.0
-            
-            logger.debug(f"[地图管理器] {species.common_name} (消费者T{getattr(species, 'trophic_level', 2.0):.1f}) 分布到 {len(top_tiles)} 个地块")
-            
-            for tile, score in top_tiles:
-                if tile.id is None or species.id is None:
-                    continue
-                
-                portion = score / score_sum
-                tile_biomass = int(total * portion)
-                if tile_biomass > 0:
-                    habitats.append(
-                        HabitatPopulation(
-                            tile_id=tile.id,
-                            species_id=species.id,
-                            population=tile_biomass,
-                            suitability=score,
-                            turn_index=turn_index,
-                        )
-                    )
+            if trophic_level >= 2.0 and prey_tiles:
+                overlap_count = sum(1 for t, _ in top_tiles if t.id in prey_tiles)
+                logger.debug(
+                    f"[地图管理器] {species.common_name} (T{trophic_level:.1f}) "
+                    f"分布到 {species_tiles_count} 个地块，与猎物重叠 {overlap_count} 个"
+                )
         
         if habitats:
             logger.debug(f"[地图管理器] 保存 {len(habitats)} 条栖息地记录")
@@ -454,25 +485,57 @@ class MapStateManager:
             self._init_habitats_for_species(species_needing_init, tiles, turn_index)
     
     def _init_habitats_for_species(self, species_list: list[Species], tiles: list[MapTile], turn_index: int) -> None:
-        """为指定物种初始化栖息地分布"""
+        """为指定物种初始化栖息地分布
+        
+        【改进v4】按营养级正确找到猎物位置
+        """
         habitats: list[HabitatPopulation] = []
         
-        # 【修复v3】获取现有生产者（猎物）所在的地块
-        # 供消费者计算宜居性时参考
+        # 【改进v4】构建各营养级的分布地图
         existing_habitats = self.repo.latest_habitats()
         all_species = species_repository.list_species()
-        producer_ids = set()
-        for sp in all_species:
-            trophic = getattr(sp, 'trophic_level', 1.0) or 1.0
-            if trophic < 2.0 and sp.id is not None:
-                producer_ids.add(sp.id)
+        species_map = {sp.id: sp for sp in all_species if sp.id}
         
-        prey_tiles: set[int] = set()
+        import math
+        def _get_trophic_range(trophic: float) -> float:
+            return math.floor(trophic * 2) / 2.0
+        
+        # 按营养级分组现有物种的分布
+        trophic_tile_map: dict[float, set[int]] = {}
         for h in existing_habitats:
-            if h.species_id in producer_ids:
-                prey_tiles.add(h.tile_id)
+            sp = species_map.get(h.species_id)
+            if sp:
+                trophic = getattr(sp, 'trophic_level', 1.0) or 1.0
+                trophic_range = _get_trophic_range(trophic)
+                if trophic_range not in trophic_tile_map:
+                    trophic_tile_map[trophic_range] = set()
+                trophic_tile_map[trophic_range].add(h.tile_id)
         
-        for species in species_list:
+        def _get_prey_tiles(consumer_trophic: float) -> set[int]:
+            """根据消费者营养级获取猎物地块"""
+            consumer_range = _get_trophic_range(consumer_trophic)
+            prey_tiles: set[int] = set()
+            
+            if consumer_range >= 5.0:
+                prey_ranges = [4.0, 4.5, 3.5, 3.0]
+            elif consumer_range >= 4.0:
+                prey_ranges = [3.0, 3.5, 2.5, 2.0]
+            elif consumer_range >= 3.0:
+                prey_ranges = [2.0, 2.5, 1.5]
+            elif consumer_range >= 2.0:
+                prey_ranges = [1.0, 1.5]
+            else:
+                prey_ranges = []
+            
+            for pr in prey_ranges:
+                if pr in trophic_tile_map:
+                    prey_tiles.update(trophic_tile_map[pr])
+            return prey_tiles
+        
+        # 按营养级从低到高排序
+        sorted_species = sorted(species_list, key=lambda sp: getattr(sp, 'trophic_level', 1.0) or 1.0)
+        
+        for species in sorted_species:
             if species.id is None:
                 continue
             
@@ -481,14 +544,14 @@ class MapStateManager:
                 continue
             
             habitat_type = getattr(species, 'habitat_type', 'terrestrial')
+            trophic_level = getattr(species, 'trophic_level', 1.0) or 1.0
             suitable_tiles = self._filter_tiles_by_habitat_type(tiles, habitat_type)
             
             if not suitable_tiles:
                 continue
             
-            # 判断是否为消费者
-            trophic_level = getattr(species, 'trophic_level', 1.0) or 1.0
-            use_prey_tiles = prey_tiles if trophic_level >= 2.0 else None
+            # 【改进】根据营养级获取实际猎物位置
+            use_prey_tiles = _get_prey_tiles(trophic_level) if trophic_level >= 2.0 else None
             
             suitability = [
                 (tile, self._suitability_score(species, tile, use_prey_tiles)) for tile in suitable_tiles
@@ -499,7 +562,22 @@ class MapStateManager:
             
             suitability.sort(key=lambda item: item[1], reverse=True)
             top_count = self._get_distribution_count(habitat_type)
-            top_tiles = suitability[:top_count]
+            
+            # 【改进】消费者优先选择与猎物重叠的地块
+            if use_prey_tiles and trophic_level >= 2.0:
+                prey_suitability = [(t, s) for t, s in suitability if t.id in use_prey_tiles]
+                non_prey_suitability = [(t, s) for t, s in suitability if t.id not in use_prey_tiles]
+                
+                if len(prey_suitability) >= top_count // 2:
+                    top_tiles = prey_suitability[:top_count]
+                elif prey_suitability:
+                    needed = top_count - len(prey_suitability)
+                    top_tiles = prey_suitability + non_prey_suitability[:needed]
+                else:
+                    top_tiles = suitability[:top_count]
+            else:
+                top_tiles = suitability[:top_count]
+            
             score_sum = sum(score for _, score in top_tiles) or 1.0
             
             # 【修复】使用精确分配算法，避免四舍五入损失
@@ -524,6 +602,7 @@ class MapStateManager:
                 idx = remainders[i][3]
                 final_pops[idx] += 1
             
+            trophic_range = _get_trophic_range(trophic_level)
             for i, (tile, score) in enumerate(valid_tiles):
                 tile_biomass = final_pops[i]
                 if tile_biomass > 0:
@@ -536,6 +615,10 @@ class MapStateManager:
                             turn_index=turn_index,
                         )
                     )
+                    # 更新营养级地图（供更高营养级参考）
+                    if trophic_range not in trophic_tile_map:
+                        trophic_tile_map[trophic_range] = set()
+                    trophic_tile_map[trophic_range].add(tile.id)
         
         if habitats:
             logger.debug(f"[地图管理器] 初始化 {len(habitats)} 条新栖息地记录")
