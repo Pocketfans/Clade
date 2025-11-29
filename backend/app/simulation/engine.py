@@ -1972,7 +1972,22 @@ class SimulationEngine:
         """
         for item in mortality_results:
             species = item.species
-            final_pop = final_populations.get(species.lineage_code, 0)
+            
+            # 【关键修复】如果物种不在 final_populations 中，使用实际存活数或当前种群
+            # 不能默认为0，否则会错误触发灭绝
+            if species.lineage_code in final_populations:
+                final_pop = final_populations[species.lineage_code]
+            else:
+                # 回退到物种当前的种群数据
+                final_pop = int(species.morphology_stats.get("population", 0) or 0)
+                if final_pop == 0:
+                    # 再次回退到死亡率结果中的存活数
+                    final_pop = getattr(item, 'survivors', 0)
+                logger.warning(
+                    f"[灭绝检查] {species.common_name} ({species.lineage_code}) 不在 final_populations 中，"
+                    f"使用回退值 {final_pop}"
+                )
+            
             death_rate = item.death_rate
             
             # 获取地块分布统计

@@ -393,20 +393,32 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
       }
       
       // D. Habitat Indicator Layer (生物栖息标记)
-      // 显示哪些地块有生物栖息
+      // 柔和方案：默认用小圆点，只有选中物种时才高亮
       const habitatContainer = new Container();
       
-      // 创建小圆点纹理作为生物指示器
-      const indicatorG = new Graphics();
-      indicatorG.circle(0, 0, 5);
-      indicatorG.fill({ color: 0xffffff, alpha: 1.0 });
-      const indicatorTexture = app.renderer.generateTexture({
-        target: indicatorG,
+      // 创建小圆点纹理（默认状态，低调不刺眼）
+      const dotG = new Graphics();
+      dotG.circle(0, 0, 4);
+      dotG.fill({ color: 0xffffff, alpha: 1.0 });
+      const dotTexture = app.renderer.generateTexture({
+        target: dotG,
         resolution: 2,
         antialias: true,
       });
       
-      // 计算每个地块的物种数量（在这里计算以避免依赖外部 memo）
+      // 创建高亮圆环纹理（选中物种时使用）
+      const ringG = new Graphics();
+      ringG.circle(0, 0, 10);
+      ringG.stroke({ color: 0xffffff, width: 2.5, alpha: 1.0 });
+      ringG.circle(0, 0, 6);
+      ringG.fill({ color: 0xffffff, alpha: 0.8 });
+      const ringTexture = app.renderer.generateTexture({
+        target: ringG,
+        resolution: 2,
+        antialias: true,
+      });
+      
+      // 计算每个地块的物种数量
       const localTileSpeciesCount = new Map<number, number>();
       if (map.habitats) {
         for (const hab of map.habitats) {
@@ -420,33 +432,44 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
         if (!pos) return;
         
         const speciesCount = localTileSpeciesCount.get(tile.id) || 0;
-        if (speciesCount === 0) return; // 没有生物的地块不显示
+        if (speciesCount === 0) return;
         
-        // 创建指示器 sprite
-        const indicator = new Sprite(indicatorTexture);
-        indicator.anchor.set(0.5);
-        indicator.position.set(pos.x + HEX_WIDTH / 3, pos.y - HEX_HEIGHT / 3); // 右上角位置
+        // 默认圆点（低调）
+        const dot = new Sprite(dotTexture);
+        dot.anchor.set(0.5);
+        dot.position.set(pos.x, pos.y);
         
-        // 根据物种数量调整大小和颜色（初始状态）
-        const scale = Math.min(1.2, 0.5 + speciesCount * 0.1);
-        indicator.scale.set(scale);
+        // 高亮圆环（选中物种时显示）
+        const ring = new Sprite(ringTexture);
+        ring.anchor.set(0.5);
+        ring.position.set(pos.x, pos.y);
+        ring.visible = false; // 默认隐藏
         
+        // 默认状态：柔和的颜色，根据物种数量调整
+        const baseScale = Math.min(1.0, 0.6 + speciesCount * 0.08);
+        dot.scale.set(baseScale);
+        ring.scale.set(1.0);
+        
+        // 默认使用柔和的绿色系，低透明度
         if (speciesCount >= 5) {
-          indicator.tint = 0x2e7d32; // 深翠绿 - 生物多样性高
+          dot.tint = 0x4caf50; // 中绿
+        } else if (speciesCount >= 3) {
+          dot.tint = 0x66bb6a; // 浅绿
         } else if (speciesCount >= 2) {
-          indicator.tint = 0x66bb6a; // 明亮绿色 - 中等多样性
+          dot.tint = 0x81c784; // 更浅绿
         } else {
-          indicator.tint = 0xf9a825; // 琥珀黄 - 单一物种
+          dot.tint = 0x90a4ae; // 灰蓝色，最低调
         }
-        indicator.alpha = 0.7;
+        dot.alpha = 0.5; // 低透明度，不刺眼
         
-        habitatContainer.addChild(indicator);
+        habitatContainer.addChild(dot);
+        habitatContainer.addChild(ring);
         
-        // 存储指示器 sprite 的引用
+        // 存储格式: [dot, ring] 对
         if (!habitatIndicatorsRef.current.has(tile.id)) {
           habitatIndicatorsRef.current.set(tile.id, []);
         }
-        habitatIndicatorsRef.current.get(tile.id)!.push(indicator);
+        habitatIndicatorsRef.current.get(tile.id)!.push(dot, ring);
       });
       
       container.addChild(habitatContainer);
@@ -542,13 +565,29 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
         
         // Pulse effect for hover (subtle brightness/alpha)
         if (hoverGraphicsRef.current) {
-           // Smoother, more subtle pulse
            hoverGraphicsRef.current.alpha = 0.5 + Math.sin(time * 0.04) * 0.1;
         }
         
         // Stronger pulse for selection
         if (selectGraphicsRef.current) {
            selectGraphicsRef.current.alpha = 0.7 + Math.sin(time * 0.06) * 0.15;
+        }
+        
+        // 只对选中物种的高亮圆环添加脉动效果
+        if (habitatIndicatorsRef.current.size > 0) {
+          const pulse = Math.sin(time * 0.06) * 0.1;
+          const scalePulse = 1 + Math.sin(time * 0.06) * 0.08;
+          
+          habitatIndicatorsRef.current.forEach((sprites) => {
+            for (let i = 0; i < sprites.length; i += 2) {
+              const ring = sprites[i + 1]; // ring 是第二个元素
+              if (ring && ring.visible) {
+                // 只有可见的高亮圆环才脉动
+                ring.alpha = 0.85 + pulse;
+                ring.scale.set(1.2 * scalePulse);
+              }
+            }
+          });
         }
       });
 
@@ -623,7 +662,7 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
 
   }, [map, viewMode, highlightSpeciesId, suitabilityColors]);
 
-  // Update Habitat Indicators
+  // Update Habitat Indicators - 每个 tile 存储 [dot, ring] 对
   useEffect(() => {
     if (!habitatIndicatorsRef.current.size) return;
     
@@ -631,23 +670,40 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
       const speciesCount = habitatInfo.tileSpeciesCount.get(tileId) || 0;
       const hasHighlighted = habitatInfo.tileHasHighlighted.get(tileId) || false;
       
-      for (const sprite of sprites) {
-        // 更新颜色和透明度
+      // sprites 格式: [dot1, ring1, dot2, ring2, ...] (每个世界副本两个)
+      for (let i = 0; i < sprites.length; i += 2) {
+        const dot = sprites[i];
+        const ring = sprites[i + 1];
+        if (!dot || !ring) continue;
+        
         if (hasHighlighted) {
-          sprite.tint = 0x2dd4bf; // 翡翠青 - 选中物种存在
-          sprite.alpha = 0.95;
-          sprite.scale.set(1.0); // 稍微放大
+          // 选中物种所在地块 - 显示醒目的高亮圆环
+          dot.visible = false;
+          ring.visible = true;
+          ring.tint = 0x00e5ff; // 亮青色
+          ring.alpha = 0.95;
+          ring.scale.set(1.2);
         } else {
+          // 普通状态 - 只显示柔和的小圆点
+          dot.visible = true;
+          ring.visible = false;
+          
+          // 根据物种数量调整颜色深浅
           if (speciesCount >= 5) {
-            sprite.tint = 0x2e7d32; // 深翠绿 - 生物多样性高
+            dot.tint = 0x4caf50;
+            dot.alpha = 0.6;
+          } else if (speciesCount >= 3) {
+            dot.tint = 0x66bb6a;
+            dot.alpha = 0.5;
           } else if (speciesCount >= 2) {
-            sprite.tint = 0x66bb6a; // 明亮绿色 - 中等多样性
+            dot.tint = 0x81c784;
+            dot.alpha = 0.45;
           } else {
-            sprite.tint = 0xf9a825; // 琥珀黄 - 单一物种
+            dot.tint = 0x90a4ae;
+            dot.alpha = 0.4;
           }
-          sprite.alpha = 0.7;
-          const scale = Math.min(1.2, 0.5 + speciesCount * 0.1);
-          sprite.scale.set(scale);
+          const baseScale = Math.min(1.0, 0.6 + speciesCount * 0.08);
+          dot.scale.set(baseScale);
         }
       }
     });

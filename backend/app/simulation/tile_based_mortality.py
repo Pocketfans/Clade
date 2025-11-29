@@ -222,6 +222,9 @@ class TileBasedMortalityEngine:
         """根据适宜度将物种总种群分配到各地块
         
         分配公式：tile_pop = total_pop × (tile_suitability / sum_suitability)
+        
+        【修复】如果物种没有栖息地记录（sum_suit==0），按栖息地类型均匀分配到合适的地块，
+        避免种群被错误地计算为0导致假灭绝。
         """
         if self._suitability_matrix is None or self._population_matrix is None:
             return
@@ -238,6 +241,23 @@ class TileBasedMortalityEngine:
             if sum_suit > 0:
                 # 按适宜度比例分配种群
                 self._population_matrix[:, sp_idx] = total_pop * (suitability_col / sum_suit)
+            else:
+                # 【修复】物种没有栖息地记录，按栖息地类型均匀分配
+                # 这种情况通常发生在新创建的物种尚未初始化栖息地时
+                habitat_type = getattr(species, 'habitat_type', 'terrestrial')
+                type_mask = self._get_habitat_type_mask(habitat_type)
+                suitable_count = type_mask.sum()
+                
+                if suitable_count > 0:
+                    # 均匀分配到所有合适类型的地块
+                    pop_per_tile = total_pop / suitable_count
+                    self._population_matrix[type_mask, sp_idx] = pop_per_tile
+                    # 同时设置一个基础适宜度，避免后续计算问题
+                    self._suitability_matrix[type_mask, sp_idx] = 0.5
+                    logger.warning(
+                        f"[地块死亡率] {species.common_name} 无栖息地记录，"
+                        f"均匀分配 {total_pop} 种群到 {suitable_count} 个 {habitat_type} 地块"
+                    )
     
     def set_embedding_service(self, embedding_service) -> None:
         """设置Embedding服务（用于计算物种语义相似度）
@@ -1761,10 +1781,23 @@ class TileBasedMortalityEngine:
                 worst_tile_rate = float(occupied_rates.max())
                 has_refuge = bool((occupied_rates < 0.20).any())
             else:
-                healthy_tiles = warning_tiles = critical_tiles = 0
-                best_tile_rate = 0.0
-                worst_tile_rate = 1.0
-                has_refuge = False
+                # 【修复】如果没有地块种群分布但物种总种群>0，这是数据异常
+                # 给予保守估计：假设有1个健康避难所，避免错误触发灭绝
+                if total_pop > 0:
+                    logger.warning(
+                        f"[地块死亡率异常] {species.common_name} 总种群={total_pop} 但无地块分布数据，"
+                        f"假设存在避难所以避免错误灭绝"
+                    )
+                    healthy_tiles = 1
+                    warning_tiles = critical_tiles = 0
+                    best_tile_rate = 0.1  # 假设最佳地块有10%基础死亡率
+                    worst_tile_rate = 0.1
+                    has_refuge = True  # 关键：给予避难所保护
+                else:
+                    healthy_tiles = warning_tiles = critical_tiles = 0
+                    best_tile_rate = 0.0
+                    worst_tile_rate = 1.0
+                    has_refuge = False
             
             # 【v2核心】按地块独立计算存活数
             # 每个地块独立应用死亡率，然后汇总
@@ -1773,6 +1806,24 @@ class TileBasedMortalityEngine:
             
             total_survivors = int(tile_survivors.sum())
             total_deaths = int(tile_deaths_count.sum())
+            
+            # 【修复】如果地块分布数据缺失但有总种群，使用全局平均死亡率
+            if total_survivors == 0 and total_deaths == 0 and total_pop > 0:
+                # 计算平均死亡率（使用该物种栖息地类型的地块）
+                habitat_type = getattr(species, 'habitat_type', 'terrestrial')
+                type_mask = self._get_habitat_type_mask(habitat_type)
+                if type_mask.any():
+                    avg_rate = tile_rates[type_mask].mean()
+                else:
+                    avg_rate = 0.1  # 默认10%死亡率
+                
+                # 使用平均死亡率计算存活
+                total_deaths = int(total_pop * avg_rate)
+                total_survivors = total_pop - total_deaths
+                logger.warning(
+                    f"[地块死亡率] {species.common_name} 无地块分布，使用平均死亡率 {avg_rate:.1%} "
+                    f"计算存活: {total_pop} -> {total_survivors}"
+                )
             
             # 应用干预修正（按比例调整）
             if species_arrays['is_protected'][sp_idx] and species_arrays['protection_turns'][sp_idx] > 0:

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { SpeciesSnapshot } from "../services/api.types";
 import { GamePanel } from "./common/GamePanel";
 
@@ -6,6 +6,7 @@ interface Props {
   speciesList: SpeciesSnapshot[];
   onClose: () => void;
   onSelectSpecies: (id: string) => void;
+  selectedSpeciesId?: string | null; // 新增：当前选中的物种ID
 }
 
 type SortField = "population" | "population_share" | "death_rate" | "latin_name" | "status" | "trophic_level";
@@ -23,12 +24,28 @@ const roleConfig: Record<string, { color: string; icon: string; label: string }>
   unknown: { color: "#3b82f6", icon: "🧬", label: "未知" }
 };
 
-export function SpeciesLedger({ speciesList, onClose, onSelectSpecies }: Props) {
+export function SpeciesLedger({ speciesList, onClose, onSelectSpecies, selectedSpeciesId }: Props) {
   const [sortField, setSortField] = useState<SortField>("trophic_level");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [filterText, setFilterText] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [hoveredRow, setHoveredRow] = useState<string | null>(null);
+  
+  // 内部追踪当前选中的物种（用于高亮显示）
+  const [internalSelected, setInternalSelected] = useState<string | null>(selectedSpeciesId || null);
+  
+  // 同步外部选中状态
+  useEffect(() => {
+    if (selectedSpeciesId !== undefined) {
+      setInternalSelected(selectedSpeciesId);
+    }
+  }, [selectedSpeciesId]);
+  
+  // 处理物种选择 - 不关闭图鉴
+  const handleSpeciesClick = (code: string) => {
+    setInternalSelected(code);
+    onSelectSpecies(code);
+  };
 
   const sortedAndFilteredList = useMemo(() => {
     let list = [...speciesList];
@@ -88,6 +105,7 @@ export function SpeciesLedger({ speciesList, onClose, onSelectSpecies }: Props) 
           <div className="title-main">
             <span className="title-icon">📊</span>
             <span>物种统计表</span>
+            <span className="title-hint">💡 点击物种在地图上查看分布</span>
           </div>
           <div className="title-stats">
             <span className="stat alive">
@@ -188,17 +206,19 @@ export function SpeciesLedger({ speciesList, onClose, onSelectSpecies }: Props) 
             const role = roleConfig[species.ecological_role?.toLowerCase()] || roleConfig.unknown;
             const isExtinct = species.status === "extinct";
             const isHovered = hoveredRow === species.lineage_code;
+            const isSelected = internalSelected === species.lineage_code;
             
             return (
               <div
                 key={species.lineage_code}
-                className={`ledger-row ${isExtinct ? "extinct" : ""} ${isHovered ? "hovered" : ""}`}
-                onClick={() => onSelectSpecies(species.lineage_code)}
+                className={`ledger-row ${isExtinct ? "extinct" : ""} ${isHovered ? "hovered" : ""} ${isSelected ? "selected" : ""}`}
+                onClick={() => handleSpeciesClick(species.lineage_code)}
                 onMouseEnter={() => setHoveredRow(species.lineage_code)}
                 onMouseLeave={() => setHoveredRow(null)}
                 style={{ 
                   animationDelay: `${index * 20}ms`,
-                  borderLeftColor: isHovered ? role.color : "transparent"
+                  borderLeftColor: isSelected ? role.color : (isHovered ? `${role.color}80` : "transparent"),
+                  background: isSelected ? `${role.color}15` : undefined
                 }}
               >
                 <div className="col col-code">
@@ -284,6 +304,17 @@ export function SpeciesLedger({ speciesList, onClose, onSelectSpecies }: Props) 
         
         .title-icon {
           font-size: 1.3rem;
+        }
+        
+        .title-hint {
+          font-size: 0.75rem;
+          font-weight: 400;
+          color: rgba(45, 212, 191, 0.7);
+          margin-left: 12px;
+          padding: 3px 10px;
+          background: rgba(45, 212, 191, 0.1);
+          border-radius: 12px;
+          border: 1px solid rgba(45, 212, 191, 0.2);
         }
         
         .title-stats {
@@ -485,6 +516,7 @@ export function SpeciesLedger({ speciesList, onClose, onSelectSpecies }: Props) 
         }
 
         .ledger-row {
+          position: relative;
           display: grid;
           grid-template-columns: 90px 2fr 120px 140px 100px 90px 80px 100px;
           padding: 14px 20px;
@@ -510,6 +542,27 @@ export function SpeciesLedger({ speciesList, onClose, onSelectSpecies }: Props) 
         .ledger-row:hover,
         .ledger-row.hovered {
           background: rgba(59, 130, 246, 0.05);
+        }
+        
+        .ledger-row.selected {
+          background: rgba(45, 212, 191, 0.1);
+          border-left-width: 4px;
+          box-shadow: inset 0 0 20px rgba(45, 212, 191, 0.05);
+        }
+        
+        .ledger-row.selected::before {
+          content: "";
+          position: absolute;
+          left: 0;
+          top: 0;
+          bottom: 0;
+          width: 4px;
+          background: currentColor;
+          opacity: 0.8;
+        }
+        
+        .ledger-row.selected .name-common {
+          color: #2dd4bf;
         }
 
         .ledger-row.extinct {

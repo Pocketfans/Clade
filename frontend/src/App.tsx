@@ -1009,13 +1009,11 @@ export default function App() {
           <SpeciesLedger
             speciesList={speciesList}
             onClose={() => setShowLedger(false)}
+            selectedSpeciesId={selectedSpeciesId}
             onSelectSpecies={(id) => {
               handleSpeciesSelect(id);
-              // Optional: close ledger on select, or keep it open? 
-              // Vic3 usually keeps ledger open, but here we have a drawer.
-              // Let's keep it open for now, or maybe close it if it covers the drawer.
-              // Given it's a modal, let's close it to show the drawer.
-              setShowLedger(false);
+              // 保持图鉴打开，方便用户快速切换物种查看分布
+              // 地图会自动同步显示选中物种的分布
             }}
           />
         )}
