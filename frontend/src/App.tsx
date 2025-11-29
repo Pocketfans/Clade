@@ -71,6 +71,7 @@ import {
   fetchSpeciesList,
   fetchUIConfig,
   runTurn,
+  runBatchTurns,
   updateUIConfig,
   fetchHistory,
   saveGame,
@@ -230,6 +231,9 @@ export default function App() {
   const [lineageLoading, setLineageLoading] = useState(false);
   const [lineageError, setLineageError] = useState<string | null>(null);
   const [speciesRefreshTrigger, setSpeciesRefreshTrigger] = useState(0); // 物种数据刷新触发器
+  
+  // 批量执行状态
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; message: string } | null>(null);
 
   // Refs
   const mapPanelRef = useRef<CanvasMapPanelHandle | null>(null);
@@ -595,6 +599,84 @@ export default function App() {
     }
   }
 
+  /**
+   * 批量执行多回合
+   * @param rounds 执行回合数
+   * @param pressures 每回合的压力（空数组则使用随机压力）
+   * @param randomEnergy 每回合随机压力消耗的能量（0表示使用pressures）
+   */
+  async function handleBatchExecute(rounds: number, pressures: PressureDraft[], randomEnergy: number) {
+    setLoading(true);
+    setShowPressureModal(false);
+    setBatchProgress({ current: 0, total: rounds, message: "准备开始..." });
+    
+    try {
+      console.log(`🚀 [批量执行] 开始执行 ${rounds} 回合，随机能量: ${randomEnergy}`);
+      
+      const allReports: TurnReport[] = [];
+      
+      for (let i = 0; i < rounds; i++) {
+        setBatchProgress({ 
+          current: i + 1, 
+          total: rounds, 
+          message: `正在执行第 ${i + 1}/${rounds} 回合...` 
+        });
+        
+        let turnPressures = pressures;
+        
+        // 如果指定了随机能量，则生成随机压力
+        if (randomEnergy > 0 && pressures.length === 0) {
+          const { generateRandomPressures } = await import("./services/api");
+          turnPressures = await generateRandomPressures(randomEnergy);
+          console.log(`🎲 [批量执行] 回合 ${i + 1} 随机压力:`, turnPressures.map(p => `${p.label}(${p.intensity})`));
+        }
+        
+        const reports = await runTurn(turnPressures);
+        allReports.push(...reports);
+        
+        if (reports.length > 0) {
+          const latestReport = reports[reports.length - 1] as any;
+          setBatchProgress({ 
+            current: i + 1, 
+            total: rounds, 
+            message: `回合 ${latestReport.turn_index} 完成，存活物种: ${latestReport.species_summary?.alive_species || latestReport.species?.filter((s: any) => s.status === "alive").length || 0}` 
+          });
+        }
+      }
+      
+      console.log(`✅ [批量执行] 完成，共生成 ${allReports.length} 个报告`);
+      
+      // 更新报告和状态
+      setReports((prev) => normalizeReports([...prev, ...allReports]));
+      
+      if (allReports.length > 0) {
+        const latestReport = allReports[allReports.length - 1];
+        setCurrentTurnIndex(latestReport.turn_index + 1);
+        setShowTurnSummary(true);
+        checkPendingAchievements();
+        dispatchEnergyChanged();
+      }
+      
+      // 刷新数据
+      await Promise.all([
+        refreshMap().catch(console.warn),
+        refreshSpeciesList().catch(console.warn),
+        refreshQueue().catch(console.warn),
+      ]);
+      
+      setSpeciesRefreshTrigger(prev => prev + 1);
+      setPendingPressures([]);
+      setLineageTree(null);
+      
+    } catch (error: any) {
+      console.error("❌ [批量执行] 失败:", error);
+      setError(`批量执行失败: ${error.message || "未知错误"}`);
+    } finally {
+      setLoading(false);
+      setBatchProgress(null);
+    }
+  }
+
   // 检查成就解锁 (必须在早期返回之前定义)
   const checkPendingAchievements = useCallback(async () => {
     try {
@@ -777,7 +859,16 @@ export default function App() {
         )}
 
         {/* 推演进度提示 - 如果已显示回合总结则不显示进度覆盖层 */}
-        {loading && !showTurnSummary && <TurnProgressOverlay message="AI 正在分析生态系统变化..." showDetails={true} />}
+        {loading && !showTurnSummary && (
+          <TurnProgressOverlay 
+            message={
+              batchProgress 
+                ? `🎲 自动演化 ${batchProgress.current}/${batchProgress.total} - ${batchProgress.message}`
+                : "AI 正在分析生态系统变化..."
+            } 
+            showDetails={!batchProgress}
+          />
+        )}
         
         {/* 回合总结模态窗 */}
         {showTurnSummary && latestReport && (
@@ -855,6 +946,7 @@ export default function App() {
             onChange={setPendingPressures}
             onQueue={handleQueueAdd}
             onExecute={executeTurn}
+            onBatchExecute={handleBatchExecute}
             onClose={() => setShowPressureModal(false)}
           />
         )}

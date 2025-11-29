@@ -100,6 +100,90 @@ export async function runTurn(pressures: PressureDraft[] = []): Promise<TurnRepo
   return data || [];
 }
 
+/**
+ * 批量执行多回合（用于自动执行队列）
+ * @param rounds 要执行的回合数
+ * @param pressuresPerRound 每回合的压力配置（可选）
+ * @param randomEnergy 每回合随机消耗的能量（0表示不使用随机压力）
+ * @param onProgress 进度回调
+ */
+export async function runBatchTurns(
+  rounds: number,
+  pressuresPerRound?: PressureDraft[],
+  randomEnergy: number = 0,
+  onProgress?: (current: number, total: number, report: TurnReport) => void
+): Promise<TurnReport[]> {
+  const allReports: TurnReport[] = [];
+  
+  for (let i = 0; i < rounds; i++) {
+    console.log(`🔄 [批量执行] 回合 ${i + 1}/${rounds}`);
+    
+    let pressures = pressuresPerRound || [];
+    
+    // 如果指定了随机能量，则生成随机压力
+    if (randomEnergy > 0) {
+      pressures = await generateRandomPressures(randomEnergy);
+    }
+    
+    const reports = await runTurn(pressures);
+    allReports.push(...reports);
+    
+    if (reports.length > 0 && onProgress) {
+      onProgress(i + 1, rounds, reports[reports.length - 1]);
+    }
+  }
+  
+  return allReports;
+}
+
+/**
+ * 生成随机压力（消耗指定能量）
+ */
+export async function generateRandomPressures(targetEnergy: number): Promise<PressureDraft[]> {
+  // 获取压力模板
+  const templates = await fetchPressureTemplates();
+  const validTemplates = templates.filter(t => t.kind !== "natural_evolution");
+  
+  if (validTemplates.length === 0) {
+    return [{ kind: "natural_evolution", intensity: 5, label: "自然演化", narrative_note: "" }];
+  }
+  
+  const pressures: PressureDraft[] = [];
+  let remainingEnergy = targetEnergy;
+  const BASE_COST = 3; // 每强度消耗3能量
+  
+  // 随机选择1-2个压力
+  const numPressures = Math.min(2, Math.floor(Math.random() * 2) + 1);
+  
+  for (let i = 0; i < numPressures && remainingEnergy >= BASE_COST; i++) {
+    const template = validTemplates[Math.floor(Math.random() * validTemplates.length)];
+    
+    // 计算可用强度（基于剩余能量）
+    const maxIntensity = Math.min(10, Math.floor(remainingEnergy / BASE_COST));
+    if (maxIntensity < 1) break;
+    
+    // 随机强度（1到maxIntensity之间）
+    const intensity = Math.max(1, Math.floor(Math.random() * maxIntensity) + 1);
+    const cost = intensity * BASE_COST;
+    
+    pressures.push({
+      kind: template.kind,
+      intensity,
+      label: template.label,
+      narrative_note: template.description,
+    });
+    
+    remainingEnergy -= cost;
+  }
+  
+  // 如果没有生成任何压力，使用自然演化
+  if (pressures.length === 0) {
+    pressures.push({ kind: "natural_evolution", intensity: 5, label: "自然演化", narrative_note: "" });
+  }
+  
+  return pressures;
+}
+
 export async function fetchMapOverview(viewMode: string = "terrain", speciesCode?: string): Promise<MapOverview> {
   // 始终请求完整的 126x40 六边形网格 (约5040个)，支持视图模式切换
   let url = `/api/map?limit_tiles=6000&limit_habitats=500&view_mode=${viewMode}`;
