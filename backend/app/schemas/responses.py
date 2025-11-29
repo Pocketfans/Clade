@@ -25,6 +25,16 @@ class SpeciesSnapshot(BaseModel):
     grazing_pressure: float | None = None  # 新增：承受的啃食压力
     predation_pressure: float | None = None  # 新增：承受的捕食压力
     ai_narrative: str | None = None  # 【新增】AI生成的物种叙事（描述物种当前状态和演化故事）
+    
+    # 【新增v2】地块分布统计
+    total_tiles: int = 0              # 分布的总地块数
+    healthy_tiles: int = 0            # 健康地块数（死亡率<25%）
+    warning_tiles: int = 0            # 警告地块数（死亡率25%-50%）
+    critical_tiles: int = 0           # 危机地块数（死亡率>50%）
+    best_tile_rate: float = 0.0       # 最低死亡率（最佳地块）
+    worst_tile_rate: float = 1.0      # 最高死亡率（最差地块）
+    has_refuge: bool = True           # 是否有避难所
+    distribution_status: str = ""     # 分布状态：稳定/警告/部分危机/全域危机
 
 
 class BranchingEvent(BaseModel):

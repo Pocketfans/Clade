@@ -1510,6 +1510,26 @@ class SimulationEngine:
                         for item in combined_results:
                             population = max(0, min(int(item.species.morphology_stats.get("population", 0) or 0), MAX_SAFE_POPULATION))
                             share = (population / total_pop) if total_pop else 0
+                            # 获取地块分布统计
+                            total_tiles = getattr(item, 'total_tiles', 0)
+                            healthy_tiles = getattr(item, 'healthy_tiles', 0)
+                            warning_tiles = getattr(item, 'warning_tiles', 0)
+                            critical_tiles = getattr(item, 'critical_tiles', 0)
+                            best_tile_rate = getattr(item, 'best_tile_rate', 0.0)
+                            worst_tile_rate = getattr(item, 'worst_tile_rate', 1.0)
+                            has_refuge = getattr(item, 'has_refuge', True)
+                            # 计算分布状态
+                            if total_tiles == 0:
+                                dist_status = "无分布"
+                            elif critical_tiles == total_tiles:
+                                dist_status = "全域危机"
+                            elif critical_tiles > total_tiles * 0.5:
+                                dist_status = "部分危机"
+                            elif healthy_tiles >= total_tiles * 0.5:
+                                dist_status = "稳定"
+                            else:
+                                dist_status = "警告"
+                            
                             species_snapshots.append(
                                 SpeciesSnapshot(
                                     lineage_code=item.species.lineage_code,
@@ -1530,6 +1550,15 @@ class SimulationEngine:
                                     grazing_pressure=item.grazing_pressure,
                                     predation_pressure=item.predation_pressure,
                                     ai_narrative=None,
+                                    # 地块分布统计
+                                    total_tiles=total_tiles,
+                                    healthy_tiles=healthy_tiles,
+                                    warning_tiles=warning_tiles,
+                                    critical_tiles=critical_tiles,
+                                    best_tile_rate=best_tile_rate,
+                                    worst_tile_rate=worst_tile_rate,
+                                    has_refuge=has_refuge,
+                                    distribution_status=dist_status,
                                 )
                             )
                         logger.info(f"[最简报告] 构建了 {len(species_snapshots)} 个物种快照")
@@ -1768,6 +1797,27 @@ class SimulationEngine:
             share = (population / total_pop) if total_pop else 0
             # 【修复】正确推断生态角色，而不是使用description
             ecological_role = self._infer_ecological_role(item.species)
+            
+            # 获取地块分布统计
+            total_tiles = getattr(item, 'total_tiles', 0)
+            healthy_tiles = getattr(item, 'healthy_tiles', 0)
+            warning_tiles = getattr(item, 'warning_tiles', 0)
+            critical_tiles = getattr(item, 'critical_tiles', 0)
+            best_tile_rate = getattr(item, 'best_tile_rate', 0.0)
+            worst_tile_rate = getattr(item, 'worst_tile_rate', 1.0)
+            has_refuge = getattr(item, 'has_refuge', True)
+            # 计算分布状态
+            if total_tiles == 0:
+                dist_status = "无分布"
+            elif critical_tiles == total_tiles:
+                dist_status = "全域危机"
+            elif critical_tiles > total_tiles * 0.5:
+                dist_status = "部分危机"
+            elif healthy_tiles >= total_tiles * 0.5:
+                dist_status = "稳定"
+            else:
+                dist_status = "警告"
+            
             species_snapshots.append(
                 SpeciesSnapshot(
                     lineage_code=item.species.lineage_code,
@@ -1787,7 +1837,16 @@ class SimulationEngine:
                     trophic_level=item.species.trophic_level,
                     grazing_pressure=item.grazing_pressure,
                     predation_pressure=item.predation_pressure,
-                    ai_narrative=item.ai_narrative if item.ai_narrative else None,  # 【新增】物种叙事
+                    ai_narrative=item.ai_narrative if item.ai_narrative else None,
+                    # 地块分布统计
+                    total_tiles=total_tiles,
+                    healthy_tiles=healthy_tiles,
+                    warning_tiles=warning_tiles,
+                    critical_tiles=critical_tiles,
+                    best_tile_rate=best_tile_rate,
+                    worst_tile_rate=worst_tile_rate,
+                    has_refuge=has_refuge,
+                    distribution_status=dist_status,
                 )
             )
         
@@ -1872,17 +1931,21 @@ class SimulationEngine:
     ) -> None:
         """检测灭绝条件并更新物种状态。
         
-        【达尔文式淘汰v3】进一步强化灭绝条件
+        【v4地块独立存活制】基于避难所的灭绝判定
         
-        设计理念：大量分化→激烈竞争→不适者淘汰→筛选最适者
+        设计理念：
+        - 只要有1个地块死亡率<20%（避难所），物种就能存续
+        - 避难所机制模拟地理隔离保护
+        - 即使大部分地块遭受灾难，边缘种群可重新扩散
         
-        灭绝条件（50万年时间尺度）：
-        - 单回合死亡率≥75%：灾难性死亡，直接灭绝（原80%）
-        - 死亡率≥55%且连续2回合：种群衰退严重，灭绝（原60%）
-        - 死亡率≥45%且连续3回合：长期不适应环境，灭绝（原50%）
-        - 死亡率≥35%且连续4回合：慢性衰退，灭绝（原40%）
-        - 种群<150且死亡率>35%：种群过小，无法恢复（原100/40%）
-        - 【新增】死亡率≥30%且连续6回合：长期边缘化，最终灭绝
+        灭绝条件：
+        - 无避难所且满足以下任一条件：
+          1. 全域危机（所有地块死亡率≥50%）连续2回合
+          2. 连续3回合无避难所且死亡率≥40%
+          3. 种群<100且无避难所
+        - 即使有避难所，以下情况仍灭绝：
+          1. 单回合死亡率≥90%（全球性灾难）
+          2. 种群归零
         
         Args:
             mortality_results: 死亡率计算结果
@@ -1892,52 +1955,77 @@ class SimulationEngine:
             species = item.species
             final_pop = final_populations.get(species.lineage_code, 0)
             death_rate = item.death_rate
-            streak_key = "mortality_streak"
-            mortality_streak = int(species.morphology_stats.get(streak_key, 0) or 0)
             
-            # 【强化】追踪连续高死亡率（从35%开始计数，原40%）
-            if death_rate >= 0.35:
-                mortality_streak += 1
+            # 获取地块分布统计
+            has_refuge = getattr(item, 'has_refuge', True)
+            total_tiles = getattr(item, 'total_tiles', 1)
+            critical_tiles = getattr(item, 'critical_tiles', 0)
+            healthy_tiles = getattr(item, 'healthy_tiles', 0)
+            
+            # 追踪连续无避难所回合
+            no_refuge_streak_key = "no_refuge_streak"
+            no_refuge_streak = int(species.morphology_stats.get(no_refuge_streak_key, 0) or 0)
+            
+            if not has_refuge:
+                no_refuge_streak += 1
             else:
-                mortality_streak = 0
-            species.morphology_stats[streak_key] = mortality_streak
+                no_refuge_streak = 0
+            species.morphology_stats[no_refuge_streak_key] = no_refuge_streak
+            
+            # 追踪连续全域危机回合
+            crisis_streak_key = "crisis_streak"
+            crisis_streak = int(species.morphology_stats.get(crisis_streak_key, 0) or 0)
+            
+            if total_tiles > 0 and critical_tiles == total_tiles:
+                crisis_streak += 1
+            else:
+                crisis_streak = 0
+            species.morphology_stats[crisis_streak_key] = crisis_streak
             
             extinction_triggered = False
             extinction_reason = ""
             
-            # 【强化】条件1：单回合死亡率≥75%（原80%）
-            if death_rate >= 0.75:
+            # === 无视避难所的绝对灭绝条件 ===
+            # 条件A：单回合死亡率≥90%（全球性灾难）
+            if death_rate >= 0.90:
                 extinction_triggered = True
-                extinction_reason = f"单回合死亡率{death_rate:.1%}，种群崩溃"
-            # 【强化】条件2：死亡率≥55%且连续2回合（原60%）
-            elif death_rate >= 0.55 and mortality_streak >= 2:
+                extinction_reason = f"全球性灾难，死亡率{death_rate:.1%}，所有地块种群崩溃"
+            # 条件B：种群归零
+            elif final_pop <= 0:
                 extinction_triggered = True
-                extinction_reason = f"连续{mortality_streak}回合高死亡率（≥55%），竞争淘汰"
-            # 【强化】条件3：死亡率≥45%且连续3回合（原50%）
-            elif death_rate >= 0.45 and mortality_streak >= 3:
-                extinction_triggered = True
-                extinction_reason = f"连续{mortality_streak}回合中高死亡率（≥45%），不适应环境"
-            # 【强化】条件4：死亡率≥35%且连续4回合（原40%）
-            elif death_rate >= 0.35 and mortality_streak >= 4:
-                extinction_triggered = True
-                extinction_reason = f"连续{mortality_streak}回合持续衰退（≥35%），被更适应的物种取代"
-            # 【新增】条件5：死亡率≥30%且连续6回合（长期边缘化）
-            elif death_rate >= 0.30 and mortality_streak >= 6:
-                extinction_triggered = True
-                extinction_reason = f"连续{mortality_streak}回合边缘化（≥30%），最终灭绝"
-            # 【强化】条件6：种群过小且死亡率>35%（原100/40%）
-            elif final_pop < 150 and death_rate > 0.35:
-                extinction_triggered = True
-                extinction_reason = f"种群过小({final_pop})且死亡率高({death_rate:.1%})，无法恢复"
+                extinction_reason = "种群归零"
+            
+            # === 基于避难所的灭绝条件（只在无避难所时触发）===
+            elif not has_refuge:
+                # 条件1：全域危机连续2回合
+                if crisis_streak >= 2:
+                    extinction_triggered = True
+                    extinction_reason = f"连续{crisis_streak}回合全域危机（所有{total_tiles}块地死亡率≥50%），无避难所"
+                # 条件2：连续3回合无避难所且死亡率≥40%
+                elif no_refuge_streak >= 3 and death_rate >= 0.40:
+                    extinction_triggered = True
+                    extinction_reason = f"连续{no_refuge_streak}回合无避难所，死亡率{death_rate:.1%}，种群无法恢复"
+                # 条件3：种群过小且无避难所
+                elif final_pop < 100:
+                    extinction_triggered = True
+                    extinction_reason = f"种群过小({final_pop})且无避难所保护，无法延续"
+                # 条件4：连续5回合无避难所（慢性灭绝）
+                elif no_refuge_streak >= 5:
+                    extinction_triggered = True
+                    extinction_reason = f"连续{no_refuge_streak}回合无避难所，长期衰退导致灭绝"
             
             # 执行灭绝
             if extinction_triggered and species.status == "alive":
-                logger.info(f"[灭绝] {species.common_name} ({species.lineage_code}): {extinction_reason}")
+                # 生成地块分布信息
+                dist_info = f"分布{total_tiles}块(健康{healthy_tiles}/危机{critical_tiles})"
+                full_reason = f"{extinction_reason}；{dist_info}"
+                
+                logger.info(f"[灭绝] {species.common_name} ({species.lineage_code}): {full_reason}")
                 self._emit_event("extinction", f"💀 灭绝: {species.common_name} - {extinction_reason}", "死亡")
                 species.status = "extinct"
                 species.morphology_stats["population"] = 0
                 species.morphology_stats["extinction_turn"] = self.turn_counter
-                species.morphology_stats["extinction_reason"] = extinction_reason
+                species.morphology_stats["extinction_reason"] = full_reason
                 
                 # 记录灭绝事件
                 from ..models.species import LineageEvent
@@ -1947,13 +2035,24 @@ class SimulationEngine:
                         event_type="extinction",
                         payload={
                             "turn": self.turn_counter,
-                            "reason": extinction_reason,
+                            "reason": full_reason,
                             "final_population": final_pop,
                             "death_rate": death_rate,
+                            "has_refuge": has_refuge,
+                            "total_tiles": total_tiles,
+                            "healthy_tiles": healthy_tiles,
+                            "critical_tiles": critical_tiles,
                         }
                     )
                 )
                 species_repository.upsert(species)
+            
+            # 【新增】有避难所时的警告日志
+            elif has_refuge and death_rate >= 0.50 and species.status == "alive":
+                logger.info(
+                    f"[避难所保护] {species.common_name}: 死亡率{death_rate:.1%}但有{healthy_tiles}个避难所，"
+                    f"物种存续（分布{total_tiles}块）"
+                )
 
     def _rule_based_reemergence(self, candidates, modifiers):
         """基于规则筛选背景物种重现。

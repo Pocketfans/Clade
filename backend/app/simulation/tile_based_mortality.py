@@ -84,6 +84,34 @@ class AggregatedMortalityResult:
     light_competition: float = 0.0           # 光照竞争程度
     nutrient_competition: float = 0.0        # 养分竞争程度
     herbivory_pressure: float = 0.0          # 食草压力
+    
+    # 【新增v2】地块分布统计
+    total_tiles: int = 0              # 分布的总地块数
+    healthy_tiles: int = 0            # 健康地块数（死亡率<25%）
+    warning_tiles: int = 0            # 警告地块数（死亡率25%-50%）
+    critical_tiles: int = 0           # 危机地块数（死亡率>50%）
+    best_tile_rate: float = 0.0       # 最低死亡率（最佳地块）
+    worst_tile_rate: float = 1.0      # 最高死亡率（最差地块）
+    has_refuge: bool = True           # 是否有避难所（至少1个地块死亡率<20%）
+    
+    def get_distribution_status(self) -> str:
+        """返回分布状态描述"""
+        if self.total_tiles == 0:
+            return "无分布"
+        if self.critical_tiles == self.total_tiles:
+            return "全域危机"
+        elif self.critical_tiles > self.total_tiles * 0.5:
+            return "部分危机"
+        elif self.healthy_tiles >= self.total_tiles * 0.5:
+            return "稳定"
+        else:
+            return "警告"
+    
+    def get_distribution_summary(self) -> str:
+        """返回分布摘要字符串"""
+        if self.total_tiles == 0:
+            return "无分布数据"
+        return f"分布{self.total_tiles}块(🟢{self.healthy_tiles}/🟡{self.warning_tiles}/🔴{self.critical_tiles})"
 
 
 class TileBasedMortalityEngine:
@@ -1646,8 +1674,13 @@ class TileBasedMortalityEngine:
     ) -> list[AggregatedMortalityResult]:
         """汇总各地块结果，计算物种总体死亡率
         
-        汇总方式：按种群加权平均
-        total_death_rate = Σ(tile_pop × tile_death_rate) / total_pop
+        【v2更新】按地块独立存活制计算：
+        - 每个地块独立计算存活数
+        - 避难所地块（死亡率<20%）可保证物种存续
+        - 汇总各地块存活数得到总存活数
+        
+        汇总方式：按地块独立计算后求和
+        total_survivors = Σ(tile_pop × (1 - tile_death_rate))
         """
         n_species = len(species_list)
         results: list[AggregatedMortalityResult] = []
@@ -1668,6 +1701,7 @@ class TileBasedMortalityEngine:
                     resource_pressure=species_arrays['saturation'][sp_idx],
                     is_background=species.is_background,
                     tier=tier,
+                    total_tiles=0,
                 ))
                 continue
             
@@ -1678,39 +1712,75 @@ class TileBasedMortalityEngine:
                 tile_pops = np.array([total_pop])
             
             # 获取各地块死亡率
-            tile_deaths = mortality_matrix[:, sp_idx]
+            tile_rates = mortality_matrix[:, sp_idx]
             
-            # 加权平均死亡率
-            if tile_pops.sum() > 0:
-                weighted_death_rate = (tile_pops * tile_deaths).sum() / tile_pops.sum()
+            # 【v2核心】计算地块健康统计
+            # 只统计有种群的地块
+            occupied_mask = tile_pops > 0
+            occupied_rates = tile_rates[occupied_mask]
+            occupied_pops = tile_pops[occupied_mask]
+            
+            total_tiles = int(occupied_mask.sum())
+            
+            if total_tiles > 0:
+                healthy_tiles = int((occupied_rates < 0.25).sum())
+                warning_tiles = int(((occupied_rates >= 0.25) & (occupied_rates < 0.50)).sum())
+                critical_tiles = int((occupied_rates >= 0.50).sum())
+                best_tile_rate = float(occupied_rates.min())
+                worst_tile_rate = float(occupied_rates.max())
+                has_refuge = bool((occupied_rates < 0.20).any())
             else:
-                weighted_death_rate = tile_deaths.mean()
+                healthy_tiles = warning_tiles = critical_tiles = 0
+                best_tile_rate = 0.0
+                worst_tile_rate = 1.0
+                has_refuge = False
             
-            # 应用干预修正
+            # 【v2核心】按地块独立计算存活数
+            # 每个地块独立应用死亡率，然后汇总
+            tile_survivors = tile_pops * (1.0 - tile_rates)
+            tile_deaths_count = tile_pops * tile_rates
+            
+            total_survivors = int(tile_survivors.sum())
+            total_deaths = int(tile_deaths_count.sum())
+            
+            # 应用干预修正（按比例调整）
             if species_arrays['is_protected'][sp_idx] and species_arrays['protection_turns'][sp_idx] > 0:
-                weighted_death_rate *= 0.5
+                # 保护效果：减少一半死亡
+                protection_saved = total_deaths // 2
+                total_survivors += protection_saved
+                total_deaths -= protection_saved
+            
             if species_arrays['is_suppressed'][sp_idx] and species_arrays['suppression_turns'][sp_idx] > 0:
-                weighted_death_rate = min(0.95, weighted_death_rate + 0.30)
+                # 压制效果：额外30%死亡
+                suppress_deaths = int(total_survivors * 0.30)
+                total_survivors -= suppress_deaths
+                total_deaths += suppress_deaths
             
             # 边界约束
-            weighted_death_rate = min(0.98, max(0.03, weighted_death_rate))
+            total_survivors = max(0, min(total_pop, total_survivors))
+            total_deaths = max(0, total_pop - total_survivors)
             
-            # 计算死亡和存活数
-            deaths = int(total_pop * weighted_death_rate)
-            survivors = max(0, total_pop - deaths)
+            # 计算总体死亡率（用于报告和记录）
+            if total_pop > 0:
+                overall_death_rate = total_deaths / total_pop
+            else:
+                overall_death_rate = 1.0
             
-            # 生成分析文本
-            notes = [self._generate_mortality_notes(
-                species, weighted_death_rate, species_arrays, sp_idx
+            overall_death_rate = min(0.98, max(0.03, overall_death_rate))
+            
+            # 生成分析文本（包含地块信息）
+            notes = [self._generate_tile_mortality_notes(
+                species, overall_death_rate, total_tiles, healthy_tiles, 
+                critical_tiles, has_refuge, best_tile_rate, worst_tile_rate
             )]
             
             # 【Embedding兼容】生成死因描述
             death_causes = self._generate_death_causes(
-                species, weighted_death_rate, species_arrays, sp_idx
+                species, overall_death_rate, species_arrays, sp_idx
             )
             
-            if weighted_death_rate > 0.5:
-                logger.info(f"[高死亡率警告] {species.common_name}: {weighted_death_rate:.1%}")
+            if overall_death_rate > 0.5:
+                logger.info(f"[高死亡率警告] {species.common_name}: {overall_death_rate:.1%} (分布{total_tiles}块，危机{critical_tiles}块)")
             
             # 【新增】计算植物专用压力字段
             plant_comp_pressure = 0.0
@@ -1738,22 +1808,66 @@ class TileBasedMortalityEngine:
             results.append(AggregatedMortalityResult(
                 species=species,
                 initial_population=total_pop,
-                deaths=deaths,
-                survivors=survivors,
-                death_rate=weighted_death_rate,
+                deaths=total_deaths,
+                survivors=total_survivors,
+                death_rate=overall_death_rate,
                 notes=notes,
                 niche_overlap=species_arrays['overlap'][sp_idx],
                 resource_pressure=species_arrays['saturation'][sp_idx],
                 is_background=species.is_background,
                 tier=tier,
-                death_causes=death_causes,  # 【新增】死因描述
-                plant_competition_pressure=plant_comp_pressure,  # 【新增】植物竞争压力
-                light_competition=light_comp,                     # 【新增】光照竞争
-                nutrient_competition=nutrient_comp,               # 【新增】养分竞争
-                herbivory_pressure=herb_pressure,                 # 【新增】食草压力
+                death_causes=death_causes,
+                plant_competition_pressure=plant_comp_pressure,
+                light_competition=light_comp,
+                nutrient_competition=nutrient_comp,
+                herbivory_pressure=herb_pressure,
+                # 【v2新增】地块分布统计
+                total_tiles=total_tiles,
+                healthy_tiles=healthy_tiles,
+                warning_tiles=warning_tiles,
+                critical_tiles=critical_tiles,
+                best_tile_rate=best_tile_rate,
+                worst_tile_rate=worst_tile_rate,
+                has_refuge=has_refuge,
             ))
         
         return results
+    
+    def _generate_tile_mortality_notes(
+        self,
+        species: Species,
+        death_rate: float,
+        total_tiles: int,
+        healthy_tiles: int,
+        critical_tiles: int,
+        has_refuge: bool,
+        best_rate: float,
+        worst_rate: float,
+    ) -> str:
+        """生成包含地块信息的死亡率分析文本"""
+        if total_tiles == 0:
+            return f"{species.common_name}无分布数据。"
+        
+        # 状态描述
+        if critical_tiles == total_tiles:
+            status = "⚠️全域危机"
+        elif critical_tiles > total_tiles * 0.5:
+            status = "🔴部分危机"
+        elif healthy_tiles >= total_tiles * 0.5:
+            status = "🟢稳定"
+        else:
+            status = "🟡警告"
+        
+        # 避难所信息
+        refuge_info = "有避难所" if has_refuge else "无避难所！"
+        
+        # 地块分布
+        dist_info = f"分布{total_tiles}块(健康{healthy_tiles}/危机{critical_tiles})"
+        
+        # 死亡率范围
+        rate_range = f"最低{best_rate:.0%}~最高{worst_rate:.0%}"
+        
+        return f"{species.common_name}【{status}】{dist_info}，{refuge_info}，死亡率{rate_range}，总体{death_rate:.1%}"
     
     def _generate_mortality_notes(
         self,

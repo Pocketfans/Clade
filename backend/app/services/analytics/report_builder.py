@@ -138,10 +138,20 @@ class ReportBuilder:
         if critical_species:
             sections.append("\n**重点物种动态**：")
             for snap in critical_species[:5]:
+                # 地块分布信息
+                dist_info = ""
+                if snap.total_tiles > 0:
+                    dist_info = f"\n  📍 分布{snap.total_tiles}块(🟢{snap.healthy_tiles}/🟡{snap.warning_tiles}/🔴{snap.critical_tiles})"
+                    if snap.distribution_status:
+                        dist_info += f"【{snap.distribution_status}】"
+                    if not snap.has_refuge and snap.death_rate > 0.3:
+                        dist_info += " ⚠️无避难所"
+                
                 sections.append(
                     f"- {snap.common_name}（{snap.latin_name}，{snap.lineage_code}）：\n"
                     f"  种群从 {snap.population + snap.deaths:,} 减少至 {snap.population:,}（死亡率{snap.death_rate:.1%}），"
                     f"生态位竞争度{(snap.niche_overlap or 0):.2f}，资源压力{(snap.resource_pressure or 0):.2f}"
+                    f"{dist_info}"
                 )
         
         if focus_species and len(focus_species) > 0:
