@@ -16,6 +16,10 @@ class SpeciesRepository:
     def list_species(self) -> list[Species]:
         with session_scope() as session:
             return list(session.exec(select(Species)))
+    
+    def get_all(self) -> list[Species]:
+        """list_species的别名，保持API兼容"""
+        return self.list_species()
 
     def get_by_lineage(self, lineage_code: str) -> Species | None:
         with session_scope() as session:
