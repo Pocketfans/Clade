@@ -73,13 +73,17 @@ class TectonicIntegration:
         """
         pressure_modifiers = pressure_modifiers or {}
         
-        # 1. 转换物种数据
+        # 1. 【关键】同步主系统海拔到板块系统
+        # 板块系统有自己的SimpleTile，需要与主系统MapTile的海拔保持同步
+        self._sync_elevations_from_main(map_tiles)
+        
+        # 2. 转换物种数据
         simple_species = self._convert_species(species_list)
         
-        # 2. 转换栖息地数据
+        # 3. 转换栖息地数据
         simple_habitats = self._convert_habitats(habitat_data)
         
-        # 3. 执行板块运动
+        # 4. 执行板块运动
         result = self.tectonic.step(
             pressure_modifiers=pressure_modifiers,
             species_list=simple_species,
@@ -162,6 +166,42 @@ class TectonicIntegration:
             self._species_cache[sp_id] = simple_sp
         
         return result
+    
+    def _sync_elevations_from_main(self, map_tiles: Sequence[Any]) -> None:
+        """将主系统的海拔同步到板块系统
+        
+        这是关键步骤！板块系统的 SimpleTile 有独立的海拔数据，
+        必须与主系统的 MapTile 保持同步，否则边界判断会出错。
+        """
+        if not map_tiles:
+            return
+        
+        # 构建坐标到海拔的映射
+        coord_to_elevation = {}
+        for tile in map_tiles:
+            x = getattr(tile, 'x', None)
+            y = getattr(tile, 'y', None)
+            elevation = getattr(tile, 'elevation', None)
+            temperature = getattr(tile, 'temperature', None)
+            
+            if x is not None and y is not None and elevation is not None:
+                coord_to_elevation[(x, y)] = {
+                    'elevation': elevation,
+                    'temperature': temperature,
+                }
+        
+        # 同步到板块系统的 tiles
+        synced = 0
+        for tile in self.tectonic.tiles:
+            data = coord_to_elevation.get((tile.x, tile.y))
+            if data:
+                tile.elevation = data['elevation']
+                if data['temperature'] is not None:
+                    tile.temperature = data['temperature']
+                synced += 1
+        
+        if synced > 0:
+            logger.debug(f"[板块集成] 同步了 {synced} 个地块的海拔数据")
     
     def _convert_habitats(self, habitat_data: list[dict]) -> list[SimpleHabitat]:
         """将栖息地数据转换为板块系统格式"""
