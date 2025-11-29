@@ -1549,6 +1549,35 @@ class SimulationEngine:
     def run_turns(self, *args, **kwargs):
         raise NotImplementedError("Use run_turns_async instead")
     
+    def _infer_ecological_role(self, species) -> str:
+        """根据物种营养级推断生态角色
+        
+        营养级划分规则：
+        - T < 1.5: 纯生产者 (producer)
+        - 1.5 ≤ T < 2.0: 混合营养 (mixotroph)
+        - 2.0 ≤ T < 2.8: 草食者 (herbivore)
+        - 2.8 ≤ T < 3.5: 杂食者 (omnivore)
+        - T ≥ 3.5: 肉食者 (carnivore)
+        """
+        trophic = getattr(species, 'trophic_level', 2.0)
+        diet_type = getattr(species, 'diet_type', None)
+        
+        # 特殊处理：腐食者（分解者）
+        if diet_type == "detritivore":
+            return "decomposer"
+        
+        # 基于营养级判断
+        if trophic < 1.5:
+            return "producer"
+        elif trophic < 2.0:
+            return "mixotroph"
+        elif trophic < 2.8:
+            return "herbivore"
+        elif trophic < 3.5:
+            return "omnivore"
+        else:
+            return "carnivore"
+    
     def _save_population_snapshots(self, species_list: list, turn_index: int) -> None:
         """保存人口快照到数据库（用于族谱视图的当前/峰值人口）
         
@@ -1606,6 +1635,8 @@ class SimulationEngine:
         for item in mortality:
             population = safe_pop(item.species)
             share = (population / total_pop) if total_pop else 0
+            # 【修复】正确推断生态角色，而不是使用description
+            ecological_role = self._infer_ecological_role(item.species)
             species_snapshots.append(
                 SpeciesSnapshot(
                     lineage_code=item.species.lineage_code,
@@ -1615,7 +1646,7 @@ class SimulationEngine:
                     population_share=share,
                     deaths=item.deaths,
                     death_rate=item.death_rate,
-                    ecological_role=item.species.description,
+                    ecological_role=ecological_role,
                     status=item.species.status,
                     notes=item.notes,
                     niche_overlap=item.niche_overlap,

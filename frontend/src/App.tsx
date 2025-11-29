@@ -523,24 +523,8 @@ export default function App() {
       
       setReports((prev) => normalizeReports([...prev, ...next]));
       
-      // 并行刷新，加快速度，并捕获错误避免阻塞
-      console.log("🔄 [演化] 刷新地图和物种列表...");
-      const refreshStart = Date.now();
-      await Promise.all([
-        refreshMap().catch(e => console.error("刷新地图失败:", e)),
-        refreshSpeciesList().catch(e => console.error("刷新物种列表失败:", e)),
-        refreshQueue().catch(e => console.error("刷新队列失败:", e)),
-      ]);
-      console.log(`✅ [演化] 刷新完成，耗时: ${Date.now() - refreshStart}ms`);
-      
-      setSpeciesRefreshTrigger(prev => prev + 1); // 触发物种详情刷新
-      setPendingPressures([]);
-      setShowPressureModal(false);
-      
-      // 清除族谱缓存，下次打开时会重新获取最新数据
-      setLineageTree(null);
-      
-      // 显示回合总结
+      // 【关键】先更新回合状态和显示回合总结，再进行后台刷新
+      // 这样即使刷新卡住，用户也能看到回合总结
       if (next.length > 0) {
         const latestReport = next[next.length - 1];
         console.log("🎉 [演化] 回合", latestReport.turn_index, "完成");
@@ -553,6 +537,30 @@ export default function App() {
         // 刷新能量状态
         dispatchEnergyChanged();
       }
+      
+      // 并行刷新，加快速度，并捕获错误避免阻塞
+      // 【优化】添加超时保护，避免无限等待
+      console.log("🔄 [演化] 刷新地图和物种列表...");
+      const refreshStart = Date.now();
+      const withTimeout = <T,>(promise: Promise<T>, ms: number, name: string): Promise<T | null> =>
+        Promise.race([
+          promise,
+          new Promise<null>((_, reject) => setTimeout(() => reject(new Error(`${name} 超时`)), ms))
+        ]).catch(e => { console.warn(`⚠️ ${name}:`, e.message); return null; });
+      
+      await Promise.all([
+        withTimeout(refreshMap(), 30000, "刷新地图"),
+        withTimeout(refreshSpeciesList(), 15000, "刷新物种列表"),
+        withTimeout(refreshQueue(), 5000, "刷新队列"),
+      ]);
+      console.log(`✅ [演化] 刷新完成，耗时: ${Date.now() - refreshStart}ms`);
+      
+      setSpeciesRefreshTrigger(prev => prev + 1); // 触发物种详情刷新
+      setPendingPressures([]);
+      setShowPressureModal(false);
+      
+      // 清除族谱缓存，下次打开时会重新获取最新数据
+      setLineageTree(null);
     } catch (error: any) {
       console.error("❌ [演化] 推演失败:", error);
       setError(`推演失败: ${error.message || "未知错误"}`);
@@ -776,8 +784,8 @@ export default function App() {
           />
         )}
 
-        {/* 推演进度提示 - 最高优先级 */}
-        {loading && <TurnProgressOverlay message="AI 正在分析生态系统变化..." showDetails={true} />}
+        {/* 推演进度提示 - 如果已显示回合总结则不显示进度覆盖层 */}
+        {loading && !showTurnSummary && <TurnProgressOverlay message="AI 正在分析生态系统变化..." showDetails={true} />}
         
         {/* 回合总结模态窗 */}
         {showTurnSummary && latestReport && (

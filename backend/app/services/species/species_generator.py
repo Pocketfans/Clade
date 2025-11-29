@@ -135,6 +135,16 @@ class SpeciesGenerator:
             if diet_type not in valid_diet_types:
                 diet_type = "omnivore"
             
+            # 【修复】根据食性设置合理的营养级
+            trophic_mapping = {
+                "autotroph": 1.0,
+                "herbivore": 2.0,
+                "carnivore": 3.5,
+                "omnivore": 2.5,
+                "detritivore": 1.5
+            }
+            trophic_level = trophic_mapping.get(diet_type, 2.0)
+            
             # 创建物种对象
             # 注意：不再使用 ecological_vector，系统会基于 description 自动计算 embedding
             species = Species(
@@ -151,6 +161,7 @@ class SpeciesGenerator:
                 status="alive",
                 is_background=False,
                 created_turn=0,
+                trophic_level=trophic_level,  # 【修复】设置营养级
                 # 捕食关系
                 diet_type=diet_type,
                 prey_species=prey_species if isinstance(prey_species, list) else [],
@@ -326,6 +337,22 @@ class SpeciesGenerator:
         elif any(kw in prompt_lower for kw in ["海岸", "潮间带", "coastal", "intertidal"]):
             habitat_type = "coastal"
         
+        # 【修复】根据prompt推测食性和营养级
+        diet_type = "omnivore"  # 默认杂食
+        trophic_level = 2.5
+        if any(kw in prompt_lower for kw in ["植物", "藻类", "光合", "plant", "algae", "自养"]):
+            diet_type = "autotroph"
+            trophic_level = 1.0
+        elif any(kw in prompt_lower for kw in ["肉食", "捕食", "carnivore", "predator"]):
+            diet_type = "carnivore"
+            trophic_level = 3.5
+        elif any(kw in prompt_lower for kw in ["草食", "herbivore", "滤食"]):
+            diet_type = "herbivore"
+            trophic_level = 2.0
+        elif any(kw in prompt_lower for kw in ["腐食", "分解", "detritivore", "decomposer"]):
+            diet_type = "detritivore"
+            trophic_level = 1.5
+        
         return Species(
             lineage_code=lineage_code,
             parent_code=None,
@@ -340,6 +367,8 @@ class SpeciesGenerator:
             status="alive",
             is_background=False,
             created_turn=0,
+            trophic_level=trophic_level,  # 【修复】设置营养级
+            diet_type=diet_type,  # 【修复】设置食性类型
         )
 
     def generate_advanced(
