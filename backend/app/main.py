@@ -16,6 +16,14 @@ from .core.database import init_db
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """请求日志中间件 - 记录所有请求的 URL、方法、状态码等信息，便于调试 404 等问题"""
     
+    # 忽略的高频轮询路径（不打印日志）
+    IGNORED_PATHS = {
+        "/api/queue",
+        "/api/energy", 
+        "/api/hints",
+        "/api/health",
+    }
+    
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
         
@@ -32,6 +40,10 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         # 计算耗时
         duration_ms = (time.time() - start_time) * 1000
         status_code = response.status_code
+        
+        # 跳过高频轮询请求的日志（除非出错）
+        if path in self.IGNORED_PATHS and status_code < 400:
+            return response
         
         # 根据状态码选择日志级别和颜色
         if status_code >= 500:
