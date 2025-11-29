@@ -230,9 +230,17 @@ class TerrainChange:
     new_elevation: float
     cause: str  # "collision", "subduction", "rifting", "erosion", "volcanic"
     
+    # 温度变化
+    old_temperature: float = 0.0
+    new_temperature: float = 0.0
+    
     @property
     def elevation_delta(self) -> float:
         return self.new_elevation - self.old_elevation
+    
+    @property
+    def temperature_delta(self) -> float:
+        return self.new_temperature - self.old_temperature
 
 
 @dataclass

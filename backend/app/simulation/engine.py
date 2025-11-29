@@ -479,21 +479,27 @@ class SimulationEngine:
                             for change in tectonic_result.terrain_changes:
                                 tile = tile_map.get(change["tile_id"])
                                 if tile:
+                                    # 应用海拔变化
                                     tile.elevation = change["new_elevation"]
+                                    # 应用温度变化
+                                    if hasattr(tile, "temperature") and "new_temperature" in change:
+                                        tile.temperature = change["new_temperature"]
                                     updated_tiles.append(tile)
                             
                             if updated_tiles:
                                 # 保存更新的地块到数据库
                                 environment_repository.upsert_tiles(updated_tiles)
-                                logger.info(f"[板块系统] 应用并保存了 {len(updated_tiles)} 处地形变化")
                                 
-                                # 如果海拔变化显著，重新分类地形
+                                # 计算平均变化用于日志
+                                avg_change = sum(abs(c["delta"]) for c in tectonic_result.terrain_changes) / len(tectonic_result.terrain_changes)
+                                logger.info(f"[板块系统] 应用了 {len(updated_tiles)} 处地形变化 (平均 {avg_change:.2f}m)")
+                                
+                                # 如果有较大变化，重新分类地形
                                 max_change = max(abs(c["delta"]) for c in tectonic_result.terrain_changes)
-                                if max_change > 50:  # 变化超过50米
+                                if max_change > 10:  # 变化超过10米时重新分类
                                     self.map_manager.reclassify_terrain_by_sea_level(
                                         current_map_state.sea_level
                                     )
-                                    logger.info(f"[板块系统] 地形重新分类完成")
                         
                         # 合并压力反馈
                         for key, value in tectonic_result.pressure_feedback.items():

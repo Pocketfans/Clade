@@ -107,6 +107,9 @@ class TectonicIntegration:
                 "new_elevation": tc.new_elevation,
                 "cause": tc.cause,
                 "delta": tc.elevation_delta,
+                "old_temperature": tc.old_temperature,
+                "new_temperature": tc.new_temperature,
+                "temp_delta": tc.temperature_delta,
             })
         
         # 6. 转换事件为主系统格式

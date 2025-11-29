@@ -329,7 +329,7 @@ class PlateMotionEngine:
         boundary_info: dict,
         pressure_modifiers: dict[str, float],
     ) -> list[TerrainChange]:
-        """计算地形变化"""
+        """计算地形变化 - 渐进式、平滑的变化"""
         changes = []
         cfg = self.terrain_config
         
@@ -339,6 +339,10 @@ class PlateMotionEngine:
             boost = TECTONIC_CONFIG["pressure_effects"]["orogeny"].get("elevation_change_boost", 1.0)
             elevation_boost = 1 + (boost - 1) * (pressure_modifiers["orogeny"] / 10)
         
+        # 第一步：计算原始变化
+        deltas = {}  # tile_id -> delta
+        causes = {}  # tile_id -> cause
+        
         for tile in tiles:
             boundary_type = tile.boundary_type
             dist = tile.distance_to_boundary
@@ -346,35 +350,48 @@ class PlateMotionEngine:
             if boundary_type == BoundaryType.INTERNAL and dist > cfg["boundary_effect_radius"]:
                 continue
             
-            old_elevation = tile.elevation
             delta = 0.0
             cause = "internal"
             
-            # 距离衰减因子
+            # 使用更平滑的距离衰减（高斯衰减）
+            effect_radius = cfg["boundary_effect_radius"]
             if dist > 0:
-                distance_factor = 1.0 / (1 + dist * 0.4)
+                # 高斯衰减：边界效果平滑过渡
+                distance_factor = math.exp(-(dist ** 2) / (2 * (effect_radius / 2) ** 2))
             else:
                 distance_factor = 1.0
             
             # 根据边界类型计算变化
             if boundary_type == BoundaryType.CONVERGENT:
-                # 大陆碰撞：隆起
+                # 大陆碰撞：缓慢隆起
                 delta = cfg["mountain_growth_rate"] * distance_factor
                 cause = "collision"
             
             elif boundary_type == BoundaryType.SUBDUCTION:
-                # 俯冲：取决于位置
-                if tile.elevation < 0:
-                    # 海洋侧：形成海沟（下沉）
-                    delta = -cfg["subduction_depth_rate"] * distance_factor
+                # 俯冲边界：需要检查是否在海洋中
+                features_cfg = TECTONIC_CONFIG["features"]
+                min_ocean = features_cfg.get("trench_min_ocean_depth", -500)
+                trench_max = features_cfg.get("trench_max_depth", -8000)
+                deepen_rate = features_cfg.get("trench_deepen_rate", 50)
+                
+                if tile.elevation < min_ocean:
+                    # 只有足够深的海洋才能形成海沟
+                    # 渐进式加深，不会一下子变成-8000
+                    current_depth = tile.elevation
+                    target_depth = max(trench_max, current_depth - deepen_rate * distance_factor)
+                    delta = (target_depth - current_depth) * 0.1  # 每回合只变化10%的差距
                     cause = "subduction"
-                else:
+                elif tile.elevation >= 0:
                     # 陆地侧：火山弧（轻微隆起）
-                    delta = cfg["mountain_growth_rate"] * 0.3 * distance_factor
+                    delta = cfg["mountain_growth_rate"] * 0.2 * distance_factor
                     cause = "volcanic_arc"
+                else:
+                    # 浅海：轻微下沉
+                    delta = -cfg["subduction_depth_rate"] * 0.3 * distance_factor
+                    cause = "subduction"
             
             elif boundary_type == BoundaryType.DIVERGENT:
-                # 张裂：下沉
+                # 张裂：缓慢下沉
                 delta = -cfg["rift_subsidence_rate"] * distance_factor
                 cause = "rifting"
             
@@ -382,9 +399,9 @@ class PlateMotionEngine:
                 # 转换边界：无明显垂直变化
                 pass
             
-            # 侵蚀作用
-            if tile.elevation > 2000:
-                erosion = cfg["erosion_rate"] * (tile.elevation / 5000)
+            # 侵蚀作用（只对高山）
+            if tile.elevation > 3000:
+                erosion = cfg["erosion_rate"] * ((tile.elevation - 3000) / 5000)
                 delta -= erosion
             
             # 应用压力加成
@@ -394,16 +411,72 @@ class PlateMotionEngine:
             max_change = cfg["max_elevation_change"]
             delta = max(-max_change, min(max_change, delta))
             
-            if abs(delta) > 0.01:
-                tile.elevation += delta
-                changes.append(TerrainChange(
-                    tile_id=tile.id,
-                    x=tile.x,
-                    y=tile.y,
-                    old_elevation=old_elevation,
-                    new_elevation=tile.elevation,
-                    cause=cause,
-                ))
+            if abs(delta) > 0.001:
+                deltas[tile.id] = delta
+                causes[tile.id] = cause
+        
+        # 第二步：平滑处理 - 与邻居取平均
+        smoothing_strength = cfg.get("smoothing_strength", 0.15)
+        smoothing_iterations = cfg.get("smoothing_iterations", 2)
+        
+        tile_map = {t.id: t for t in tiles}
+        
+        for _ in range(smoothing_iterations):
+            smoothed_deltas = {}
+            for tile_id, delta in deltas.items():
+                tile = tile_map.get(tile_id)
+                if not tile:
+                    smoothed_deltas[tile_id] = delta
+                    continue
+                
+                # 获取邻居的变化
+                neighbors = self._get_neighbors(tile.x, tile.y)
+                neighbor_deltas = []
+                for nx, ny in neighbors:
+                    if 0 <= ny < self.height:
+                        neighbor_id = ny * self.width + nx
+                        if neighbor_id in deltas:
+                            neighbor_deltas.append(deltas[neighbor_id])
+                
+                if neighbor_deltas:
+                    # 与邻居平均
+                    avg_neighbor = sum(neighbor_deltas) / len(neighbor_deltas)
+                    smoothed = delta * (1 - smoothing_strength) + avg_neighbor * smoothing_strength
+                    smoothed_deltas[tile_id] = smoothed
+                else:
+                    smoothed_deltas[tile_id] = delta
+            
+            deltas = smoothed_deltas
+        
+        # 第三步：应用变化并更新温度
+        temp_per_100m = cfg.get("temp_per_100m_elevation", -0.6)
+        
+        for tile in tiles:
+            if tile.id not in deltas:
+                continue
+            
+            delta = deltas[tile.id]
+            cause = causes.get(tile.id, "internal")
+            
+            old_elevation = tile.elevation
+            old_temperature = tile.temperature
+            
+            tile.elevation += delta
+            
+            # 更新温度（海拔每变化100米，温度变化0.6°C）
+            temp_change = (delta / 100) * temp_per_100m
+            tile.temperature += temp_change
+            
+            changes.append(TerrainChange(
+                tile_id=tile.id,
+                x=tile.x,
+                y=tile.y,
+                old_elevation=old_elevation,
+                new_elevation=tile.elevation,
+                cause=cause,
+                old_temperature=old_temperature,
+                new_temperature=tile.temperature,
+            ))
         
         return changes
     

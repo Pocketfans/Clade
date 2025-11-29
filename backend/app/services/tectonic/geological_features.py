@@ -308,25 +308,24 @@ class GeologicalFeatureDistributor:
         all_tiles: list[SimpleTile],
         plates: list[Plate],
     ) -> None:
-        """生成海沟"""
+        """生成海沟标记（不直接修改海拔，海拔变化由运动引擎渐进处理）"""
         if not subduction_tiles:
             return
         
-        trench_depth = self.config["trench_depth"]
+        # 获取配置
+        min_ocean_depth = self.config.get("trench_min_ocean_depth", -500)
         
         for tile in subduction_tiles:
-            # 海沟在海洋侧
-            if tile.elevation < 0:
-                # 加深海拔
-                tile.elevation = min(tile.elevation, trench_depth)
-                
+            # 只在足够深的海洋中标记海沟
+            # 不直接修改海拔！海拔变化由 motion_engine 渐进处理
+            if tile.elevation < min_ocean_depth:
                 trench = GeologicalFeature(
                     id=len(self.trenches),
                     feature_type=FeatureType.TRENCH,
                     x=tile.x,
                     y=tile.y,
                     tile_id=tile.id,
-                    intensity=1.0,
+                    intensity=abs(tile.elevation) / 8000,  # 基于当前深度计算强度
                     plate_id=tile.plate_id,
                     boundary_type=BoundaryType.SUBDUCTION,
                 )
