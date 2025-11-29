@@ -75,10 +75,10 @@ export interface SpeciesSnapshot {
   lineage_code: string;
   latin_name: string;
   common_name: string;
-  population: number;
+  population: number;  // 本回合结束时的种群数量（经过死亡+繁殖后）
   population_share: number;
-  deaths: number;
-  death_rate: number;
+  deaths: number;  // 本回合死亡数量
+  death_rate: number;  // 死亡率（deaths / initial_population）
   ecological_role: string;
   status: string;
   notes: string[];
@@ -90,6 +90,22 @@ export interface SpeciesSnapshot {
   grazing_pressure?: number;
   predation_pressure?: number;
   ai_narrative?: string | null; // AI生成的物种叙事
+  
+  // 种群变化完整追踪
+  initial_population?: number;  // 回合开始时的种群数量
+  births?: number;  // 本回合新出生的个体数量
+  survivors?: number;  // 存活的个体数量（initial_population - deaths）
+  // 关系：population = survivors + births
+  
+  // 地块分布统计
+  total_tiles?: number;  // 分布的总地块数
+  healthy_tiles?: number;  // 健康地块数（死亡率<25%）
+  warning_tiles?: number;  // 警告地块数（死亡率25%-50%）
+  critical_tiles?: number;  // 危机地块数（死亡率>50%）
+  best_tile_rate?: number;  // 最低死亡率
+  worst_tile_rate?: number;  // 最高死亡率
+  has_refuge?: boolean;  // 是否有避难所
+  distribution_status?: string;  // 分布状态
 }
 
 export interface BackgroundSummary {
@@ -411,4 +427,38 @@ export interface ExtinctionImpact {
   indirectly_affected: string[];
   food_chain_collapse_risk: number;
   affected_biomass_percentage: number;
+}
+
+// 食物网分析结果
+export interface FoodWebAnalysis {
+  health_score: number;
+  total_species: number;
+  total_links: number;
+  orphaned_consumers: string[];
+  starving_species: string[];
+  keystone_species: string[];
+  isolated_species: string[];
+  avg_prey_per_consumer: number;
+  food_web_density: number;
+  bottleneck_warnings: string[];
+}
+
+// 食物网修复结果
+export interface FoodWebRepairResult {
+  repaired_count: number;
+  changes: FoodWebChange[];
+  analysis_after: {
+    health_score: number;
+    orphaned_consumers: number;
+    starving_species: number;
+  };
+}
+
+export interface FoodWebChange {
+  species_code: string;
+  species_name: string;
+  change_type: string;
+  details: string;
+  old_prey: string[];
+  new_prey: string[];
 }

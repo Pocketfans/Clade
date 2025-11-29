@@ -11,6 +11,11 @@ from .game_hints import GameHintsService, GameHint as GameHintModel, HintType, H
 from .report_builder import ReportBuilder
 from .report_builder_v2 import ReportBuilderV2
 
+# 新增服务
+from .ecosystem_metrics import EcosystemMetricsService, get_ecosystem_metrics_service
+from .population_snapshot import PopulationSnapshotService, create_population_snapshot_service
+from .turn_report import TurnReportService, create_turn_report_service
+
 __all__ = [
     # 原有服务
     "EcosystemHealthService",
@@ -49,4 +54,13 @@ __all__ = [
     # 报告生成
     "ReportBuilder",
     "ReportBuilderV2",
+    # 生态系统指标
+    "EcosystemMetricsService",
+    "get_ecosystem_metrics_service",
+    # 种群快照
+    "PopulationSnapshotService",
+    "create_population_snapshot_service",
+    # 回合报告
+    "TurnReportService",
+    "create_turn_report_service",
 ]

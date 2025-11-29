@@ -181,7 +181,7 @@ class MapStateManager:
         
         tiles = self.repo.list_tiles()
         if not tiles:
-            print(f"[地图管理器警告] 没有地块数据，无法记录栖息地")
+            logger.warning(f"[地图管理器] 没有地块数据，无法记录栖息地")
             return
         
         # 非强制模式：更新现有栖息地的种群数量
@@ -718,7 +718,7 @@ class MapStateManager:
         logger.debug(f"[地图管理器] 查询到 {len(tiles)} 个地块")
         
         if not tiles:
-            print(f"[地图管理器警告] 没有地块数据，尝试初始化...")
+            logger.warning(f"[地图管理器] 没有地块数据，尝试初始化...")
             self.ensure_initialized()
             tiles = self.repo.list_tiles(limit=tile_limit)
             logger.debug(f"[地图管理器] 初始化后查询到 {len(tiles)} 个地块")

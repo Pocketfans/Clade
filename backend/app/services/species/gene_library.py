@@ -1,11 +1,14 @@
 """属基因库管理服务"""
 from __future__ import annotations
 
+import logging
 import random
 
 from ...models.genus import Genus
 from ...models.species import Species
 from ...repositories.genus_repository import genus_repository
+
+logger = logging.getLogger(__name__)
 
 
 class GeneLibraryService:
@@ -39,7 +42,7 @@ class GeneLibraryService:
                         "discovered_turn": turn,
                         "activation_count": 0
                     }
-                    print(f"[基因库] {genus.name_common}属发现新特质: {trait_name} (by {discoverer_code})")
+                    logger.info(f"[基因库] {genus.name_common}属发现新特质: {trait_name} (by {discoverer_code})")
         
         if "new_organs" in discoveries:
             for organ_name, organ_data in discoveries["new_organs"].items():
@@ -53,7 +56,7 @@ class GeneLibraryService:
                         "discovered_turn": turn,
                         "activation_count": 0
                     }
-                    print(f"[基因库] {genus.name_common}属发现新器官: {organ_name} (by {discoverer_code})")
+                    logger.info(f"[基因库] {genus.name_common}属发现新器官: {organ_name} (by {discoverer_code})")
         
         genus.updated_turn = turn
         genus_repository.upsert(genus)
@@ -123,7 +126,7 @@ class GeneLibraryService:
                         inherited_count += 1
         
         if inherited_count > 0:
-            print(f"[基因遗传] {child.lineage_code} 继承了 {inherited_count} 个休眠基因")
+            logger.debug(f"[基因遗传] {child.lineage_code} 继承了 {inherited_count} 个休眠基因")
     
     def update_activation_count(self, genus_code: str, gene_name: str, gene_type: str):
         """更新基因激活计数"""

@@ -10,10 +10,10 @@ class SpeciesSnapshot(BaseModel):
     lineage_code: str
     latin_name: str
     common_name: str
-    population: int
+    population: int  # 本回合结束时的种群数量（经过死亡+繁殖后）
     population_share: float
-    deaths: int
-    death_rate: float
+    deaths: int  # 本回合死亡数量
+    death_rate: float  # 死亡率（deaths / initial_population）
     ecological_role: str
     status: str
     notes: list[str] = []  # AI生成的分析段落列表（每个元素应为完整段落，非结构化数据）
@@ -25,6 +25,12 @@ class SpeciesSnapshot(BaseModel):
     grazing_pressure: float | None = None  # 新增：承受的啃食压力
     predation_pressure: float | None = None  # 新增：承受的捕食压力
     ai_narrative: str | None = None  # 【新增】AI生成的物种叙事（描述物种当前状态和演化故事）
+    
+    # 【新增v3】种群变化完整追踪
+    initial_population: int = 0  # 回合开始时的种群数量
+    births: int = 0  # 本回合新出生的个体数量
+    survivors: int = 0  # 存活的个体数量（initial_population - deaths）
+    # 关系：population = survivors + births
     
     # 【新增v2】地块分布统计
     total_tiles: int = 0              # 分布的总地块数

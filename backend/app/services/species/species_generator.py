@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Sequence
 
 from ...models.species import Species
@@ -7,6 +8,8 @@ from ...ai.model_router import ModelRouter
 from .population_calculator import PopulationCalculator
 from .trait_config import TraitConfig
 from .predation import PredationService
+
+logger = logging.getLogger(__name__)
 
 
 class SpeciesGenerator:
@@ -33,8 +36,8 @@ class SpeciesGenerator:
         Returns:
             Species对象
         """
-        print(f"[物种生成器] 生成物种: {lineage_code}")
-        print(f"[物种生成器] 用户描述: {prompt}")
+        logger.info(f"[物种生成器] 生成物种: {lineage_code}")
+        logger.debug(f"[物种生成器] 用户描述: {prompt}")
         
         # 【优化】生成简洁的现有物种列表（不传全部物种给LLM）
         existing_species_context = ""
@@ -112,8 +115,8 @@ class SpeciesGenerator:
                     species_data = content
             else:
                 # AI返回格式不正确，使用默认值
-                print(f"[物种生成器] AI响应格式不正确，使用模板生成")
-                print(f"[物种生成器] 响应内容: {response}")
+                logger.warning(f"[物种生成器] AI响应格式不正确，使用模板生成")
+                logger.debug(f"[物种生成器] 响应内容: {response}")
                 species_data = self._generate_fallback(prompt, lineage_code)
             
             # 确保必需字段存在
@@ -168,11 +171,21 @@ class SpeciesGenerator:
                 prey_preferences=prey_preferences if isinstance(prey_preferences, dict) else {},
             )
             
-            print(f"[物种生成器] 物种生成成功: {species.latin_name} / {species.common_name}")
+            # 【新增】如果是消费者但没有猎物，自动分配
+            if trophic_level >= 2.0 and not species.prey_species and existing_species:
+                auto_prey, auto_prefs = self.predation_service.auto_assign_prey(
+                    species, existing_species
+                )
+                if auto_prey:
+                    species.prey_species = auto_prey
+                    species.prey_preferences = auto_prefs
+                    logger.debug(f"[物种生成器] 自动分配猎物: {auto_prey}")
+            
+            logger.info(f"[物种生成器] 物种生成成功: {species.latin_name} / {species.common_name}")
             return species
             
         except Exception as e:
-            print(f"[物种生成器] AI生成失败，使用模板: {e}")
+            logger.warning(f"[物种生成器] AI生成失败，使用模板: {e}")
             return self._create_fallback_species(prompt, lineage_code)
 
     def _ensure_required_fields(self, data: dict, lineage_code: str, prompt: str) -> dict:
@@ -399,10 +412,10 @@ class SpeciesGenerator:
         Returns:
             Species对象
         """
-        print(f"[物种生成器(增强版)] 生成物种: {lineage_code}")
-        print(f"[物种生成器(增强版)] 用户描述: {prompt}")
+        logger.info(f"[物种生成器(增强版)] 生成物种: {lineage_code}")
+        logger.debug(f"[物种生成器(增强版)] 用户描述: {prompt}")
         if parent_code:
-            print(f"[物种生成器(增强版)] 父代物种: {parent_code}")
+            logger.debug(f"[物种生成器(增强版)] 父代物种: {parent_code}")
         
         # 构建增强的prompt
         enhanced_prompt = prompt
@@ -498,6 +511,15 @@ class SpeciesGenerator:
             if len(prey_species) > 0:
                 pref = 1.0 / len(prey_species)
                 species.prey_preferences = {p: pref for p in prey_species}
+        elif species.trophic_level >= 2.0 and not species.prey_species and existing_species:
+            # 【新增】如果是消费者但没有猎物，自动分配
+            auto_prey, auto_prefs = self.predation_service.auto_assign_prey(
+                species, existing_species
+            )
+            if auto_prey:
+                species.prey_species = auto_prey
+                species.prey_preferences = auto_prefs
+                logger.debug(f"[物种生成器(增强版)] 自动分配猎物: {auto_prey}")
         
         if parent_code:
             species.parent_code = parent_code
@@ -523,6 +545,6 @@ class SpeciesGenerator:
                 form_mapping = {0: "aquatic", 1: "aquatic", 2: "aquatic", 3: "moss", 4: "herb", 5: "shrub", 6: "tree"}
                 species.growth_form = form_mapping.get(plant_stage, "aquatic")
         
-        print(f"[物种生成器(增强版)] 物种生成成功: {species.latin_name} / {species.common_name}")
+        logger.info(f"[物种生成器(增强版)] 物种生成成功: {species.latin_name} / {species.common_name}")
         return species
 

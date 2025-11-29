@@ -205,6 +205,10 @@ class MortalityResult:
     ai_headline: str = ""
     ai_mood: str = ""
     death_causes: str = ""  # 主要死因描述
+    
+    # 【新增v3】繁殖数据（在engine.py计算完繁殖后填充）
+    births: int = 0  # 本回合新出生的个体数量
+    final_population: int = 0  # 回合结束时的最终种群
 
 
 class MortalityEngine:

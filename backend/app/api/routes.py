@@ -2407,6 +2407,10 @@ def get_ecosystem_health() -> EcosystemHealthResponse:
 # 初始化捕食网服务
 predation_service = PredationService()
 
+# 初始化食物网管理服务
+from ..services.species.food_web_manager import FoodWebManager
+food_web_manager = FoodWebManager(predation_service)
+
 
 @router.get("/ecosystem/food-web", tags=["ecosystem"])
 def get_food_web():
@@ -2445,6 +2449,78 @@ def get_food_web():
     """
     all_species = species_repository.list_species()
     return predation_service.build_food_web(all_species)
+
+
+@router.get("/ecosystem/food-web/analysis", tags=["ecosystem"])
+def get_food_web_analysis():
+    """获取食物网健康状况分析
+    
+    返回食物网的详细分析结果，包括：
+    - health_score: 食物网健康度 (0-1)
+    - total_species: 存活物种总数
+    - total_links: 捕食关系总数
+    - orphaned_consumers: 没有猎物的消费者列表
+    - starving_species: 猎物全部灭绝的物种列表
+    - keystone_species: 关键物种列表（被3+物种依赖）
+    - isolated_species: 既无猎物也无捕食者的物种
+    - avg_prey_per_consumer: 每个消费者的平均猎物种类数
+    - food_web_density: 食物网连接密度
+    - bottleneck_warnings: 瓶颈警告列表
+    """
+    all_species = species_repository.list_species()
+    analysis = food_web_manager.analyze_food_web(all_species)
+    
+    return {
+        "health_score": analysis.health_score,
+        "total_species": analysis.total_species,
+        "total_links": analysis.total_links,
+        "orphaned_consumers": analysis.orphaned_consumers,
+        "starving_species": analysis.starving_species,
+        "keystone_species": analysis.keystone_species,
+        "isolated_species": analysis.isolated_species,
+        "avg_prey_per_consumer": analysis.avg_prey_per_consumer,
+        "food_web_density": analysis.food_web_density,
+        "bottleneck_warnings": analysis.bottleneck_warnings,
+    }
+
+
+@router.post("/ecosystem/food-web/repair", tags=["ecosystem"])
+def repair_food_web():
+    """修复食物网缺陷
+    
+    自动为缺少猎物的消费者分配猎物，修复食物链断裂问题。
+    
+    返回：
+    - repaired_count: 修复的物种数量
+    - changes: 变更详情列表
+    """
+    all_species = species_repository.list_species()
+    
+    # 执行修复
+    analysis = food_web_manager.maintain_food_web(
+        all_species, species_repository, turn_index=0
+    )
+    changes = food_web_manager.get_changes()
+    
+    return {
+        "repaired_count": len(changes),
+        "changes": [
+            {
+                "species_code": c.species_code,
+                "species_name": c.species_name,
+                "change_type": c.change_type,
+                "details": c.details,
+                "old_prey": c.old_prey,
+                "new_prey": c.new_prey,
+            }
+            for c in changes
+        ],
+        "analysis_after": {
+            "health_score": analysis.health_score,
+            "orphaned_consumers": len(analysis.orphaned_consumers),
+            "starving_species": len(analysis.starving_species),
+        }
+    }
 
 
 @router.get("/ecosystem/food-web/{lineage_code}", tags=["ecosystem"])

@@ -13,6 +13,8 @@
   FoodWebData,
   SpeciesFoodChain,
   ExtinctionImpact,
+  FoodWebAnalysis,
+  FoodWebRepairResult,
 } from "./api.types";
 
 /**
@@ -691,5 +693,25 @@ export async function fetchSpeciesFoodChain(lineageCode: string): Promise<Specie
 export async function analyzeExtinctionImpact(lineageCode: string): Promise<ExtinctionImpact> {
   const res = await fetch(`/api/ecosystem/extinction-impact/${encodeURIComponent(lineageCode)}`);
   if (!res.ok) throw new Error("分析灭绝影响失败");
+  return res.json();
+}
+
+/**
+ * 获取食物网健康状况分析
+ * 返回食物网的详细分析结果
+ */
+export async function fetchFoodWebAnalysis(): Promise<FoodWebAnalysis> {
+  const res = await fetch("/api/ecosystem/food-web/analysis");
+  if (!res.ok) throw new Error("获取食物网分析失败");
+  return res.json();
+}
+
+/**
+ * 修复食物网缺陷
+ * 自动为缺少猎物的消费者分配猎物
+ */
+export async function repairFoodWeb(): Promise<FoodWebRepairResult> {
+  const res = await fetch("/api/ecosystem/food-web/repair", { method: "POST" });
+  if (!res.ok) throw new Error("修复食物网失败");
   return res.json();
 }

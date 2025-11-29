@@ -15,8 +15,11 @@
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -456,6 +459,6 @@ def compute_embedding_similarity_matrix(
         
         return similarity
     except Exception as e:
-        print(f"[生态位] Embedding计算失败: {e}, 返回单位矩阵")
+        logger.warning(f"[生态位] Embedding计算失败: {e}, 返回单位矩阵")
         return np.eye(n)
 

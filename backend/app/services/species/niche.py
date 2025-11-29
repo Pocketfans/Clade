@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -8,6 +9,8 @@ import numpy as np
 from ...models.species import Species
 from ...models.environment import HabitatPopulation
 from ..system.embedding import EmbeddingService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -73,11 +76,9 @@ class NicheAnalyzer:
                 niche_data[species.lineage_code] = NicheMetrics(overlap=overlap, saturation=saturation)
             return niche_data
         except Exception as e:
-            print(f"[生态位分析错误] {str(e)}")
-            import traceback
-            print(traceback.format_exc())
+            logger.error(f"[生态位分析错误] {str(e)}", exc_info=True)
             # 降级：返回默认的低重叠度、低饱和度
-            print(f"[生态位分析] 使用降级策略，为{len(species_list)}个物种生成默认指标")
+            logger.warning(f"[生态位分析] 使用降级策略，为{len(species_list)}个物种生成默认指标")
             return {
                 species.lineage_code: NicheMetrics(overlap=0.3, saturation=0.5)
                 for species in species_list
@@ -212,22 +213,20 @@ class NicheAnalyzer:
             
             # 验证向量并确保维度一致
             if not vectors or any(v is None for v in vectors):
-                print(f"[生态位向量] 部分向量无效，使用默认向量")
+                logger.warning(f"[生态位向量] 部分向量无效，使用默认向量")
                 return self._generate_fallback_vectors(species_list)
             
             # 检查维度一致性
             valid_dim = len(vectors[0]) if vectors else 0
             for i, vector in enumerate(vectors):
                 if len(vector) != valid_dim:
-                    print(f"[生态位向量] 维度不一致：期望{valid_dim}，得到{len(vector)}")
+                    logger.warning(f"[生态位向量] 维度不一致：期望{valid_dim}，得到{len(vector)}")
                     return self._generate_fallback_vectors(species_list)
             
             return np.array(vectors, dtype=float)
         
         except Exception as e:
-            print(f"[生态位向量错误] {str(e)}")
-            import traceback
-            print(traceback.format_exc())
+            logger.error(f"[生态位向量错误] {str(e)}", exc_info=True)
             return self._generate_fallback_vectors(species_list)
     
     def _generate_fallback_vectors(self, species_list: Sequence[Species]) -> np.ndarray:
@@ -235,7 +234,7 @@ class NicheAnalyzer:
         
         使用物种的形态和生态属性生成确定性的向量。
         """
-        print(f"[生态位向量] 使用基于属性的后备向量，物种数={len(species_list)}")
+        logger.debug(f"[生态位向量] 使用基于属性的后备向量，物种数={len(species_list)}")
         vectors = []
         for species in species_list:
             # 基于物种属性生成64维向量

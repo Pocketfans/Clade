@@ -1675,6 +1675,159 @@ a:hover::after, .link-button:hover::after {
   box-shadow: 0 0 8px rgba(249, 115, 22, 0.5);
 }
 
+/* 食物网健康度卡片 */
+.foodweb-health-card {
+  background: linear-gradient(
+    145deg,
+    rgba(20, 30, 45, 0.6) 0%,
+    rgba(15, 22, 35, 0.8) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 16px;
+  backdrop-filter: blur(8px);
+}
+
+.foodweb-health-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.foodweb-health-icon {
+  font-size: 1.1rem;
+}
+
+.foodweb-health-score {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.health-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 24px;
+  border-radius: 12px;
+  transition: all 0.3s ease;
+}
+
+.health-indicator.healthy {
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.health-indicator.warning {
+  background: rgba(234, 179, 8, 0.15);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.health-indicator.critical {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  animation: pulse-critical 2s infinite;
+}
+
+@keyframes pulse-critical {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+}
+
+.health-value {
+  font-size: 2rem;
+  font-weight: 700;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+
+.health-indicator.healthy .health-value { color: #22c55e; }
+.health-indicator.warning .health-value { color: #eab308; }
+.health-indicator.critical .health-value { color: #ef4444; }
+
+.health-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.8;
+  margin-top: 4px;
+}
+
+.foodweb-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.foodweb-issue-item {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+}
+
+.foodweb-issue-item.warning {
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.2);
+  color: #fbbf24;
+}
+
+.foodweb-issue-item.critical {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+.foodweb-repair-btn {
+  width: 100%;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  border: none;
+  border-radius: 10px;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.foodweb-repair-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+.foodweb-repair-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.foodweb-repair-btn.repairing {
+  background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+}
+
+.foodweb-health-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.health-stat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.health-stat-row span:last-child {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  color: rgba(255, 255, 255, 0.9);
+}
+
 /* 筛选卡片 */
 .foodweb-filter-header {
   display: flex;

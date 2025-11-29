@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useEffect, useState, useCallback } from "react";
 import ForceGraph2D, { ForceGraphMethods } from "react-force-graph-2d";
-import { SpeciesSnapshot, FoodWebData } from "../services/api.types";
-import { fetchFoodWeb } from "../services/api";
+import { SpeciesSnapshot, FoodWebData, FoodWebAnalysis } from "../services/api.types";
+import { fetchFoodWeb, fetchFoodWebAnalysis, repairFoodWeb } from "../services/api";
 import { createPortal } from "react-dom";
 
 interface Props {
@@ -56,6 +56,8 @@ export function FoodWebGraph({ speciesList, onClose, onSelectSpecies }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
   const [mounted, setMounted] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const [analysis, setAnalysis] = useState<FoodWebAnalysis | null>(null);
+  const [repairing, setRepairing] = useState(false);
 
   // Mount animation
   useEffect(() => {
@@ -80,7 +82,7 @@ export function FoodWebGraph({ speciesList, onClose, onSelectSpecies }: Props) {
     return () => window.removeEventListener("resize", updateDimensions);
   }, []);
 
-  // 加载真实的食物网数据
+  // 加载真实的食物网数据和分析
   useEffect(() => {
     let cancelled = false;
 
@@ -88,9 +90,14 @@ export function FoodWebGraph({ speciesList, onClose, onSelectSpecies }: Props) {
       try {
         setLoading(true);
         setError(null);
-        const data = await fetchFoodWeb();
+        // 并行加载食物网数据和分析
+        const [data, analysisData] = await Promise.all([
+          fetchFoodWeb(),
+          fetchFoodWebAnalysis(),
+        ]);
         if (!cancelled) {
           setFoodWebData(data);
+          setAnalysis(analysisData);
         }
       } catch (err: any) {
         if (!cancelled) {
@@ -108,6 +115,27 @@ export function FoodWebGraph({ speciesList, onClose, onSelectSpecies }: Props) {
       cancelled = true;
     };
   }, [speciesList]);
+
+  // 处理修复食物网
+  const handleRepairFoodWeb = useCallback(async () => {
+    setRepairing(true);
+    try {
+      const result = await repairFoodWeb();
+      if (result.repaired_count > 0) {
+        // 重新加载数据
+        const [data, analysisData] = await Promise.all([
+          fetchFoodWeb(),
+          fetchFoodWebAnalysis(),
+        ]);
+        setFoodWebData(data);
+        setAnalysis(analysisData);
+      }
+    } catch (err: any) {
+      console.error("修复食物网失败:", err);
+    } finally {
+      setRepairing(false);
+    }
+  }, []);
 
   // 【性能优化】限制最大节点数，超过时显示警告
   const MAX_NODES = 150;
@@ -401,6 +429,69 @@ export function FoodWebGraph({ speciesList, onClose, onSelectSpecies }: Props) {
               </div>
             </div>
           </div>
+
+          {/* 食物网健康度卡片 */}
+          {analysis && (
+            <div className="foodweb-health-card">
+              <div className="foodweb-health-header">
+                <span className="foodweb-health-icon">🏥</span>
+                <span>食物网健康</span>
+              </div>
+              <div className="foodweb-health-score">
+                <div 
+                  className={`health-indicator ${
+                    analysis.health_score >= 0.7 ? "healthy" : 
+                    analysis.health_score >= 0.4 ? "warning" : "critical"
+                  }`}
+                >
+                  <span className="health-value">{Math.round(analysis.health_score * 100)}%</span>
+                  <span className="health-label">
+                    {analysis.health_score >= 0.7 ? "健康" : 
+                     analysis.health_score >= 0.4 ? "警告" : "危险"}
+                  </span>
+                </div>
+              </div>
+              
+              {/* 问题警告 */}
+              {(analysis.orphaned_consumers.length > 0 || analysis.starving_species.length > 0) && (
+                <div className="foodweb-issues">
+                  {analysis.orphaned_consumers.length > 0 && (
+                    <div className="foodweb-issue-item warning">
+                      <span>⚠️ {analysis.orphaned_consumers.length} 个消费者无猎物</span>
+                    </div>
+                  )}
+                  {analysis.starving_species.length > 0 && (
+                    <div className="foodweb-issue-item critical">
+                      <span>🚨 {analysis.starving_species.length} 个物种猎物灭绝</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* 修复按钮 */}
+              {(analysis.orphaned_consumers.length > 0 || analysis.starving_species.length > 0) && (
+                <button 
+                  className={`foodweb-repair-btn ${repairing ? "repairing" : ""}`}
+                  onClick={handleRepairFoodWeb}
+                  disabled={repairing}
+                >
+                  {repairing ? "🔄 修复中..." : "🔧 自动修复食物链"}
+                </button>
+              )}
+              
+              {/* 更多统计 */}
+              <div className="foodweb-health-stats">
+                <div className="health-stat-row">
+                  <span>平均猎物种类</span>
+                  <span>{analysis.avg_prey_per_consumer.toFixed(1)}</span>
+                </div>
+                <div className="health-stat-row">
+                  <span>孤立物种</span>
+                  <span>{analysis.isolated_species.length}</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* 筛选器 */}
           <div className="foodweb-filter-card">

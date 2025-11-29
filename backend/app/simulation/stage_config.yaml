@@ -1,0 +1,428 @@
+# Simulation Pipeline Stage Configuration
+# 模拟流水线阶段配置
+
+# 当前使用的模式
+mode: standard
+
+# 模式定义
+modes:
+  # 极简模式 - 仅核心功能
+  minimal:
+    description: "极简模式：仅保留压力、简单死亡率、繁殖"
+    stages:
+      - name: init
+        enabled: true
+        order: 0
+      - name: parse_pressures
+        enabled: true
+        order: 10
+      - name: map_evolution
+        enabled: true
+        order: 20
+      - name: tectonic_movement
+        enabled: false
+        order: 25
+      - name: fetch_species
+        enabled: true
+        order: 30
+      - name: food_web
+        enabled: false
+        order: 35
+      - name: tiering_and_niche
+        enabled: true
+        order: 40
+      - name: preliminary_mortality
+        enabled: true
+        order: 50
+      - name: prey_distribution
+        enabled: false
+        order: 55
+      - name: migration
+        enabled: true
+        order: 60
+      - name: dispersal
+        enabled: false
+        order: 65
+      - name: hunger_migration
+        enabled: false
+        order: 66
+      - name: post_migration_niche
+        enabled: true
+        order: 70
+      - name: final_mortality
+        enabled: true
+        order: 80
+      - name: ai_status_eval
+        enabled: false
+        order: 85
+      - name: speciation_data_transfer
+        enabled: false
+        order: 86
+      - name: population_update
+        enabled: true
+        order: 90
+      - name: gene_activation
+        enabled: false
+        order: 95
+      - name: gene_flow
+        enabled: false
+        order: 100
+      - name: genetic_drift
+        enabled: false
+        order: 105
+      - name: auto_hybridization
+        enabled: false
+        order: 110
+      - name: subspecies_promotion
+        enabled: false
+        order: 115
+      - name: ai_parallel_tasks
+        enabled: false
+        order: 120
+      - name: background_management
+        enabled: false
+        order: 130
+      - name: build_report
+        enabled: true
+        order: 140
+      - name: save_map_snapshot
+        enabled: true
+        order: 150
+      - name: vegetation_cover
+        enabled: false
+        order: 155
+      - name: save_population_snapshot
+        enabled: true
+        order: 160
+      - name: embedding_hooks
+        enabled: false
+        order: 165
+      - name: save_history
+        enabled: true
+        order: 170
+      - name: export_data
+        enabled: true
+        order: 175
+      - name: finalize
+        enabled: true
+        order: 180
+
+  # 标准模式 - 推荐设置
+  standard:
+    description: "标准模式：保留主流程，禁用最重的AI阶段"
+    stages:
+      - name: init
+        enabled: true
+        order: 0
+      - name: parse_pressures
+        enabled: true
+        order: 10
+      - name: map_evolution
+        enabled: true
+        order: 20
+      - name: tectonic_movement
+        enabled: true
+        order: 25
+      - name: fetch_species
+        enabled: true
+        order: 30
+      - name: food_web
+        enabled: true
+        order: 35
+      - name: tiering_and_niche
+        enabled: true
+        order: 40
+      - name: preliminary_mortality
+        enabled: true
+        order: 50
+      - name: prey_distribution
+        enabled: true
+        order: 55
+      - name: migration
+        enabled: true
+        order: 60
+      - name: dispersal
+        enabled: true
+        order: 65
+      - name: hunger_migration
+        enabled: true
+        order: 66
+      - name: post_migration_niche
+        enabled: true
+        order: 70
+      - name: final_mortality
+        enabled: true
+        order: 80
+      - name: ai_status_eval
+        enabled: false  # 禁用AI状态评估
+        order: 85
+      - name: speciation_data_transfer
+        enabled: true
+        order: 86
+      - name: population_update
+        enabled: true
+        order: 90
+      - name: gene_activation
+        enabled: true
+        order: 95
+      - name: gene_flow
+        enabled: true
+        order: 100
+      - name: genetic_drift
+        enabled: true
+        order: 105
+      - name: auto_hybridization
+        enabled: false  # 禁用自动杂交
+        order: 110
+      - name: subspecies_promotion
+        enabled: true
+        order: 115
+      - name: ai_parallel_tasks
+        enabled: false  # 禁用AI并行任务
+        order: 120
+      - name: adaptation
+        enabled: false  # 禁用适应性演化（依赖AI）
+        order: 121
+      - name: speciation
+        enabled: false  # 禁用物种分化（依赖AI）
+        order: 122
+      - name: background_management
+        enabled: true
+        order: 130
+      - name: build_report
+        enabled: true
+        order: 140
+      - name: save_map_snapshot
+        enabled: true
+        order: 150
+      - name: vegetation_cover
+        enabled: true
+        order: 155
+      - name: save_population_snapshot
+        enabled: true
+        order: 160
+      - name: embedding_hooks
+        enabled: false  # 禁用Embedding
+        order: 165
+      - name: save_history
+        enabled: true
+        order: 170
+      - name: export_data
+        enabled: true
+        order: 175
+      - name: finalize
+        enabled: true
+        order: 180
+
+  # 全功能模式 - 所有功能启用
+  full:
+    description: "全功能模式：所有Stage启用"
+    stages:
+      - name: init
+        enabled: true
+        order: 0
+      - name: parse_pressures
+        enabled: true
+        order: 10
+      - name: map_evolution
+        enabled: true
+        order: 20
+      - name: tectonic_movement
+        enabled: true
+        order: 25
+      - name: fetch_species
+        enabled: true
+        order: 30
+      - name: food_web
+        enabled: true
+        order: 35
+      - name: tiering_and_niche
+        enabled: true
+        order: 40
+      - name: preliminary_mortality
+        enabled: true
+        order: 50
+      - name: prey_distribution
+        enabled: true
+        order: 55
+      - name: migration
+        enabled: true
+        order: 60
+      - name: dispersal
+        enabled: true
+        order: 65
+      - name: hunger_migration
+        enabled: true
+        order: 66
+      - name: post_migration_niche
+        enabled: true
+        order: 70
+      - name: final_mortality
+        enabled: true
+        order: 80
+      - name: ai_status_eval
+        enabled: true
+        order: 85
+      - name: speciation_data_transfer
+        enabled: true
+        order: 86
+      - name: population_update
+        enabled: true
+        order: 90
+      - name: gene_activation
+        enabled: true
+        order: 95
+      - name: gene_flow
+        enabled: true
+        order: 100
+      - name: genetic_drift
+        enabled: true
+        order: 105
+      - name: auto_hybridization
+        enabled: true
+        order: 110
+      - name: subspecies_promotion
+        enabled: true
+        order: 115
+      - name: ai_parallel_tasks
+        enabled: true
+        order: 120
+      - name: background_management
+        enabled: true
+        order: 130
+      - name: build_report
+        enabled: true
+        order: 140
+      - name: save_map_snapshot
+        enabled: true
+        order: 150
+      - name: vegetation_cover
+        enabled: true
+        order: 155
+      - name: save_population_snapshot
+        enabled: true
+        order: 160
+      - name: embedding_hooks
+        enabled: true
+        order: 165
+      - name: save_history
+        enabled: true
+        order: 170
+      - name: export_data
+        enabled: true
+        order: 175
+      - name: finalize
+        enabled: true
+        order: 180
+
+  # 调试模式 - 包含性能分析
+  debug:
+    description: "调试模式：专用调试Stage，打印更多日志"
+    stages:
+      - name: init
+        enabled: true
+        order: 0
+      - name: stage_profiling_start
+        enabled: true
+        order: 1
+        params:
+          log_level: DEBUG
+      - name: parse_pressures
+        enabled: true
+        order: 10
+      - name: map_evolution
+        enabled: true
+        order: 20
+      - name: tectonic_movement
+        enabled: true
+        order: 25
+      - name: fetch_species
+        enabled: true
+        order: 30
+      - name: food_web
+        enabled: true
+        order: 35
+      - name: tiering_and_niche
+        enabled: true
+        order: 40
+      - name: preliminary_mortality
+        enabled: true
+        order: 50
+      - name: prey_distribution
+        enabled: true
+        order: 55
+      - name: migration
+        enabled: true
+        order: 60
+      - name: dispersal
+        enabled: true
+        order: 65
+      - name: hunger_migration
+        enabled: true
+        order: 66
+      - name: post_migration_niche
+        enabled: true
+        order: 70
+      - name: final_mortality
+        enabled: true
+        order: 80
+      - name: ai_status_eval
+        enabled: true
+        order: 85
+      - name: speciation_data_transfer
+        enabled: true
+        order: 86
+      - name: population_update
+        enabled: true
+        order: 90
+      - name: gene_activation
+        enabled: true
+        order: 95
+      - name: gene_flow
+        enabled: true
+        order: 100
+      - name: genetic_drift
+        enabled: true
+        order: 105
+      - name: auto_hybridization
+        enabled: true
+        order: 110
+      - name: subspecies_promotion
+        enabled: true
+        order: 115
+      - name: ai_parallel_tasks
+        enabled: true
+        order: 120
+      - name: background_management
+        enabled: true
+        order: 130
+      - name: build_report
+        enabled: true
+        order: 140
+      - name: save_map_snapshot
+        enabled: true
+        order: 150
+      - name: vegetation_cover
+        enabled: true
+        order: 155
+      - name: save_population_snapshot
+        enabled: true
+        order: 160
+      - name: embedding_hooks
+        enabled: true
+        order: 165
+      - name: save_history
+        enabled: true
+        order: 170
+      - name: export_data
+        enabled: true
+        order: 175
+      - name: stage_profiling_end
+        enabled: true
+        order: 179
+        params:
+          output_format: table
+      - name: finalize
+        enabled: true
+        order: 180
+

@@ -5,12 +5,15 @@
 """
 from __future__ import annotations
 
+import logging
 import math
 from typing import Sequence, TYPE_CHECKING
 
 import numpy as np
 
 from ...models.species import Species
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..system.embedding import EmbeddingService
@@ -418,7 +421,7 @@ class GeneticDistanceCalculator:
             return distance
             
         except Exception as e:
-            print(f"[遗传距离] Embedding计算失败: {e}")
+            logger.warning(f"[遗传距离] Embedding计算失败: {e}")
             return np.zeros((n, n))
     
     def _find_common_ancestor_turn_by_paths(

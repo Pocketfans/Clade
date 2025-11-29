@@ -95,6 +95,10 @@ class AggregatedMortalityResult:
     worst_tile_rate: float = 1.0      # 最高死亡率（最差地块）
     has_refuge: bool = True           # 是否有避难所（至少1个地块死亡率<20%）
     
+    # 【新增v3】繁殖数据（在engine.py计算完繁殖后填充）
+    births: int = 0  # 本回合新出生的个体数量
+    final_population: int = 0  # 回合结束时的最终种群
+    
     def get_distribution_status(self) -> str:
         """返回分布状态描述"""
         if self.total_tiles == 0:
