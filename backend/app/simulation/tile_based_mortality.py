@@ -481,6 +481,37 @@ class TileBasedMortalityEngine:
         
         return result
     
+    def get_all_species_tile_survivors(self) -> dict[str, dict[int, int]]:
+        """【新增】获取所有物种在各地块的存活数（死亡率计算后）
+        
+        这是关键方法：返回每个地块的实际存活数量，用于更新栖息地种群。
+        计算公式：survivors = population * (1 - mortality_rate)
+        
+        Returns:
+            {lineage_code: {tile_id: survivors}} 嵌套字典
+        """
+        if self._population_matrix is None or self._last_mortality_matrix is None:
+            return {}
+        
+        result: dict[str, dict[int, int]] = {}
+        
+        for lineage_code, species_idx in self._last_species_lineage_to_idx.items():
+            tile_survivors: dict[int, int] = {}
+            
+            for tile_id, tile_idx in self._tile_id_to_idx.items():
+                pop = self._population_matrix[tile_idx, species_idx]
+                if pop > 0:
+                    mortality_rate = self._last_mortality_matrix[tile_idx, species_idx]
+                    # 计算存活数（取整）
+                    survivors = int(pop * (1.0 - mortality_rate))
+                    if survivors > 0:
+                        tile_survivors[tile_id] = survivors
+            
+            if tile_survivors:
+                result[lineage_code] = tile_survivors
+        
+        return result
+    
     def get_speciation_candidates(
         self, 
         min_tile_population: int = 100,

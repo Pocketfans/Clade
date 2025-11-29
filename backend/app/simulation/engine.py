@@ -1584,8 +1584,27 @@ class SimulationEngine:
                 logger.info(f"保存地图栖息地快照...")
                 self._emit_event("stage", "💾 保存地图快照", "系统")
                 all_species_final = species_repository.list_species()
+                
+                # 【核心改进】获取地块级存活数据，避免按宜居性重新分配
+                # 这样可以保留各地块间死亡率差异的效果
+                tile_survivors: dict[str, dict[int, int]] = {}
+                if self._use_tile_based_mortality and all_tiles:
+                    tile_survivors = self.tile_mortality.get_all_species_tile_survivors()
+                    logger.debug(f"[地块存活] 获取 {len(tile_survivors)} 个物种的地块级存活数据")
+                
+                # 计算繁殖增量（新出生 - 用于按宜居性分配到各地块）
+                reproduction_gains: dict[str, int] = {}
+                for result in combined_results:
+                    if result.species.lineage_code in new_populations:
+                        # new_births = new_population - (initial - deaths)
+                        # 但更简单的方式是：只有繁殖系统添加的才是 new_births
+                        pass  # 暂时不实现，让存活者直接分布在原地
+                
                 self.map_manager.snapshot_habitats(
-                    all_species_final, turn_index=self.turn_counter
+                    all_species_final, 
+                    turn_index=self.turn_counter,
+                    tile_survivors=tile_survivors,
+                    reproduction_gains=reproduction_gains
                 )
                 
                 # 12.0 【新增】根据植物分布更新地块覆盖物

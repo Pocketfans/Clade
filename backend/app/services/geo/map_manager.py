@@ -150,7 +150,14 @@ class MapStateManager:
         self.repo.upsert_tiles(all_tiles)
         logger.debug(f"[地图管理器] 水体分类完成")
     
-    def snapshot_habitats(self, species_list: Sequence[Species], turn_index: int, force_recalculate: bool = False) -> None:
+    def snapshot_habitats(
+        self, 
+        species_list: Sequence[Species], 
+        turn_index: int, 
+        force_recalculate: bool = False,
+        tile_survivors: dict[str, dict[int, int]] | None = None,
+        reproduction_gains: dict[str, int] | None = None,
+    ) -> None:
         """记录或更新物种栖息地分布
         
         Args:
@@ -159,6 +166,10 @@ class MapStateManager:
             force_recalculate: 是否强制重新计算分布（默认False）
                 - True: 完全重新计算所有物种的栖息地分布（用于初始化）
                 - False: 更新现有栖息地的种群数量，为没有栖息地的物种初始化分布
+            tile_survivors: 【新增】各物种在各地块的存活数 {lineage_code: {tile_id: survivors}}
+                - 如果提供，将直接使用这些数据更新地块种群，而不是按宜居性重新分配
+            reproduction_gains: 【新增】各物种的繁殖增量 {lineage_code: new_births}
+                - 新出生的个体将按宜居性分配到各地块
         """
         logger.debug(f"[地图管理器] 栖息地快照，回合={turn_index}, 物种数={len(species_list)}, 强制重算={force_recalculate}")
         
@@ -169,71 +180,119 @@ class MapStateManager:
         
         # 非强制模式：更新现有栖息地的种群数量
         if not force_recalculate:
-            self._update_habitat_populations(species_list, turn_index)
+            self._update_habitat_populations(
+                species_list, turn_index,
+                tile_survivors=tile_survivors,
+                reproduction_gains=reproduction_gains
+            )
             return
         
         # 强制重算模式：用于初始化
         logger.debug(f"[地图管理器] 强制重算模式，为 {len(species_list)} 个物种初始化栖息地分布")
         habitats: list[HabitatPopulation] = []
         
-        
-        for species in species_list:
-            # 只处理存活的物种，跳过灭绝物种
-            if getattr(species, 'status', 'alive') != 'alive':
+        # 【修复v3】分两阶段处理：先生产者，再消费者
+        # 这样消费者计算宜居性时可以知道猎物在哪
+        producers = []
+        consumers = []
+        for sp in species_list:
+            if getattr(sp, 'status', 'alive') != 'alive':
                 continue
-            
-            # 【修复】即使 population 为 0 或未设置，也应该初始化栖息地分布
-            # 这样后续回合能正确识别该物种
+            trophic = getattr(sp, 'trophic_level', 1.0) or 1.0
+            if trophic < 2.0:
+                producers.append(sp)
+            else:
+                consumers.append(sp)
+        
+        # 记录生产者所在的地块（供消费者参考）
+        producer_tiles: set[int] = set()
+        
+        # 第一阶段：处理生产者
+        for species in producers:
             total = int(species.morphology_stats.get("population", 0) or 0)
             if total <= 0:
-                # 使用最小种群值以便创建栖息地记录
                 total = 1000
                 logger.warning(f"[地图管理器] {species.common_name} 种群为0，使用默认值1000初始化栖息地")
             
-            # 强制重算模式：为所有物种计算栖息地分布
-            logger.debug(f"[地图管理器] 初始化 {species.common_name} 的栖息地分布")
-            
-            # 根据栖息地类型筛选合适的地块
             habitat_type = getattr(species, 'habitat_type', 'terrestrial')
             suitable_tiles = self._filter_tiles_by_habitat_type(tiles, habitat_type)
             
             if not suitable_tiles:
-                print(f"[地图管理器警告] {species.common_name} ({habitat_type}) 没有合适的栖息地")
                 continue
             
-            # 计算适宜度
             suitability = [
-                (tile, self._suitability_score(species, tile)) for tile in suitable_tiles
+                (tile, self._suitability_score(species, tile, None)) for tile in suitable_tiles
             ]
             suitability = [item for item in suitability if item[1] > 0]
             if not suitability:
-                print(f"[地图管理器警告] {species.common_name} 适宜度计算后没有合适地块")
                 continue
             
             suitability.sort(key=lambda item: item[1], reverse=True)
-            # 根据栖息地类型决定分布范围
             top_count = self._get_distribution_count(habitat_type)
             top_tiles = suitability[:top_count]
             score_sum = sum(score for _, score in top_tiles) or 1.0
             
-            logger.debug(f"[地图管理器] {species.common_name} ({habitat_type}) 分布到 {len(top_tiles)} 个地块")
-            
-            # 【关键修复】按适宜度分配总生物量到多个地块
-            # 而不是每个地块都分配全部生物量
             for tile, score in top_tiles:
-                # ⚠️ 修复：跳过没有ID的地块或物种
                 if tile.id is None or species.id is None:
-                    print(f"[地图管理器警告] 地块或物种ID为None，跳过: tile.id={tile.id}, species.id={species.id}")
                     continue
                 
-                portion = score / score_sum  # 按适宜度比例分配
-                tile_biomass = int(total * portion)  # 该地块分配的生物量
-                if tile_biomass > 0:  # 只记录非零的分布
+                producer_tiles.add(tile.id)  # 记录生产者位置
+                
+                portion = score / score_sum
+                tile_biomass = int(total * portion)
+                if tile_biomass > 0:
                     habitats.append(
                         HabitatPopulation(
                             tile_id=tile.id,
                             species_id=species.id,
-                            population=tile_biomass,  # 这里是生物量kg，不是个体数
+                            population=tile_biomass,
+                            suitability=score,
+                            turn_index=turn_index,
+                        )
+                    )
+        
+        logger.debug(f"[地图管理器] 生产者分布完成，覆盖 {len(producer_tiles)} 个地块")
+        
+        # 第二阶段：处理消费者（可以参考生产者位置）
+        for species in consumers:
+            total = int(species.morphology_stats.get("population", 0) or 0)
+            if total <= 0:
+                total = 1000
+                logger.warning(f"[地图管理器] {species.common_name} 种群为0，使用默认值1000初始化栖息地")
+            
+            habitat_type = getattr(species, 'habitat_type', 'terrestrial')
+            suitable_tiles = self._filter_tiles_by_habitat_type(tiles, habitat_type)
+            
+            if not suitable_tiles:
+                continue
+            
+            # 消费者：传入猎物（生产者）所在地块
+            suitability = [
+                (tile, self._suitability_score(species, tile, producer_tiles)) for tile in suitable_tiles
+            ]
+            suitability = [item for item in suitability if item[1] > 0]
+            if not suitability:
+                continue
+            
+            suitability.sort(key=lambda item: item[1], reverse=True)
+            top_count = self._get_distribution_count(habitat_type)
+            top_tiles = suitability[:top_count]
+            score_sum = sum(score for _, score in top_tiles) or 1.0
+            
+            logger.debug(f"[地图管理器] {species.common_name} (消费者T{getattr(species, 'trophic_level', 2.0):.1f}) 分布到 {len(top_tiles)} 个地块")
+            
+            for tile, score in top_tiles:
+                if tile.id is None or species.id is None:
+                    continue
+                
+                portion = score / score_sum
+                tile_biomass = int(total * portion)
+                if tile_biomass > 0:
+                    habitats.append(
+                        HabitatPopulation(
+                            tile_id=tile.id,
+                            species_id=species.id,
+                            population=tile_biomass,
                             suitability=score,
                             turn_index=turn_index,
                         )
@@ -245,15 +304,23 @@ class MapStateManager:
         else:
             logger.debug(f"[地图管理器] 没有栖息地记录需要保存")
     
-    def _update_habitat_populations(self, species_list: Sequence[Species], turn_index: int) -> None:
+    def _update_habitat_populations(
+        self, 
+        species_list: Sequence[Species], 
+        turn_index: int,
+        tile_survivors: dict[str, dict[int, int]] | None = None,
+        reproduction_gains: dict[str, int] | None = None,
+    ) -> None:
         """更新现有栖息地的种群数量（非强制模式）
         
-        不重新计算分布，只更新种群数量到现有栖息地。
-        对于没有栖息地记录的物种，为其初始化栖息地分布。
+        【核心改进】如果提供了 tile_survivors，直接使用地块级别的存活数据，
+        而不是按宜居性重新分配。这样可以保留地块间死亡率的差异效果。
         
         Args:
             species_list: 所有物种列表
             turn_index: 当前回合数
+            tile_survivors: 各物种在各地块的存活数 {lineage_code: {tile_id: survivors}}
+            reproduction_gains: 各物种的繁殖增量 {lineage_code: new_births}
         """
         # 获取当前所有栖息地记录
         all_habitats = self.repo.latest_habitats()
@@ -268,6 +335,9 @@ class MapStateManager:
         updated_habitats: list[HabitatPopulation] = []
         species_needing_init: list[Species] = []
         
+        tile_survivors = tile_survivors or {}
+        reproduction_gains = reproduction_gains or {}
+        
         for species in species_list:
             # 跳过灭绝物种
             if getattr(species, 'status', 'alive') != 'alive':
@@ -276,6 +346,7 @@ class MapStateManager:
             if species.id is None:
                 continue
             
+            lineage_code = species.lineage_code
             total_pop = int(species.morphology_stats.get("population", 0) or 0)
             
             # 检查该物种是否有栖息地记录
@@ -291,47 +362,88 @@ class MapStateManager:
                 # 种群为0，跳过更新
                 continue
             
-            # 计算总适宜度用于按比例分配
-            total_suitability = sum(h.suitability for h in existing_habitats)
-            if total_suitability <= 0:
-                total_suitability = len(existing_habitats)  # 平均分配
+            # 【核心改进】检查是否有地块级存活数据
+            species_tile_survivors = tile_survivors.get(lineage_code, {})
+            new_births = reproduction_gains.get(lineage_code, 0)
             
-            # 【修复】使用精确分配算法，避免四舍五入损失
-            # 先计算每个地块的理想（浮点）种群，然后用largest remainder method分配
-            ideal_pops = []
-            for habitat in existing_habitats:
-                if total_suitability > 0:
-                    portion = habitat.suitability / total_suitability
-                else:
-                    portion = 1.0 / len(existing_habitats)
-                ideal_pops.append((habitat, total_pop * portion))
-            
-            # 先分配整数部分
-            int_pops = [(h, int(p)) for h, p in ideal_pops]
-            allocated = sum(ip for _, ip in int_pops)
-            remainder = total_pop - allocated  # 需要额外分配的数量
-            
-            # 按小数部分降序排列，分配剩余数量
-            remainders = [(h, p - int(p), idx) for idx, (h, p) in enumerate(ideal_pops)]
-            remainders.sort(key=lambda x: x[1], reverse=True)
-            
-            # 给小数部分最大的地块各+1，直到分配完
-            final_pops = [ip for _, ip in int_pops]
-            for i in range(min(remainder, len(remainders))):
-                idx = remainders[i][2]
-                final_pops[idx] += 1
-            
-            # 更新每个栖息地的种群数量
-            for i, habitat in enumerate(existing_habitats):
-                updated_habitats.append(
-                    HabitatPopulation(
-                        tile_id=habitat.tile_id,
-                        species_id=species.id,
-                        population=final_pops[i],
-                        suitability=habitat.suitability,
-                        turn_index=turn_index,
-                    )
-                )
+            if species_tile_survivors:
+                # ===== 新方式：使用地块级存活数据 =====
+                # 这样可以保留不同地块间的死亡率差异
+                
+                # 创建tile_id到habitat的映射
+                habitat_by_tile: dict[int, HabitatPopulation] = {
+                    h.tile_id: h for h in existing_habitats
+                }
+                
+                # 计算总宜居性（用于分配新出生个体）
+                total_suitability = sum(h.suitability for h in existing_habitats) or 1.0
+                
+                # 对于每个有存活数据的地块，更新种群
+                for tile_id, survivors in species_tile_survivors.items():
+                    habitat = habitat_by_tile.get(tile_id)
+                    if habitat:
+                        # 计算该地块分配到的新出生个体
+                        if new_births > 0:
+                            birth_share = int(new_births * habitat.suitability / total_suitability)
+                        else:
+                            birth_share = 0
+                        
+                        new_pop = survivors + birth_share
+                        if new_pop > 0:
+                            updated_habitats.append(
+                                HabitatPopulation(
+                                    tile_id=tile_id,
+                                    species_id=species.id,
+                                    population=new_pop,
+                                    suitability=habitat.suitability,
+                                    turn_index=turn_index,
+                                )
+                            )
+                
+                # 对于没有存活数据但有栖息地记录的地块，可能是迁出或死亡
+                # 这些地块保持0种群（不添加到updated_habitats）
+                
+                logger.debug(f"[地图管理器] {species.common_name} 使用地块级存活数据更新 {len(species_tile_survivors)} 个地块")
+                
+            else:
+                # ===== 兼容方式：按宜居性分配（fallback） =====
+                # 当没有地块级数据时使用，例如旧版本或手动创建的物种
+                
+                total_suitability = sum(h.suitability for h in existing_habitats)
+                if total_suitability <= 0:
+                    total_suitability = len(existing_habitats)
+                
+                ideal_pops = []
+                for habitat in existing_habitats:
+                    if total_suitability > 0:
+                        portion = habitat.suitability / total_suitability
+                    else:
+                        portion = 1.0 / len(existing_habitats)
+                    ideal_pops.append((habitat, total_pop * portion))
+                
+                int_pops = [(h, int(p)) for h, p in ideal_pops]
+                allocated = sum(ip for _, ip in int_pops)
+                remainder = total_pop - allocated
+                
+                remainders = [(h, p - int(p), idx) for idx, (h, p) in enumerate(ideal_pops)]
+                remainders.sort(key=lambda x: x[1], reverse=True)
+                
+                final_pops = [ip for _, ip in int_pops]
+                for i in range(min(remainder, len(remainders))):
+                    idx = remainders[i][2]
+                    final_pops[idx] += 1
+                
+                for i, habitat in enumerate(existing_habitats):
+                    if final_pops[i] > 0:
+                        updated_habitats.append(
+                            HabitatPopulation(
+                                tile_id=habitat.tile_id,
+                                species_id=species.id,
+                                population=final_pops[i],
+                                suitability=habitat.suitability,
+                                turn_index=turn_index,
+                            )
+                        )
         
         # 保存更新的栖息地
         if updated_habitats:
@@ -348,6 +460,21 @@ class MapStateManager:
         """为指定物种初始化栖息地分布"""
         habitats: list[HabitatPopulation] = []
         
+        # 【修复v3】获取现有生产者（猎物）所在的地块
+        # 供消费者计算宜居性时参考
+        existing_habitats = self.repo.latest_habitats()
+        all_species = species_repository.list_species()
+        producer_ids = set()
+        for sp in all_species:
+            trophic = getattr(sp, 'trophic_level', 1.0) or 1.0
+            if trophic < 2.0 and sp.id is not None:
+                producer_ids.add(sp.id)
+        
+        prey_tiles: set[int] = set()
+        for h in existing_habitats:
+            if h.species_id in producer_ids:
+                prey_tiles.add(h.tile_id)
+        
         for species in species_list:
             if species.id is None:
                 continue
@@ -362,8 +489,12 @@ class MapStateManager:
             if not suitable_tiles:
                 continue
             
+            # 判断是否为消费者
+            trophic_level = getattr(species, 'trophic_level', 1.0) or 1.0
+            use_prey_tiles = prey_tiles if trophic_level >= 2.0 else None
+            
             suitability = [
-                (tile, self._suitability_score(species, tile)) for tile in suitable_tiles
+                (tile, self._suitability_score(species, tile, use_prey_tiles)) for tile in suitable_tiles
             ]
             suitability = [item for item in suitability if item[1] > 0]
             if not suitability:
@@ -2634,13 +2765,20 @@ class MapStateManager:
     def _has_river(self, lat: float, lon: float) -> bool:
         return abs(math.sin(6 * math.pi * lon) * (0.5 - lat)) > 0.45
 
-    def _suitability_score(self, species: Species, tile: MapTile) -> float:
+    def _suitability_score(self, species: Species, tile: MapTile, prey_tiles: set[int] | None = None) -> float:
         """计算物种在某地块的适应性评分（0-1范围）
         
         修复v2：使用更宽松的匹配逻辑，避免适宜度过低
+        修复v3：消费者（T≥2）在有猎物的地块宜居性更高
+        
+        Args:
+            species: 物种
+            tile: 地块
+            prey_tiles: 该物种猎物所在的地块ID集合（仅用于消费者）
         """
         traits = species.abstract_traits or {}
         habitat_type = getattr(species, 'habitat_type', 'terrestrial')
+        trophic_level = getattr(species, 'trophic_level', 1.0) or 1.0
         
         # === 温度适应性 ===
         # 耐热性高 = 喜热，耐寒性高 = 耐冷
@@ -2673,12 +2811,27 @@ class MapStateManager:
         humidity_diff = abs(tile.humidity - ideal_humidity)
         humidity_score = max(0.3, 1.0 - humidity_diff * 1.5)  # 更宽容的湿度匹配
         
-        # === 资源适应性 ===
-        # 使用对数刻度，资源越多越好，但边际效益递减
-        if tile.resources > 0:
-            resource_score = min(1.0, 0.3 + 0.7 * math.log(tile.resources + 1) / math.log(1001))
+        # === 资源/食物适应性 ===
+        # 对于生产者（T<2）：使用地块资源
+        # 对于消费者（T≥2）：检查是否有猎物
+        if trophic_level < 2.0:
+            # 生产者：使用对数刻度，资源越多越好
+            if tile.resources > 0:
+                resource_score = min(1.0, 0.3 + 0.7 * math.log(tile.resources + 1) / math.log(1001))
+            else:
+                resource_score = 0.3
         else:
-            resource_score = 0.3  # 最低保底
+            # 消费者：检查是否有猎物
+            tile_id = tile.id if tile.id is not None else 0
+            if prey_tiles and tile_id in prey_tiles:
+                # 有猎物 -> 高食物评分
+                resource_score = 1.0
+            elif prey_tiles is not None:
+                # 明确知道没有猎物 -> 低食物评分
+                resource_score = 0.2  # 没有食物，很难生存
+            else:
+                # 没有猎物信息（初始化时）-> 中等评分
+                resource_score = 0.5
         
         # === 生物群系基础匹配 ===
         # 只要不是完全不匹配的环境就给较高分
@@ -2706,11 +2859,12 @@ class MapStateManager:
             special_bonus = 0.2
         
         # === 综合评分 ===
-        # 权重：温度25% + 湿度20% + 资源20% + 群系25% + 特殊10%
+        # 权重：温度20% + 湿度15% + 资源/食物30% + 群系25% + 特殊10%
+        # 【修复】提高食物/资源权重，这是生存最关键的因素
         base_score = (
-            temp_score * 0.25 +
-            humidity_score * 0.20 +
-            resource_score * 0.20 +
+            temp_score * 0.20 +
+            humidity_score * 0.15 +
+            resource_score * 0.30 +
             biome_score * 0.25 +
             special_bonus * 0.10
         )
