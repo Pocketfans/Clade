@@ -376,6 +376,31 @@ export async function generateSpecies(prompt: string, lineage_code: string = "A1
   return res.json();
 }
 
+// 增强版物种生成API - 支持完整的物种创建参数
+export interface GenerateSpeciesAdvancedParams {
+  prompt: string;
+  lineage_code?: string;
+  habitat_type?: string;
+  diet_type?: string;
+  prey_species?: string[];
+  parent_code?: string;
+  is_plant?: boolean;
+  plant_stage?: number;
+}
+
+export async function generateSpeciesAdvanced(params: GenerateSpeciesAdvancedParams): Promise<any> {
+  const res = await fetch("/api/species/generate/advanced", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || "generate species failed");
+  }
+  return res.json();
+}
+
 export async function fetchSpeciesList(): Promise<SpeciesListItem[]> {
   const res = await fetch("/api/species/list");
   if (!res.ok) throw new Error("species list failed");

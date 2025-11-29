@@ -608,15 +608,17 @@ function AchievementCard({ achievement }: { achievement: Achievement }) {
         {/* 进度条 */}
         {!achievement.unlocked && achievement.target_value > 1 && (
           <div className="achievement-progress">
-            <div className="progress-bar">
-              <div 
-                className="progress-fill"
-                style={{ width: `${progress}%` }}
-              />
+            <div className="progress-row">
+              <div className="progress-bar">
+                <div 
+                  className="progress-fill"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+              <span className="progress-text">
+                {achievement.current_value.toLocaleString()} / {achievement.target_value.toLocaleString()}
+              </span>
             </div>
-            <span className="progress-text">
-              {achievement.current_value} / {achievement.target_value}
-            </span>
           </div>
         )}
         
@@ -767,19 +769,23 @@ function AchievementCard({ achievement }: { achievement: Achievement }) {
         }
 
         .achievement-progress {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
           margin-top: auto;
           padding-top: 8px;
         }
 
+        .progress-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
         .progress-bar {
-          width: 100%;
+          flex: 1;
           height: 6px;
           background: rgba(255, 255, 255, 0.08);
           border-radius: 3px;
           overflow: hidden;
+          min-width: 60px;
         }
 
         .progress-fill {
@@ -790,11 +796,11 @@ function AchievementCard({ achievement }: { achievement: Achievement }) {
         }
 
         .progress-text {
-          font-size: 0.75rem;
+          font-size: 0.72rem;
           font-family: var(--font-mono, monospace);
           color: rgba(255, 255, 255, 0.5);
           white-space: nowrap;
-          text-align: right;
+          flex-shrink: 0;
         }
 
         .unlock-info {

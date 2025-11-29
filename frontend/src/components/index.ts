@@ -25,6 +25,8 @@ export { AnalysisPanel, AnalysisSection, StatCard, ActionButton, EmptyState } fr
 
 // 分析工具面板
 export { CreateSpeciesModal } from "./CreateSpeciesModal";
+export { EnhancedCreateSpeciesModal } from "./EnhancedCreateSpeciesModal";
+export { SpeciesInputCard } from "./SpeciesInputCard";
 export { HybridizationPanel } from "./HybridizationPanel";
 export { AchievementsPanel } from "./AchievementsPanel";
 export { GameHintsPanel, AchievementNotification } from "./GameHintsPanel";

@@ -32,6 +32,7 @@ from ..schemas.requests import (
     SaveGameRequest,
     LoadGameRequest,
     GenerateSpeciesRequest,
+    GenerateSpeciesAdvancedRequest,
     NicheCompareRequest,
     ProtectSpeciesRequest,
     SuppressSpeciesRequest,
@@ -141,6 +142,17 @@ model_router = ModelRouter(
             extra_body={"response_format": {"type": "json_object"}}  # 强制JSON
         ),
         "speciation_batch": ModelConfig(
+            provider="openai", 
+            model=settings.speciation_model,
+            extra_body={"response_format": {"type": "json_object"}}  # 强制JSON
+        ),
+        # 【新增】植物分化
+        "plant_speciation": ModelConfig(
+            provider="openai", 
+            model=settings.speciation_model,
+            extra_body={"response_format": {"type": "json_object"}}  # 强制JSON
+        ),
+        "plant_speciation_batch": ModelConfig(
             provider="openai", 
             model=settings.speciation_model,
             extra_body={"response_format": {"type": "json_object"}}  # 强制JSON
@@ -1524,6 +1536,88 @@ def generate_species(request: GenerateSpeciesRequest) -> dict:
         # 生成失败，退还能量
         energy_service.add_energy(cost, "创造物种失败退还")
         logger.error(f"[物种生成API错误] {str(e)}")
+        raise HTTPException(status_code=500, detail=f"生成物种失败: {str(e)}")
+
+
+@router.post("/species/generate/advanced")
+def generate_species_advanced(request: GenerateSpeciesAdvancedRequest) -> dict:
+    """增强版物种生成 - 支持完整参数
+    
+    支持预设栖息地、食性、猎物、父代物种（神启分化）等参数。
+    消耗能量点。
+    """
+    current_turn = simulation_engine.turn_counter
+    
+    # 自动生成lineage_code如果未提供
+    lineage_code = request.lineage_code
+    if not lineage_code:
+        existing_species = species_repository.get_all()
+        used_codes = {s.lineage_code for s in existing_species}
+        prefix = "S"
+        index = 1
+        while f"{prefix}{index}" in used_codes:
+            index += 1
+        lineage_code = f"{prefix}{index}"
+    
+    # 【能量系统】检查能量
+    can_afford, cost = energy_service.can_afford("create_species")
+    if not can_afford:
+        raise HTTPException(
+            status_code=400,
+            detail=f"能量不足！创造物种需要 {cost} 能量，当前只有 {energy_service.get_state().current}"
+        )
+    
+    try:
+        # 先消耗能量
+        success, msg = energy_service.spend(
+            "create_species",
+            current_turn,
+            details=f"创造物种(增强版): {request.prompt[:30]}..."
+        )
+        if not success:
+            raise HTTPException(status_code=400, detail=msg)
+        
+        # 获取现有物种列表
+        existing_species = species_repository.get_all()
+        
+        # 使用增强版生成方法
+        species = species_generator.generate_advanced(
+            prompt=request.prompt,
+            lineage_code=lineage_code,
+            existing_species=existing_species,
+            habitat_type=request.habitat_type,
+            diet_type=request.diet_type,
+            prey_species=request.prey_species,
+            parent_code=request.parent_code,
+            is_plant=request.is_plant,
+            plant_stage=request.plant_stage,
+        )
+        species_repository.upsert(species)
+        
+        # 记录成就
+        achievement_service.record_species_creation(current_turn)
+        
+        return {
+            "success": True,
+            "species": {
+                "lineage_code": species.lineage_code,
+                "latin_name": species.latin_name,
+                "common_name": species.common_name,
+                "description": species.description,
+                "habitat_type": species.habitat_type,
+                "diet_type": species.diet_type,
+                "trophic_level": species.trophic_level,
+                "parent_code": species.parent_code,
+            },
+            "energy_spent": cost,
+            "energy_remaining": energy_service.get_state().current,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        # 生成失败，退还能量
+        energy_service.add_energy(cost, "创造物种失败退还")
+        logger.error(f"[物种生成API(增强版)错误] {str(e)}")
         raise HTTPException(status_code=500, detail=f"生成物种失败: {str(e)}")
 
 

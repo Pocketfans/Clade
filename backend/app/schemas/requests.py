@@ -100,6 +100,18 @@ class GenerateSpeciesRequest(BaseModel):
     lineage_code: str = Field(default="A1")
 
 
+class GenerateSpeciesAdvancedRequest(BaseModel):
+    """增强版物种生成请求 - 支持完整的物种创建参数"""
+    prompt: str = Field(min_length=1, max_length=800, description="物种描述")
+    lineage_code: str | None = Field(default=None, description="物种编号（留空自动生成）")
+    habitat_type: str | None = Field(default=None, description="栖息地类型")
+    diet_type: str | None = Field(default=None, description="食性类型")
+    prey_species: list[str] | None = Field(default=None, description="猎物物种列表")
+    parent_code: str | None = Field(default=None, description="父代物种编号（神启分化模式）")
+    is_plant: bool = Field(default=False, description="是否为植物")
+    plant_stage: int | None = Field(default=None, ge=0, le=6, description="植物演化阶段")
+
+
 class NicheCompareRequest(BaseModel):
     species_a: str = Field(description="第一个物种的lineage_code")
     species_b: str = Field(description="第二个物种的lineage_code")

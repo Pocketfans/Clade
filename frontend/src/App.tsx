@@ -22,7 +22,7 @@ import { NicheCompareView } from "./components/NicheCompareView";
 import { PressureModal } from "./components/PressureModal";
 import { GameSettingsMenu } from "./components/GameSettingsMenu";
 import { SettingsDrawer } from "./components/SettingsDrawer";
-import { CreateSpeciesModal } from "./components/CreateSpeciesModal";
+import { EnhancedCreateSpeciesModal } from "./components/EnhancedCreateSpeciesModal";
 import { GlobalTrendsPanel } from "./components/GlobalTrendsPanel";
 import { SpeciesLedger } from "./components/SpeciesLedger";
 import { FoodWebGraph } from "./components/FoodWebGraph";
@@ -843,7 +843,7 @@ export default function App() {
           />
         )}
         {showCreateSpecies && (
-          <CreateSpeciesModal 
+          <EnhancedCreateSpeciesModal 
             onClose={() => setShowCreateSpecies(false)}
             onSuccess={() => {
               refreshMap();

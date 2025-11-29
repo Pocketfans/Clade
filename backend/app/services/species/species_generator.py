@@ -342,3 +342,158 @@ class SpeciesGenerator:
             created_turn=0,
         )
 
+    def generate_advanced(
+        self,
+        prompt: str,
+        lineage_code: str,
+        existing_species: Sequence[Species] | None = None,
+        habitat_type: str | None = None,
+        diet_type: str | None = None,
+        prey_species: list[str] | None = None,
+        parent_code: str | None = None,
+        is_plant: bool = False,
+        plant_stage: int | None = None,
+    ) -> Species:
+        """增强版物种生成 - 支持完整的物种创建参数
+        
+        Args:
+            prompt: 用户的自然语言描述
+            lineage_code: 谱系代码
+            existing_species: 现有物种列表
+            habitat_type: 预设的栖息地类型
+            diet_type: 预设的食性类型
+            prey_species: 预设的猎物列表
+            parent_code: 父代物种代码（神启分化模式）
+            is_plant: 是否为植物
+            plant_stage: 植物演化阶段
+            
+        Returns:
+            Species对象
+        """
+        print(f"[物种生成器(增强版)] 生成物种: {lineage_code}")
+        print(f"[物种生成器(增强版)] 用户描述: {prompt}")
+        if parent_code:
+            print(f"[物种生成器(增强版)] 父代物种: {parent_code}")
+        
+        # 构建增强的prompt
+        enhanced_prompt = prompt
+        hints = []
+        
+        # 栖息地提示
+        habitat_names = {
+            "marine": "海洋",
+            "deep_sea": "深海",
+            "coastal": "海岸/潮间带",
+            "freshwater": "淡水",
+            "amphibious": "两栖",
+            "terrestrial": "陆地",
+            "aerial": "空中/飞行"
+        }
+        if habitat_type:
+            hints.append(f"栖息环境：{habitat_names.get(habitat_type, habitat_type)}")
+        
+        # 食性提示
+        diet_names = {
+            "autotroph": "自养生物（光合/化能合成，无需捕食）",
+            "herbivore": "草食动物（以植物为食）",
+            "carnivore": "肉食动物（以其他动物为食）",
+            "omnivore": "杂食动物（植物和动物都吃）",
+            "detritivore": "腐食/分解者"
+        }
+        if diet_type:
+            hints.append(f"食性类型：{diet_names.get(diet_type, diet_type)}")
+        
+        # 猎物提示
+        if prey_species and len(prey_species) > 0:
+            prey_info = []
+            if existing_species:
+                for prey_code in prey_species:
+                    prey_sp = next((s for s in existing_species if s.lineage_code == prey_code), None)
+                    if prey_sp:
+                        prey_info.append(f"{prey_code}({prey_sp.common_name})")
+                    else:
+                        prey_info.append(prey_code)
+            else:
+                prey_info = prey_species
+            hints.append(f"主要猎物：{', '.join(prey_info)}")
+        
+        # 植物特化提示
+        if is_plant:
+            hints.append("这是一种植物/生产者类生物")
+            if plant_stage is not None:
+                stage_names = {
+                    0: "原核光合生物（蓝藻、光合细菌）",
+                    1: "单细胞真核藻类（绿藻、硅藻）",
+                    2: "多细胞群体藻类",
+                    3: "苔藓类（首批登陆植物）",
+                    4: "蕨类（维管植物先驱）",
+                    5: "裸子植物（种子植物）",
+                    6: "被子植物（开花植物）"
+                }
+                hints.append(f"演化阶段：{stage_names.get(plant_stage, f'阶段{plant_stage}')}")
+        
+        # 父代物种提示（神启分化模式）
+        parent_species = None
+        if parent_code and existing_species:
+            parent_species = next((s for s in existing_species if s.lineage_code == parent_code), None)
+            if parent_species:
+                hints.append(f"这是从物种{parent_code}({parent_species.common_name})分化而来的新物种")
+                hints.append(f"父代特征参考：{parent_species.description[:100]}...")
+        
+        # 组合增强提示
+        if hints:
+            enhanced_prompt = f"{prompt}\n\n【用户预设参数】\n" + "\n".join(f"- {h}" for h in hints)
+        
+        # 使用基础生成方法
+        species = self.generate_from_prompt(enhanced_prompt, lineage_code, existing_species)
+        
+        # 覆盖用户预设的参数
+        if habitat_type:
+            species.habitat_type = habitat_type
+        
+        if diet_type:
+            species.diet_type = diet_type
+            # 根据食性设置合理的营养级
+            trophic_mapping = {
+                "autotroph": 1.0,
+                "herbivore": 2.0,
+                "carnivore": 3.5,
+                "omnivore": 2.5,
+                "detritivore": 1.5
+            }
+            species.trophic_level = trophic_mapping.get(diet_type, 2.0)
+        
+        if prey_species:
+            species.prey_species = prey_species
+            # 均分猎物偏好
+            if len(prey_species) > 0:
+                pref = 1.0 / len(prey_species)
+                species.prey_preferences = {p: pref for p in prey_species}
+        
+        if parent_code:
+            species.parent_code = parent_code
+            # 如果有父代，继承部分特征
+            if parent_species:
+                # 继承一些隐性特征（基因多样性略低）
+                if hasattr(parent_species, 'hidden_traits') and parent_species.hidden_traits:
+                    species.hidden_traits = {
+                        **species.hidden_traits,
+                        "gene_diversity": max(0.3, parent_species.hidden_traits.get("gene_diversity", 0.7) * 0.9),
+                    }
+        
+        # 植物特化设置
+        if is_plant:
+            species.trophic_level = 1.0
+            species.diet_type = "autotroph"
+            species.prey_species = []
+            species.prey_preferences = {}
+            
+            if plant_stage is not None:
+                species.life_form_stage = plant_stage
+                # 设置生长形式
+                form_mapping = {0: "aquatic", 1: "aquatic", 2: "aquatic", 3: "moss", 4: "herb", 5: "shrub", 6: "tree"}
+                species.growth_form = form_mapping.get(plant_stage, "aquatic")
+        
+        print(f"[物种生成器(增强版)] 物种生成成功: {species.latin_name} / {species.common_name}")
+        return species
+

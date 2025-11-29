@@ -16,12 +16,14 @@ import {
   ChevronDown,
   Archive,
   Check,
-  FolderOpen
+  FolderOpen,
+  PlusCircle
 } from "lucide-react";
 
 import type { UIConfig, SaveMetadata } from "../services/api.types";
 import { formatSaveName, formatRelativeTime } from "../services/api.types";
 import { listSaves, createSave, loadGame, deleteSave } from "../services/api";
+import { SpeciesInputCard, type SpeciesInputData } from "./SpeciesInputCard";
 
 export interface StartPayload {
   mode: "create" | "load";
@@ -35,12 +37,19 @@ interface Props {
   uiConfig?: UIConfig | null;
 }
 
+// 初始化物种输入数据
+const createEmptySpeciesData = (): SpeciesInputData => ({ prompt: "" });
+
 export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
   const [stage, setStage] = useState<"root" | "create" | "load" | "blank">("root");
   const [saves, setSaves] = useState<SaveMetadata[]>([]);
   const [saveName, setSaveName] = useState("");
   const [mapSeed, setMapSeed] = useState("");
-  const [speciesPrompts, setSpeciesPrompts] = useState<string[]>(["", "", ""]);
+  const [speciesInputs, setSpeciesInputs] = useState<SpeciesInputData[]>([
+    createEmptySpeciesData(),
+    createEmptySpeciesData(),
+    createEmptySpeciesData(),
+  ]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,11 +118,48 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
       return;
     }
 
-    const validPrompts = speciesPrompts.filter(p => p.trim());
-    if (validPrompts.length === 0) {
+    // 过滤有效的物种输入
+    const validInputs = speciesInputs.filter(input => input.prompt.trim());
+    if (validInputs.length === 0) {
       setError("请至少输入一个物种描述");
       return;
     }
+
+    // 构建物种描述（带有元数据提示）
+    const speciesPrompts = validInputs.map(input => {
+      let prompt = input.prompt;
+      const hints: string[] = [];
+      
+      if (input.habitat_type) {
+        const habitatNames: Record<string, string> = {
+          marine: "海洋", deep_sea: "深海", coastal: "海岸",
+          freshwater: "淡水", terrestrial: "陆地", amphibious: "两栖"
+        };
+        hints.push(`栖息地：${habitatNames[input.habitat_type] || input.habitat_type}`);
+      }
+      
+      if (input.diet_type) {
+        const dietNames: Record<string, string> = {
+          autotroph: "自养生物", herbivore: "草食动物", 
+          carnivore: "肉食动物", omnivore: "杂食动物"
+        };
+        hints.push(`食性：${dietNames[input.diet_type] || input.diet_type}`);
+      }
+      
+      if (input.is_plant && input.plant_stage !== undefined) {
+        const stageNames: Record<number, string> = {
+          0: "原核光合生物", 1: "单细胞真核藻类", 
+          2: "多细胞群体藻类", 3: "苔藓类"
+        };
+        hints.push(`植物阶段：${stageNames[input.plant_stage] || `阶段${input.plant_stage}`}`);
+      }
+      
+      if (hints.length > 0) {
+        prompt += `\n[预设: ${hints.join(', ')}]`;
+      }
+      
+      return prompt;
+    });
 
     setLoading(true);
     setError(null);
@@ -121,7 +167,7 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
       await createSave({
         save_name: saveName,
         scenario: "空白剧本",
-        species_prompts: validPrompts,
+        species_prompts: speciesPrompts,
         map_seed: mapSeed.trim() ? parseInt(mapSeed) : undefined,
       });
       onStart({ mode: "create", scenario: "空白剧本", save_name: saveName });
@@ -132,6 +178,29 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
       setLoading(false);
     }
   }
+  
+  // 更新物种输入数据
+  const updateSpeciesInput = (index: number, data: SpeciesInputData) => {
+    setSpeciesInputs(prev => {
+      const newInputs = [...prev];
+      newInputs[index] = data;
+      return newInputs;
+    });
+  };
+  
+  // 添加新的物种槽位
+  const addSpeciesSlot = () => {
+    if (speciesInputs.length < 5) {
+      setSpeciesInputs(prev => [...prev, createEmptySpeciesData()]);
+    }
+  };
+  
+  // 移除物种槽位
+  const removeSpeciesSlot = (index: number) => {
+    if (index > 0 && speciesInputs.length > 1) {
+      setSpeciesInputs(prev => prev.filter((_, i) => i !== index));
+    }
+  };
 
   async function handleLoadSave(save_name: string) {
     setLoading(true);
@@ -419,26 +488,35 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
                 <p className="text-xs text-muted mt-1">使用相同种子可以重现相同的地图形状</p>
               </div>
 
-              <div className="space-y-4 mb-xl">
-                {[0, 1, 2].map((i) => (
-                  <div key={i} className="form-field fade-in" style={{ animationDelay: `${i * 0.1}s` }}>
-                    <label className="field-label mb-xs flex justify-between">
-                      <span>初始物种 {i + 1}</span>
-                      <span className="text-xs text-muted">{i === 0 ? "必填" : "选填"}</span>
-                    </label>
-                    <textarea
-                      value={speciesPrompts[i]}
-                      onChange={(e) => {
-                        const newPrompts = [...speciesPrompts];
-                        newPrompts[i] = e.target.value;
-                        setSpeciesPrompts(newPrompts);
-                      }}
-                      placeholder={i === 0 ? "例如：一种生活在深海的发光水母，靠捕食小型浮游生物为生..." : "描述另一个物种..."}
-                      rows={2}
-                      className="input-visual resize-y"
+              {/* 物种输入卡片 */}
+              <div className="species-inputs-section mb-xl">
+                <div className="section-header mb-md">
+                  <span className="section-title">初始物种设计</span>
+                  <span className="section-hint">点击模板快速填充，或自由描述你的物种</span>
+                </div>
+                
+                <div className="species-cards-list">
+                  {speciesInputs.map((input, index) => (
+                    <SpeciesInputCard
+                      key={index}
+                      index={index}
+                      required={index === 0}
+                      value={input}
+                      onChange={(data) => updateSpeciesInput(index, data)}
+                      onRemove={index > 0 ? () => removeSpeciesSlot(index) : undefined}
                     />
-                  </div>
-                ))}
+                  ))}
+                </div>
+                
+                {speciesInputs.length < 5 && (
+                  <button 
+                    className="add-species-btn"
+                    onClick={addSpeciesSlot}
+                  >
+                    <PlusCircle size={16} />
+                    <span>添加更多物种</span>
+                  </button>
+                )}
               </div>
 
               <button
@@ -450,6 +528,59 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
                 {loading ? <span className="spinner mr-sm"/> : <Cpu size={20} className="mr-sm" />}
                 {loading ? "AI 正在构思物种..." : "生成并开始"}
               </button>
+              
+              <style>{`
+                .species-inputs-section {
+                  display: flex;
+                  flex-direction: column;
+                  gap: 12px;
+                }
+                
+                .section-header {
+                  display: flex;
+                  flex-direction: column;
+                  gap: 4px;
+                }
+                
+                .section-title {
+                  font-size: 0.95rem;
+                  font-weight: 500;
+                  color: rgba(255, 255, 255, 0.9);
+                }
+                
+                .section-hint {
+                  font-size: 0.8rem;
+                  color: rgba(255, 255, 255, 0.5);
+                }
+                
+                .species-cards-list {
+                  display: flex;
+                  flex-direction: column;
+                  gap: 12px;
+                }
+                
+                .add-species-btn {
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  gap: 8px;
+                  padding: 12px;
+                  background: rgba(255, 255, 255, 0.03);
+                  border: 2px dashed rgba(255, 255, 255, 0.15);
+                  border-radius: 12px;
+                  color: rgba(255, 255, 255, 0.5);
+                  font-size: 0.9rem;
+                  cursor: pointer;
+                  transition: all 0.2s;
+                  margin-top: 8px;
+                }
+                
+                .add-species-btn:hover {
+                  background: rgba(168, 85, 247, 0.1);
+                  border-color: rgba(168, 85, 247, 0.3);
+                  color: rgba(255, 255, 255, 0.8);
+                }
+              `}</style>
             </div>
           )}
 
