@@ -608,14 +608,14 @@ function AchievementCard({ achievement }: { achievement: Achievement }) {
         {/* 进度条 */}
         {!achievement.unlocked && achievement.target_value > 1 && (
           <div className="achievement-progress">
-            <div className="progress-row">
+            <div className="progress-bar-wrapper">
               <div className="progress-bar">
                 <div 
                   className="progress-fill"
                   style={{ width: `${progress}%` }}
                 />
               </div>
-              <span className="progress-text">
+              <span className="progress-tooltip">
                 {achievement.current_value.toLocaleString()} / {achievement.target_value.toLocaleString()}
               </span>
             </div>
@@ -773,19 +773,17 @@ function AchievementCard({ achievement }: { achievement: Achievement }) {
           padding-top: 8px;
         }
 
-        .progress-row {
-          display: flex;
-          align-items: center;
-          gap: 10px;
+        .progress-bar-wrapper {
+          position: relative;
         }
 
         .progress-bar {
-          flex: 1;
+          width: 100%;
           height: 6px;
           background: rgba(255, 255, 255, 0.08);
           border-radius: 3px;
           overflow: hidden;
-          min-width: 60px;
+          cursor: pointer;
         }
 
         .progress-fill {
@@ -795,12 +793,39 @@ function AchievementCard({ achievement }: { achievement: Achievement }) {
           transition: width 0.3s ease;
         }
 
-        .progress-text {
-          font-size: 0.72rem;
+        .progress-tooltip {
+          position: absolute;
+          bottom: calc(100% + 6px);
+          left: 50%;
+          transform: translateX(-50%);
+          padding: 4px 8px;
+          background: rgba(0, 0, 0, 0.9);
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          border-radius: 6px;
+          font-size: 0.7rem;
           font-family: var(--font-mono, monospace);
-          color: rgba(255, 255, 255, 0.5);
+          color: rgba(255, 255, 255, 0.8);
           white-space: nowrap;
-          flex-shrink: 0;
+          opacity: 0;
+          visibility: hidden;
+          transition: all 0.15s ease;
+          pointer-events: none;
+          z-index: 10;
+        }
+
+        .progress-tooltip::after {
+          content: '';
+          position: absolute;
+          top: 100%;
+          left: 50%;
+          transform: translateX(-50%);
+          border: 4px solid transparent;
+          border-top-color: rgba(0, 0, 0, 0.9);
+        }
+
+        .progress-bar-wrapper:hover .progress-tooltip {
+          opacity: 1;
+          visibility: visible;
         }
 
         .unlock-info {
