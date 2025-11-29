@@ -432,6 +432,11 @@ export function SpeciesInputCard({ index, required, value, onChange, onRemove }:
 
         .template-btn svg {
           color: var(--t-color);
+          flex-shrink: 0;
+        }
+
+        .template-btn.randomize {
+          border-style: dashed;
         }
 
         /* 描述输入 */

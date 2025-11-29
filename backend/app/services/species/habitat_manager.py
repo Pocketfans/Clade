@@ -1257,11 +1257,15 @@ class HabitatManager:
     ) -> int:
         """触发饥饿迁徙：消费者向猎物方向迁移
         
+        【改进v4.1】利用矩阵计算选择最佳迁徙目标
+        
         当消费者的栖息地与猎物不重叠时，触发向猎物方向的迁徙
         
         Returns:
             迁徙的物种数量
         """
+        import numpy as np
+        
         food_status = self.check_consumer_food_availability(species_list, tiles)
         
         if not food_status:
@@ -1276,6 +1280,10 @@ class HabitatManager:
             if h.species_id not in species_habitats:
                 species_habitats[h.species_id] = []
             species_habitats[h.species_id].append(h)
+        
+        # 【优化】更新扩散引擎的地块缓存
+        if dispersal_engine:
+            dispersal_engine.update_tile_cache(tiles)
         
         migrations = 0
         updated_habitats: list[HabitatPopulation] = []
@@ -1299,35 +1307,6 @@ class HabitatManager:
             if not sp_habitats:
                 continue
             
-            # 计算迁徙目标：最靠近猎物的地块
-            # 策略：将部分种群迁移到有猎物的地块
-            
-            # 筛选适合该物种的地块
-            habitat_type = getattr(sp, 'habitat_type', 'terrestrial')
-            tile_map = {t.id: t for t in tiles}
-            
-            # 找到适合迁徙的猎物地块
-            valid_prey_tiles = []
-            for prey_tile_id in prey_tiles:
-                prey_tile = tile_map.get(prey_tile_id)
-                if not prey_tile:
-                    continue
-                
-                # 检查地形是否适合
-                biome = prey_tile.biome.lower() if prey_tile.biome else ""
-                is_water = prey_tile.elevation < 0
-                
-                if habitat_type == "marine" and is_water:
-                    valid_prey_tiles.append(prey_tile_id)
-                elif habitat_type == "terrestrial" and not is_water:
-                    valid_prey_tiles.append(prey_tile_id)
-                elif habitat_type in ("amphibious", "coastal"):
-                    valid_prey_tiles.append(prey_tile_id)
-            
-            if not valid_prey_tiles:
-                logger.debug(f"[栖息地] {sp.common_name} 没有可迁徙的猎物地块（地形不兼容）")
-                continue
-            
             # 计算总种群
             total_pop = sum(h.population for h in sp_habitats)
             
@@ -1342,6 +1321,78 @@ class HabitatManager:
             
             migrate_pop = int(total_pop * migrate_ratio)
             if migrate_pop < 10:
+                continue
+            
+            # === 【改进】使用矩阵计算选择最佳迁徙目标 ===
+            target_tiles_with_scores: list[tuple[int, float]] = []
+            
+            if dispersal_engine and dispersal_engine._tile_matrix is not None:
+                # 使用扩散引擎计算适宜度
+                suitability = dispersal_engine.compute_suitability_matrix(
+                    sp, 
+                    exclude_tiles=my_tiles  # 排除当前栖息地
+                )
+                
+                # 筛选有猎物的地块
+                for prey_tile_id in prey_tiles:
+                    idx = dispersal_engine._tile_map.get(prey_tile_id, -1)
+                    if idx >= 0 and suitability[idx] > 0.2:
+                        # 计算综合得分：适宜度 * 0.6 + 猎物加成 * 0.4
+                        combined_score = suitability[idx] * 0.6 + 0.4
+                        target_tiles_with_scores.append((prey_tile_id, combined_score))
+                
+                # 按综合得分排序
+                target_tiles_with_scores.sort(key=lambda x: x[1], reverse=True)
+                target_tiles_with_scores = target_tiles_with_scores[:8]  # 最多8个地块
+                
+                if target_tiles_with_scores:
+                    logger.debug(
+                        f"[饥饿迁徙] {sp.common_name} 使用矩阵计算，"
+                        f"找到 {len(target_tiles_with_scores)} 个优质猎物地块"
+                    )
+            
+            # 降级：使用距离计算
+            if not target_tiles_with_scores:
+                habitat_type = getattr(sp, 'habitat_type', 'terrestrial')
+                tile_map = {t.id: t for t in tiles}
+                
+                for prey_tile_id in prey_tiles:
+                    prey_tile = tile_map.get(prey_tile_id)
+                    if not prey_tile:
+                        continue
+                    
+                    # 检查地形是否适合
+                    is_water = prey_tile.elevation < 0
+                    
+                    if habitat_type == "marine" and is_water:
+                        pass
+                    elif habitat_type == "terrestrial" and not is_water:
+                        pass
+                    elif habitat_type in ("amphibious", "coastal"):
+                        pass
+                    else:
+                        continue
+                    
+                    # 计算到最近当前栖息地的距离
+                    if my_tiles and self._tile_coords_cache:
+                        min_dist = float('inf')
+                        for my_tid in my_tiles:
+                            d = self._calculate_tile_distance(my_tid, prey_tile_id)
+                            if d < min_dist:
+                                min_dist = d
+                        # 距离转换为得分（越近越高）
+                        score = max(0.1, 1.0 - min_dist / 20.0)
+                    else:
+                        score = 0.5
+                    
+                    target_tiles_with_scores.append((prey_tile_id, score))
+                
+                # 按得分排序
+                target_tiles_with_scores.sort(key=lambda x: x[1], reverse=True)
+                target_tiles_with_scores = target_tiles_with_scores[:5]
+            
+            if not target_tiles_with_scores:
+                logger.debug(f"[栖息地] {sp.common_name} 没有可迁徙的猎物地块")
                 continue
             
             # 从各地块按比例抽取迁徙种群
@@ -1362,43 +1413,45 @@ class HabitatManager:
                     ))
                     remaining_pop -= take
             
-            # 分配到猎物地块
+            # 分配到猎物地块（按适宜度得分加权）
             actual_migrate = migrate_pop - remaining_pop
             if actual_migrate > 0:
-                # 优先选择最近的猎物地块
-                if my_tiles and self._tile_coords_cache:
-                    # 按距离排序
-                    distances = []
-                    for prey_tid in valid_prey_tiles:
-                        min_dist = float('inf')
-                        for my_tid in my_tiles:
-                            d = self._calculate_tile_distance(my_tid, prey_tid)
-                            if d < min_dist:
-                                min_dist = d
-                        distances.append((prey_tid, min_dist))
-                    distances.sort(key=lambda x: x[1])
-                    target_tiles = [tid for tid, _ in distances[:5]]  # 最近的5个地块
-                else:
-                    target_tiles = list(valid_prey_tiles)[:5]
+                # 按得分加权分配
+                total_score = sum(score for _, score in target_tiles_with_scores)
+                if total_score <= 0:
+                    total_score = 1.0
                 
-                pop_per_tile = actual_migrate // len(target_tiles)
-                remainder = actual_migrate % len(target_tiles)
-                
-                for i, tile_id in enumerate(target_tiles):
-                    tile_pop = pop_per_tile + (1 if i < remainder else 0)
+                distributed = 0
+                for i, (tile_id, score) in enumerate(target_tiles_with_scores):
+                    if i == len(target_tiles_with_scores) - 1:
+                        # 最后一个地块获得剩余所有
+                        tile_pop = actual_migrate - distributed
+                    else:
+                        tile_pop = int(actual_migrate * score / total_score)
+                    
                     if tile_pop > 0:
+                        # 获取该地块的适宜度
+                        tile_suit = 0.6
+                        if dispersal_engine and dispersal_engine._tile_map:
+                            idx = dispersal_engine._tile_map.get(tile_id, -1)
+                            if idx >= 0:
+                                suit_matrix = dispersal_engine.compute_suitability_matrix(sp)
+                                if len(suit_matrix) > idx:
+                                    tile_suit = float(suit_matrix[idx])
+                        
                         updated_habitats.append(HabitatPopulation(
                             tile_id=tile_id,
                             species_id=species_id,
                             population=tile_pop,
-                            suitability=0.6,  # 新迁入地块的适宜度
+                            suitability=max(0.3, tile_suit),
                             turn_index=turn_index,
                         ))
+                        distributed += tile_pop
                 
                 migrations += 1
                 logger.info(
                     f"[栖息地] {sp.common_name} 饥饿迁徙: {actual_migrate} 个体迁移到 "
-                    f"{len(target_tiles)} 个有猎物的地块"
+                    f"{len(target_tiles_with_scores)} 个有猎物的地块"
                 )
         
         if updated_habitats:

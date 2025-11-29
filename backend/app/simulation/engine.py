@@ -514,6 +514,12 @@ class SimulationEngine:
                                         f"🌊 海陆变化导致 {relocation_result['forced_relocations']} 次物种迁徙",
                                         "生态"
                                     )
+                                if relocation_result.get("hunger_migrations", 0) > 0:
+                                    self._emit_event(
+                                        "migration",
+                                        f"🍖 {relocation_result['hunger_migrations']} 个消费者追踪猎物迁徙",
+                                        "生态"
+                                    )
                         
                         # 合并压力反馈
                         for key, value in tectonic_result.pressure_feedback.items():
