@@ -145,12 +145,14 @@ class DispersalEngine:
     ) -> np.ndarray:
         """批量计算物种对所有地块的适宜度
         
+        修复v2：使用更宽松的匹配逻辑，避免适宜度过低
+        
         Args:
             species: 目标物种
             exclude_tiles: 要排除的地块ID集合
             
         Returns:
-            (n_tiles,) 适宜度向量，值域 [0, 1]
+            (n_tiles,) 适宜度向量，值域 [0.15, 1]
         """
         if self._tile_matrix is None:
             return np.array([])
@@ -158,17 +160,21 @@ class DispersalEngine:
         n_tiles = len(self._tile_ids)
         pref = self._get_species_preference_vector(species)
         
-        # 计算加权相似度
-        # 温度匹配
-        temp_match = 1.0 - np.abs(self._tile_matrix[:, 0] - pref[0])
+        # === 温度匹配（更宽容）===
+        # tile_matrix[:, 0] 是归一化温度 [-1, 1]
+        # pref[0] 是温度偏好 [-1, 1]
+        temp_diff = np.abs(self._tile_matrix[:, 0] - pref[0])
+        temp_match = np.maximum(0.3, 1.0 - temp_diff * 0.7)  # 差距1.0 -> 0.3
         
-        # 湿度匹配
-        humidity_match = 1.0 - np.abs(self._tile_matrix[:, 1] - pref[1])
+        # === 湿度匹配（更宽容）===
+        humidity_diff = np.abs(self._tile_matrix[:, 1] - pref[1])
+        humidity_match = np.maximum(0.3, 1.0 - humidity_diff * 0.8)
         
-        # 资源匹配
-        resource_match = self._tile_matrix[:, 3] * pref[3]
+        # === 资源匹配 ===
+        # 资源越多越好，但保证最低值
+        resource_match = np.maximum(0.3, self._tile_matrix[:, 3] * 0.7 + 0.3)
         
-        # 栖息地类型匹配（硬约束）
+        # === 栖息地类型匹配（硬约束但不是0）===
         habitat_match = (
             self._tile_matrix[:, 4] * pref[4] +  # 陆地
             self._tile_matrix[:, 5] * pref[5] +  # 海洋
@@ -178,12 +184,15 @@ class DispersalEngine:
         if pref[4] + pref[5] + pref[6] < 0.1:
             habitat_match = self._tile_matrix[:, 4]
         
-        # 综合适宜度
+        # 栖息地不匹配时给予惩罚但不是0
+        habitat_match = np.where(habitat_match > 0.5, habitat_match, 0.1)
+        
+        # === 综合适宜度 ===
         suitability = (
             temp_match * 0.25 +
-            humidity_match * 0.25 +
+            humidity_match * 0.20 +
             resource_match * 0.20 +
-            habitat_match * 0.30
+            habitat_match * 0.35  # 栖息地类型权重提高
         )
         
         # 排除指定地块
@@ -193,8 +202,8 @@ class DispersalEngine:
                     idx = self._tile_map[tile_id]
                     suitability[idx] = 0.0
         
-        # 归一化到 [0, 1]
-        suitability = np.clip(suitability, 0.0, 1.0)
+        # 保证最低适宜度（避免全部为0）
+        suitability = np.clip(suitability, 0.15, 1.0)
         
         return suitability
     

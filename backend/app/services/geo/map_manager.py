@@ -2599,46 +2599,88 @@ class MapStateManager:
         return abs(math.sin(6 * math.pi * lon) * (0.5 - lat)) > 0.45
 
     def _suitability_score(self, species: Species, tile: MapTile) -> float:
-        """计算物种在某地块的适应性评分（0-1范围）"""
-        temperature_pref = species.abstract_traits.get("耐寒性", 5)
-        dryness_pref = species.abstract_traits.get("耐旱性", 5)
+        """计算物种在某地块的适应性评分（0-1范围）
+        
+        修复v2：使用更宽松的匹配逻辑，避免适宜度过低
+        """
+        traits = species.abstract_traits or {}
         habitat_type = getattr(species, 'habitat_type', 'terrestrial')
         
-        # 温度适应性
-        temp_norm = (tile.temperature + 30) / 70  # map to 0-1 approximate
-        temp_score = max(0.0, 1 - abs(temp_norm * 10 - temperature_pref) / 10)
+        # === 温度适应性 ===
+        # 耐热性高 = 喜热，耐寒性高 = 耐冷
+        heat_tolerance = traits.get("耐热性", 5)  # 0-15
+        cold_tolerance = traits.get("耐寒性", 5)  # 0-15
         
-        # 湿度适应性
-        humidity_norm = tile.humidity
-        humidity_score = max(0.0, 1 - abs(humidity_norm * 10 - (10 - dryness_pref)) / 10)
+        # 计算物种的理想温度范围
+        # 高耐热 = 喜欢高温，高耐寒 = 能忍受低温
+        ideal_temp_min = -10 + (15 - cold_tolerance) * 2  # 耐寒性15 -> -10°C, 耐寒性0 -> 20°C
+        ideal_temp_max = 10 + heat_tolerance * 2          # 耐热性15 -> 40°C, 耐热性0 -> 10°C
         
-        # 资源适应性（将1-1000的资源值归一化到0-1）
-        # 使用对数刻度，因为资源是指数分布的
-        resource_normalized = min(1.0, math.log(tile.resources + 1) / math.log(1001))
-        resource_score = resource_normalized
+        tile_temp = tile.temperature
+        if ideal_temp_min <= tile_temp <= ideal_temp_max:
+            temp_score = 1.0
+        elif tile_temp < ideal_temp_min:
+            # 太冷
+            diff = ideal_temp_min - tile_temp
+            temp_score = max(0.2, 1.0 - diff / 30)  # 30°C差距 -> 0.2
+        else:
+            # 太热
+            diff = tile_temp - ideal_temp_max
+            temp_score = max(0.2, 1.0 - diff / 30)
         
-        # 生物群系匹配度
-        adjacency = 1.0 if species.description.find(tile.biome[:1]) >= 0 else 0.5
+        # === 湿度适应性 ===
+        drought_tolerance = traits.get("耐旱性", 5)  # 0-15，高=耐旱
+        
+        # 高耐旱 = 喜欢干燥，低耐旱 = 需要湿润
+        ideal_humidity = 0.7 - drought_tolerance * 0.04  # 耐旱性15 -> 0.1, 耐旱性0 -> 0.7
+        
+        humidity_diff = abs(tile.humidity - ideal_humidity)
+        humidity_score = max(0.3, 1.0 - humidity_diff * 1.5)  # 更宽容的湿度匹配
+        
+        # === 资源适应性 ===
+        # 使用对数刻度，资源越多越好，但边际效益递减
+        if tile.resources > 0:
+            resource_score = min(1.0, 0.3 + 0.7 * math.log(tile.resources + 1) / math.log(1001))
+        else:
+            resource_score = 0.3  # 最低保底
+        
+        # === 生物群系基础匹配 ===
+        # 只要不是完全不匹配的环境就给较高分
+        biome_score = 0.6  # 基础分
+        biome_lower = tile.biome.lower()
+        if habitat_type == "marine" and "海" in biome_lower:
+            biome_score = 1.0
+        elif habitat_type == "deep_sea" and "深海" in biome_lower:
+            biome_score = 1.0
+        elif habitat_type == "terrestrial" and "海" not in biome_lower:
+            biome_score = 0.9
+        elif habitat_type == "coastal" and ("海岸" in biome_lower or "浅海" in biome_lower):
+            biome_score = 1.0
+        elif habitat_type == "freshwater" and getattr(tile, 'is_lake', False):
+            biome_score = 1.0
         
         # === 特殊栖息地加成 ===
         special_bonus = 0.0
         
-        # 热泉生物（如硫细菌）：火山活动区域大幅加成
         if habitat_type == "hydrothermal":
             volcanic = getattr(tile, 'volcanic_potential', 0.0)
-            if volcanic > 0.5:
-                special_bonus = 0.5  # 高火山活动区域大幅加成
-            elif volcanic > 0.2:
-                special_bonus = 0.3  # 中等火山活动区域加成
+            if volcanic > 0.3:
+                special_bonus = 0.3
+        elif habitat_type == "deep_sea" and tile.elevation < -2000:
+            special_bonus = 0.2
         
-        # 深海生物：深海区域加成
-        elif habitat_type == "deep_sea":
-            if tile.elevation < -2000:
-                special_bonus = 0.2  # 深海区域加成
+        # === 综合评分 ===
+        # 权重：温度25% + 湿度20% + 资源20% + 群系25% + 特殊10%
+        base_score = (
+            temp_score * 0.25 +
+            humidity_score * 0.20 +
+            resource_score * 0.20 +
+            biome_score * 0.25 +
+            special_bonus * 0.10
+        )
         
-        # 综合评分（权重：温度20% + 湿度20% + 资源25% + 群系15% + 特殊20%）
-        base_score = temp_score * 0.20 + humidity_score * 0.20 + resource_score * 0.25 + adjacency * 0.15
-        return max(0.0, min(1.0, base_score + special_bonus * 0.20))
+        # 保证最低适宜度（避免全部为0）
+        return max(0.15, min(1.0, base_score))
 
     def _neighbor_ids(self, tile: MapTile, coord_map: dict[tuple[int, int], int]) -> list[int]:
         """Return neighbor ids treating the east/west boundary as wrapped."""
