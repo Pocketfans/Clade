@@ -38,19 +38,21 @@ TECTONIC_CONFIG = {
     
     # ==================== 地形变化 ====================
     # 渐进式变化：每回合约50万年，变化应该非常缓慢
+    # 真实地球：喜马拉雅山每年隆起约1cm = 5000年/回合 * 0.01m = 50m/回合（太快）
+    # 游戏平衡：进一步降低，让变化几乎不可见
     "terrain": {
-        "max_elevation_change": 1.5,    # 单回合最大海拔变化 (米) - 大幅降低
-        "erosion_rate": 0.1,            # 侵蚀速率 (米/回合) - 降低
-        "mountain_growth_rate": 1.0,    # 造山速率 (米/回合) - 大幅降低
-        "subduction_depth_rate": 0.8,   # 俯冲深度增加速率 (米/回合) - 降低
-        "rift_subsidence_rate": 0.5,    # 裂谷下沉速率 (米/回合) - 降低
+        "max_elevation_change": 0.5,    # 单回合最大海拔变化 (米) - 极度缓慢
+        "erosion_rate": 0.02,           # 侵蚀速率 (米/回合) - 极慢
+        "mountain_growth_rate": 0.3,    # 造山速率 (米/回合) - 极慢
+        "subduction_depth_rate": 0.2,   # 俯冲深度增加速率 (米/回合) - 极慢
+        "rift_subsidence_rate": 0.15,   # 裂谷下沉速率 (米/回合) - 极慢
         
         # 边界影响范围
-        "boundary_effect_radius": 5,    # 边界效应影响半径 (格) - 扩大使过渡更平滑
+        "boundary_effect_radius": 8,    # 边界效应影响半径 (格) - 更大范围平滑过渡
         
         # 平滑参数
-        "smoothing_iterations": 2,      # 每回合平滑迭代次数
-        "smoothing_strength": 0.15,     # 平滑强度 (0-1)
+        "smoothing_iterations": 3,      # 每回合平滑迭代次数 - 增加
+        "smoothing_strength": 0.25,     # 平滑强度 (0-1) - 增强
         
         # 温度联动
         "temp_per_100m_elevation": -0.6,  # 每100米海拔温度变化 (°C)

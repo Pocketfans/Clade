@@ -473,11 +473,13 @@ class SimulationEngine:
                         
                         # 将地形变化应用到地图并保存
                         if tectonic_result.terrain_changes and map_tiles:
-                            tile_map = {t.id: t for t in map_tiles}
+                            # 使用坐标匹配，因为板块系统ID是y*width+x，与数据库ID不同
+                            coord_map = {(t.x, t.y): t for t in map_tiles}
                             updated_tiles = []
                             
                             for change in tectonic_result.terrain_changes:
-                                tile = tile_map.get(change["tile_id"])
+                                # 通过坐标匹配地块
+                                tile = coord_map.get((change["x"], change["y"]))
                                 if tile:
                                     # 应用海拔变化
                                     tile.elevation = change["new_elevation"]
