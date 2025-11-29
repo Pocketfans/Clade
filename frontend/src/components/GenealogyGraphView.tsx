@@ -65,6 +65,7 @@ interface LinkVisual {
     color: number;
     alpha: number;
     width: number;
+    isSecondaryHybrid?: boolean;  // 次要亲本连线标记
 }
 
 interface FlowParticle {
@@ -91,6 +92,7 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
   const [pixiReady, setPixiReady] = useState(false);
   
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
+  const [showAllHybridLinks, setShowAllHybridLinks] = useState(false);  // 是否显示所有杂交连线
 
   const cameraRef = useRef({ x: 100, y: 300, zoom: 0.8 }); 
   const isDragging = useRef(false);
@@ -100,6 +102,10 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
   const particlesRef = useRef<FlowParticle[]>([]);
   const nodeVisualsRef = useRef<Map<string, NodeVisual>>(new Map());
   const linkVisualsRef = useRef<LinkVisual[]>([]);
+  
+  // 用于追踪当前hover/选中的节点，供updateLinks使用
+  const activeNodeRef = useRef<string | null>(null);
+  const showAllHybridLinksRef = useRef(false);
 
   const toggleCollapse = useCallback((lineageCode: string) => {
     setCollapsedNodes(prev => {
@@ -338,6 +344,8 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
   const updateLinks = () => {
       const NODE_W = 140;
       const NODE_OFFSET_X = NODE_W / 2;
+      const activeCode = activeNodeRef.current;
+      const showAll = showAllHybridLinksRef.current;
       
       linkVisualsRef.current.forEach(link => {
           const sourceVis = nodeVisualsRef.current.get(link.sourceCode);
@@ -347,6 +355,22 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
           
           link.graphics.clear();
           
+          // 次要杂交连线的可见性逻辑
+          if (link.isSecondaryHybrid) {
+              // 只在以下情况显示次要杂交连线：
+              // 1. 开启了"显示所有杂交关系"
+              // 2. hover/选中了该杂交物种
+              // 3. hover/选中了次要亲本
+              const isRelatedToActive = activeCode && (
+                  link.targetCode === activeCode || 
+                  link.sourceCode === activeCode
+              );
+              
+              if (!showAll && !isRelatedToActive) {
+                  return; // 不绘制
+              }
+          }
+          
           const p0 = { x: sourceVis.container.x + NODE_OFFSET_X, y: sourceVis.container.y };
           const p3 = { x: targetVis.container.x - NODE_OFFSET_X, y: targetVis.container.y };
           
@@ -354,12 +378,19 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
           const p1 = { x: p0.x + cpOffset, y: p0.y };
           const p2 = { x: p3.x - cpOffset, y: p3.y };
           
+          // 次要杂交连线在hover时增强显示
+          const isHighlighted = link.isSecondaryHybrid && activeCode && (
+              link.targetCode === activeCode || link.sourceCode === activeCode
+          );
+          const alpha = isHighlighted ? 0.6 : link.alpha;
+          const width = isHighlighted ? 2.0 : link.width;
+          
           if (link.type === 'dashed') {
-              drawDashedBezier(link.graphics, p0, p1, p2, p3, link.color, link.alpha, link.width);
+              drawDashedBezier(link.graphics, p0, p1, p2, p3, link.color, alpha, width);
           } else {
               link.graphics.moveTo(p0.x, p0.y);
               link.graphics.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
-              link.graphics.stroke({ width: link.width, color: link.color, alpha: link.alpha });
+              link.graphics.stroke({ width, color: link.color, alpha });
           }
       });
   };
@@ -612,6 +643,30 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
                 innerGroup.addChild(statusGlow);
             }
             innerGroup.addChild(statusDot);
+            
+            // 【v2】杂交物种标记🧬
+            const isHybrid = node.data.taxonomic_rank === 'hybrid' || 
+                            (node.data.hybrid_parent_codes && node.data.hybrid_parent_codes.length >= 2);
+            if (isHybrid) {
+                // 杂交标记背景
+                const hybridBadgeBg = new Graphics();
+                hybridBadgeBg.circle(-55, 0, 8);
+                hybridBadgeBg.fill({ color: COLORS.HYBRID, alpha: 0.3 });
+                innerGroup.addChild(hybridBadgeBg);
+                
+                // 杂交图标
+                const hybridIcon = new Text({
+                    text: '🧬',
+                    style: {
+                        fontFamily: 'system-ui, sans-serif',
+                        fontSize: 36,
+                    }
+                });
+                hybridIcon.scale.set(0.28);
+                hybridIcon.anchor.set(0.5, 0.5);
+                hybridIcon.position.set(-55, 0);
+                innerGroup.addChild(hybridIcon);
+            }
 
             const TEXT_SCALE = 0.25;
             const nameText = new Text({
@@ -716,11 +771,19 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         });
     });
 
-    const createLink = (sourceCode: string, targetCode: string, isSubspecies: boolean, isExtinct: boolean, isHybrid = false) => {
+    const createLink = (
+        sourceCode: string, 
+        targetCode: string, 
+        isSubspecies: boolean, 
+        isExtinct: boolean, 
+        isHybrid = false,
+        isSecondaryHybrid = false  // 次要亲本连线
+    ) => {
         const linkG = new Graphics();
         const color = isSubspecies ? COLORS.SUBSPECIES : (isHybrid ? COLORS.HYBRID : COLORS.LINK_NORMAL);
-        const alpha = isExtinct ? 0.25 : 0.5;
-        const width = isSubspecies ? 1.5 : 2.5;
+        // 次要杂交连线默认透明度更低
+        const alpha = isSecondaryHybrid ? 0.15 : (isExtinct ? 0.25 : 0.5);
+        const width = isSubspecies ? 1.5 : (isSecondaryHybrid ? 1.5 : 2.5);
         const type = (isSubspecies || isHybrid) ? 'dashed' : 'solid';
         
         const linkVis: LinkVisual = {
@@ -730,13 +793,15 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
             type,
             color,
             alpha,
-            width
+            width,
+            isSecondaryHybrid
         };
         
         linksLayer.addChild(linkG);
         linkVisualsRef.current.push(linkVis);
         
-        if (!isExtinct) {
+        // 次要杂交连线不添加粒子
+        if (!isExtinct && !isSecondaryHybrid) {
             const pG = new Graphics();
             pG.circle(0, 0, 2.5);
             pG.fill({ color: COLORS.ALIVE });
@@ -759,15 +824,25 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         createLink(source.data.lineage_code, target.data.lineage_code, isSubspecies, isExtinct);
     });
     
+    // 【v2】杂交物种：只绘制次要亲本连线（主亲本连线已通过普通谱系绘制）
+    // hybrid_parent_codes[0] = 主亲本（已作为parent_code）
+    // hybrid_parent_codes[1] = 次要亲本（需要额外绘制虚线）
     descendants.forEach(node => {
         if (node.data.hybrid_parent_codes && node.data.hybrid_parent_codes.length >= 2) {
-             const p0Code = node.data.hybrid_parent_codes[0];
-             const p1Code = node.data.hybrid_parent_codes[1];
-             
-             if (nodeVisualsRef.current.has(p0Code) && nodeVisualsRef.current.has(p1Code)) {
-                 createLink(p0Code, node.data.lineage_code, false, false, true);
-                 createLink(p1Code, node.data.lineage_code, false, false, true);
-             }
+            // 次要亲本编码
+            const secondaryParentCode = node.data.hybrid_parent_codes[1];
+            
+            if (nodeVisualsRef.current.has(secondaryParentCode)) {
+                // 绘制次要亲本连线（标记为isSecondaryHybrid）
+                createLink(
+                    secondaryParentCode, 
+                    node.data.lineage_code, 
+                    false, 
+                    false, 
+                    true,   // isHybrid
+                    true    // isSecondaryHybrid
+                );
+            }
         }
     });
 
@@ -775,6 +850,9 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
 
   // State Updates
   useEffect(() => {
+      // 更新activeNodeRef供updateLinks使用
+      activeNodeRef.current = hoveredNode?.lineage_code || selectedNode || null;
+      
       nodeVisualsRef.current.forEach((vis, code) => {
           const isSelected = code === selectedNode;
           const isHovered = code === hoveredNode?.lineage_code;
@@ -803,6 +881,11 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
           }
       });
   }, [selectedNode, hoveredNode, nodes]);
+  
+  // 同步showAllHybridLinks到ref
+  useEffect(() => {
+      showAllHybridLinksRef.current = showAllHybridLinks;
+  }, [showAllHybridLinks]);
 
   return (
     <div ref={containerRef} className="graph-container">
@@ -819,6 +902,8 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         onReset={resetView}
         onExpandAll={expandAll}
         onCollapseAll={collapseAll}
+        showHybridLinks={showAllHybridLinks}
+        onToggleHybridLinks={() => setShowAllHybridLinks(!showAllHybridLinks)}
       />
       
       {/* 统计信息 */}
@@ -899,15 +984,19 @@ function buildHierarchy(visibleNodes: LineageNode[], allNodes: LineageNode[]): d
 }
 
 function getNodeColorHex(node: LineageNode): number {
-  if (node.tier === "background") return COLORS.BACKGROUND;
-  switch (node.ecological_role) {
-    case "producer": return COLORS.PRODUCER;
-    case "herbivore": return COLORS.HERBIVORE;
-    case "carnivore": return COLORS.CARNIVORE;
-    case "omnivore": return COLORS.OMNIVORE;
-    case "mixotroph": return COLORS.MIXOTROPH;
-    case "decomposer": return COLORS.DECOMPOSER;
-    default: return COLORS.DEFAULT;
+  // 只使用营养级来判断颜色
+  const trophic = node.trophic_level ?? 1.0;
+  
+  if (trophic < 1.5) {
+    return COLORS.PRODUCER;      // T < 1.5: 生产者（绿色）
+  } else if (trophic < 2.0) {
+    return COLORS.MIXOTROPH;     // 1.5 ≤ T < 2.0: 混合营养（青色）
+  } else if (trophic < 2.8) {
+    return COLORS.HERBIVORE;     // 2.0 ≤ T < 2.8: 草食者（黄色）
+  } else if (trophic < 3.5) {
+    return COLORS.OMNIVORE;      // 2.8 ≤ T < 3.5: 杂食者（橙色）
+  } else {
+    return COLORS.CARNIVORE;     // T ≥ 3.5: 肉食者（红色）
   }
 }
 
@@ -959,12 +1048,22 @@ function drawDashedBezier(g: Graphics, p0: {x:number, y:number}, p1: {x:number, 
 }
 
 // 控制面板组件
-const ControlPanel = ({ onZoomIn, onZoomOut, onReset, onExpandAll, onCollapseAll }: {
+const ControlPanel = ({ 
+  onZoomIn, 
+  onZoomOut, 
+  onReset, 
+  onExpandAll, 
+  onCollapseAll,
+  showHybridLinks,
+  onToggleHybridLinks
+}: {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onReset: () => void;
   onExpandAll: () => void;
   onCollapseAll: () => void;
+  showHybridLinks: boolean;
+  onToggleHybridLinks: () => void;
 }) => (
   <div className="control-panel">
     <div className="control-section">
@@ -1005,6 +1104,19 @@ const ControlPanel = ({ onZoomIn, onZoomOut, onReset, onExpandAll, onCollapseAll
             <path d="M6 9l6 6 6-6"/>
             <path d="M6 15l6 6 6-6"/>
           </svg>
+        </button>
+      </div>
+    </div>
+    <div className="control-divider" />
+    <div className="control-section">
+      <span className="section-label">杂交</span>
+      <div className="control-buttons">
+        <button 
+          onClick={onToggleHybridLinks} 
+          title={showHybridLinks ? "隐藏杂交关系" : "显示所有杂交关系"}
+          className={showHybridLinks ? "active" : ""}
+        >
+          <span style={{ fontSize: '14px' }}>🧬</span>
         </button>
       </div>
     </div>
@@ -1059,37 +1171,54 @@ const StatsBar = ({ nodes, collapsedCount }: { nodes: LineageNode[]; collapsedCo
 };
 
 // Tooltip组件
-const Tooltip = ({ node, pos }: { node: LineageNode, pos: {x:number, y:number} }) => (
-    <div className="tooltip" style={{ left: `${pos.x + 20}px`, top: `${pos.y}px` }}>
-      <div className="tooltip-header">
-        <span className="tooltip-name">{node.common_name || "未知物种"}</span>
-        <span className={`tooltip-status ${node.state}`}>
-          {node.state === 'alive' ? '存活' : '灭绝'}
-        </span>
-      </div>
-      <div className="tooltip-code">{node.lineage_code}</div>
-      <div className="tooltip-tags">
-        <span className="tooltip-tag" style={{ 
-          background: `${getNodeColorStr(node)}20`,
-          borderColor: `${getNodeColorStr(node)}50`,
-          color: getNodeColorStr(node)
-        }}>
-          {getRoleName(node.ecological_role)}
-        </span>
-        <span className="tooltip-tag rank">{getRankName(node.taxonomic_rank)}</span>
-      </div>
-      <div className="tooltip-stats">
-        <div className="tooltip-stat">
-          <span className="stat-key">后代</span>
-          <span className="stat-val">{node.descendant_count || 0}</span>
+const Tooltip = ({ node, pos }: { node: LineageNode, pos: {x:number, y:number} }) => {
+    const isHybrid = node.taxonomic_rank === 'hybrid' || 
+                    (node.hybrid_parent_codes && node.hybrid_parent_codes.length >= 2);
+    
+    return (
+      <div className="tooltip" style={{ left: `${pos.x + 20}px`, top: `${pos.y}px` }}>
+        <div className="tooltip-header">
+          <span className="tooltip-name">
+            {isHybrid && <span style={{ marginRight: '4px' }}>🧬</span>}
+            {node.common_name || "未知物种"}
+          </span>
+          <span className={`tooltip-status ${node.state}`}>
+            {node.state === 'alive' ? '存活' : '灭绝'}
+          </span>
         </div>
-        <div className="tooltip-stat">
-          <span className="stat-key">诞生</span>
-          <span className="stat-val">T{node.birth_turn + 1}</span>
+        <div className="tooltip-code">{node.lineage_code}</div>
+        <div className="tooltip-tags">
+          <span className="tooltip-tag" style={{ 
+            background: `${getNodeColorStr(node)}20`,
+            borderColor: `${getNodeColorStr(node)}50`,
+            color: getNodeColorStr(node)
+          }}>
+            T{(node.trophic_level ?? 1.0).toFixed(1)} {getTrophicName(node.trophic_level ?? 1.0)}
+          </span>
+          <span className="tooltip-tag rank">{getRankName(node.taxonomic_rank)}</span>
+        </div>
+        {/* 杂交亲本信息 */}
+        {isHybrid && node.hybrid_parent_codes && node.hybrid_parent_codes.length >= 2 && (
+          <div className="tooltip-hybrid">
+            <span className="hybrid-label">亲本:</span>
+            <span className="hybrid-parents">
+              {node.hybrid_parent_codes[0]} × {node.hybrid_parent_codes[1]}
+            </span>
+          </div>
+        )}
+        <div className="tooltip-stats">
+          <div className="tooltip-stat">
+            <span className="stat-key">后代</span>
+            <span className="stat-val">{node.descendant_count || 0}</span>
+          </div>
+          <div className="tooltip-stat">
+            <span className="stat-key">诞生</span>
+            <span className="stat-val">T{node.birth_turn + 1}</span>
+          </div>
         </div>
       </div>
-    </div>
-);
+    );
+};
 
 // 图例组件
 const Legend = () => (
@@ -1115,22 +1244,26 @@ const Legend = () => (
         </div>
         
         <div className="legend-group">
-          <div className="legend-title">生态角色</div>
+          <div className="legend-title">营养级</div>
           <div className="legend-item">
             <div className="legend-bar" style={{ background: "#10b981" }} />
-            <span>生产者</span>
+            <span>T1 生产者</span>
+          </div>
+          <div className="legend-item">
+            <div className="legend-bar" style={{ background: "#22d3ee" }} />
+            <span>T1.5 混合营养</span>
           </div>
           <div className="legend-item">
             <div className="legend-bar" style={{ background: "#fbbf24" }} />
-            <span>食草动物</span>
-          </div>
-          <div className="legend-item">
-            <div className="legend-bar" style={{ background: "#f43f5e" }} />
-            <span>食肉动物</span>
+            <span>T2 草食动物</span>
           </div>
           <div className="legend-item">
             <div className="legend-bar" style={{ background: "#f97316" }} />
-            <span>杂食动物</span>
+            <span>T3 杂食动物</span>
+          </div>
+          <div className="legend-item">
+            <div className="legend-bar" style={{ background: "#f43f5e" }} />
+            <span>T4+ 肉食动物</span>
           </div>
         </div>
         
@@ -1153,6 +1286,14 @@ const Legend = () => (
 );
 
 // 辅助函数
+function getTrophicName(trophic: number): string {
+  if (trophic < 1.5) return '生产者';
+  if (trophic < 2.0) return '混养';
+  if (trophic < 2.8) return '草食';
+  if (trophic < 3.5) return '杂食';
+  return '肉食';
+}
+
 function getRoleName(role: string): string {
   const names: Record<string, string> = {
     producer: '生产者',
@@ -1176,15 +1317,19 @@ function getRankName(rank: string): string {
 }
 
 function getNodeColorStr(node: LineageNode): string {
-  if (node.tier === "background") return "#4b5563";
-  switch (node.ecological_role) {
-    case "producer": return "#10b981";
-    case "herbivore": return "#fbbf24";
-    case "carnivore": return "#f43f5e";
-    case "omnivore": return "#f97316";
-    case "mixotroph": return "#22d3ee";
-    case "decomposer": return "#a78bfa";
-    default: return "#ffffff";
+  // 只使用营养级来判断颜色
+  const trophic = node.trophic_level ?? 1.0;
+  
+  if (trophic < 1.5) {
+    return "#10b981";  // T < 1.5: 生产者（绿色）
+  } else if (trophic < 2.0) {
+    return "#22d3ee";  // 1.5 ≤ T < 2.0: 混合营养（青色）
+  } else if (trophic < 2.8) {
+    return "#fbbf24";  // 2.0 ≤ T < 2.8: 草食者（黄色）
+  } else if (trophic < 3.5) {
+    return "#f97316";  // 2.8 ≤ T < 3.5: 杂食者（橙色）
+  } else {
+    return "#f43f5e";  // T ≥ 3.5: 肉食者（红色）
   }
 }
 
@@ -1285,6 +1430,13 @@ const graphStyles = `
   
   .control-panel button:active {
     transform: translateY(0);
+  }
+  
+  .control-panel button.active {
+    background: rgba(217, 70, 239, 0.2);
+    border-color: rgba(217, 70, 239, 0.4);
+    color: #d946ef;
+    box-shadow: 0 0 12px rgba(217, 70, 239, 0.3);
   }
 
   /* 统计栏 */
@@ -1432,6 +1584,30 @@ const graphStyles = `
     background: rgba(139, 92, 246, 0.15);
     border-color: rgba(139, 92, 246, 0.3);
     color: #a78bfa;
+  }
+  
+  .tooltip-hybrid {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 8px 10px;
+    background: rgba(217, 70, 239, 0.1);
+    border: 1px solid rgba(217, 70, 239, 0.2);
+    border-radius: 6px;
+  }
+  
+  .hybrid-label {
+    font-size: 0.7rem;
+    color: rgba(217, 70, 239, 0.8);
+    font-weight: 600;
+  }
+  
+  .hybrid-parents {
+    font-size: 0.8rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: #d946ef;
+    font-weight: 600;
   }
   
   .tooltip-stats {

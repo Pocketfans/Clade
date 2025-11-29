@@ -283,6 +283,15 @@ function buildChildrenMap(nodes: LineageNode[]): Map<string, LineageNode[]> {
   return map;
 }
 
+// 根据营养级获取颜色
+function getTrophicColor(trophic: number): string {
+  if (trophic < 1.5) return "#10b981";  // 生产者
+  if (trophic < 2.0) return "#22d3ee";  // 混养
+  if (trophic < 2.8) return "#fbbf24";  // 草食
+  if (trophic < 3.5) return "#f97316";  // 杂食
+  return "#f43f5e";  // 肉食
+}
+
 function TreeNode({
   node,
   childrenMap,
@@ -297,15 +306,7 @@ function TreeNode({
   const children = childrenMap.get(node.lineage_code) ?? [];
   const isAlive = node.state === "alive";
   
-  const roleColors: Record<string, string> = {
-    producer: "#10b981",
-    herbivore: "#fbbf24",
-    carnivore: "#f43f5e",
-    omnivore: "#f97316",
-    mixotroph: "#22d3ee",
-    decomposer: "#a78bfa",
-  };
-  const roleColor = roleColors[node.ecological_role] || "#64748b";
+  const roleColor = getTrophicColor(node.trophic_level ?? 1.0);
   
   return (
     <div className="tree-node-wrapper" style={{ marginLeft: depth * 24 }}>
@@ -362,15 +363,7 @@ function NodeDetailCard({ node, onClose }: { node: LineageNode; onClose: () => v
       .finally(() => setLoading(false));
   }, [node.lineage_code]);
 
-  const roleColors: Record<string, string> = {
-    producer: "#10b981",
-    herbivore: "#fbbf24",
-    carnivore: "#f43f5e",
-    omnivore: "#f97316",
-    mixotroph: "#22d3ee",
-    decomposer: "#a78bfa",
-  };
-  const roleColor = roleColors[node.ecological_role] || "#64748b";
+  const roleColor = getTrophicColor(node.trophic_level ?? 1.0);
 
   return (
     <div className="detail-panel">

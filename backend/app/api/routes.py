@@ -981,6 +981,11 @@ def get_lineage_tree() -> LineageTree:
                     if other_code != species.lineage_code:
                         genetic_distances_to_siblings[other_code] = distance
         
+        # 获取营养级（用于前端族谱颜色判断）
+        trophic_level = getattr(species, 'trophic_level', 1.0)
+        if trophic_level is None or not isinstance(trophic_level, (int, float)):
+            trophic_level = 1.0
+        
         nodes.append(
             LineageNode(
                 lineage_code=species.lineage_code,
@@ -994,6 +999,7 @@ def get_lineage_tree() -> LineageTree:
                 extinction_turn=extinction_turn,
                 ecological_role=ecological_role,
                 tier=tier,
+                trophic_level=float(trophic_level),
                 speciation_type="normal",
                 current_population=current_pop,
                 peak_population=int(peak_pop),

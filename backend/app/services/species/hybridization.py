@@ -5,9 +5,10 @@
 - 可育性计算更平滑
 - 支持自动杂交检测
 
-【命名规范修复】
-- 杂交物种使用规范的lineage_code（基于公共祖先 + h后缀）
-- 正确设置parent_code以便挂在进化树正确位置
+【命名规范修复v2】
+- 杂交物种使用主亲本的lineage_code作为前缀（主亲本 + h + 数字）
+- parent_code设为主亲本，使杂交物种在族谱中挂在主亲本下
+- 主亲本选择规则：营养级低者优先 → 创建时间早者优先
 
 【AI集成】
 - 使用LLM生成杂交物种的名称、描述和属性
@@ -40,6 +41,41 @@ class HybridizationService:
     ):
         self.genetic_calculator = genetic_calculator
         self.router = router
+    
+    def _select_primary_parent(self, parent1: Species, parent2: Species) -> tuple[Species, Species]:
+        """选择主亲本和次要亲本
+        
+        主亲本选择规则（按优先级）：
+        1. 营养级较低的亲本优先（生产者更基础）
+        2. 营养级相同时，选择创建时间更早的亲本
+        3. 都相同时，按lineage_code字母顺序选择
+        
+        Returns:
+            (主亲本, 次要亲本)
+        """
+        t1 = getattr(parent1, 'trophic_level', 2.0) or 2.0
+        t2 = getattr(parent2, 'trophic_level', 2.0) or 2.0
+        
+        # 规则1：营养级较低者优先
+        if t1 < t2:
+            return parent1, parent2
+        elif t2 < t1:
+            return parent2, parent1
+        
+        # 规则2：创建时间更早者优先
+        c1 = getattr(parent1, 'created_turn', 0) or 0
+        c2 = getattr(parent2, 'created_turn', 0) or 0
+        
+        if c1 < c2:
+            return parent1, parent2
+        elif c2 < c1:
+            return parent2, parent1
+        
+        # 规则3：按lineage_code字母顺序
+        if parent1.lineage_code <= parent2.lineage_code:
+            return parent1, parent2
+        else:
+            return parent2, parent1
     
     def can_hybridize(self, sp1: Species, sp2: Species, genetic_distance: float = None) -> tuple[bool, float]:
         """判断两个物种能否杂交
@@ -111,13 +147,12 @@ class HybridizationService:
         if not can_hybrid:
             return None
         
-        # 【命名规范】生成规范的lineage_code
-        # 找到公共祖先编码，在其下添加h后缀
-        common_ancestor = self._find_common_ancestor_code(
-            parent1.lineage_code, parent2.lineage_code
-        )
+        # 【v2】选择主亲本：营养级低优先 → 创建时间早优先
+        primary_parent, secondary_parent = self._select_primary_parent(parent1, parent2)
+        
+        # 【v2】使用主亲本编码作为杂交种编码前缀
         hybrid_code = self._generate_hybrid_code(
-            common_ancestor, existing_codes or set()
+            primary_parent.lineage_code, existing_codes or set()
         )
         
         hybrid_traits = self._mix_traits(parent1, parent2)
@@ -136,9 +171,11 @@ class HybridizationService:
         latin_name = self._generate_hybrid_latin_name(parent1, parent2)
         common_name = self._generate_hybrid_common_name(parent1, parent2)
         
-        # 【修复】设置parent_code为公共祖先，这样杂交物种会挂在正确的位置
-        # 如果公共祖先是空的（极少情况），则使用第一个亲本的parent_code
-        parent_code = common_ancestor if common_ancestor else parent1.parent_code
+        # 【v2】parent_code设为主亲本，杂交物种挂在主亲本下
+        parent_code = primary_parent.lineage_code
+        
+        # 【v2】hybrid_parent_codes：主亲本在前，次要亲本在后
+        hybrid_parent_codes = [primary_parent.lineage_code, secondary_parent.lineage_code]
         
         return Species(
             lineage_code=hybrid_code,
@@ -155,9 +192,9 @@ class HybridizationService:
             trophic_level=hybrid_trophic,
             organs=hybrid_organs,
             capabilities=hybrid_capabilities,
-            genus_code=parent1.genus_code,
+            genus_code=primary_parent.genus_code,
             taxonomic_rank="hybrid",
-            hybrid_parent_codes=[parent1.lineage_code, parent2.lineage_code],
+            hybrid_parent_codes=hybrid_parent_codes,
             hybrid_fertility=fertility,
             diet_type=diet_type,
             prey_species=prey_species,
@@ -191,12 +228,12 @@ class HybridizationService:
         if genetic_distance is None:
             genetic_distance = self.genetic_calculator.calculate_distance(parent1, parent2)
         
-        # 生成规范的lineage_code
-        common_ancestor = self._find_common_ancestor_code(
-            parent1.lineage_code, parent2.lineage_code
-        )
+        # 【v2】选择主亲本：营养级低优先 → 创建时间早优先
+        primary_parent, secondary_parent = self._select_primary_parent(parent1, parent2)
+        
+        # 【v2】使用主亲本编码作为杂交种编码前缀
         hybrid_code = self._generate_hybrid_code(
-            common_ancestor, existing_codes or set()
+            primary_parent.lineage_code, existing_codes or set()
         )
         
         # 尝试使用AI生成杂交物种信息
@@ -255,7 +292,7 @@ class HybridizationService:
                 habitat_type = ai_habitat
             
             logger.info(
-                f"[杂交AI] {parent1.common_name} × {parent2.common_name} → "
+                f"[杂交AI] {primary_parent.common_name} × {secondary_parent.common_name} → "
                 f"{common_name} ({latin_name})"
             )
         else:
@@ -265,12 +302,15 @@ class HybridizationService:
             description = self._generate_hybrid_description(parent1, parent2)
             
             logger.info(
-                f"[杂交规则] {parent1.common_name} × {parent2.common_name} → "
+                f"[杂交规则] {primary_parent.common_name} × {secondary_parent.common_name} → "
                 f"{common_name} (AI未返回有效数据)"
             )
         
-        # 设置parent_code
-        parent_code = common_ancestor if common_ancestor else parent1.parent_code
+        # 【v2】parent_code设为主亲本，杂交物种挂在主亲本下
+        parent_code = primary_parent.lineage_code
+        
+        # 【v2】hybrid_parent_codes：主亲本在前，次要亲本在后
+        hybrid_parent_codes = [primary_parent.lineage_code, secondary_parent.lineage_code]
         
         return Species(
             lineage_code=hybrid_code,
@@ -287,9 +327,9 @@ class HybridizationService:
             trophic_level=hybrid_trophic,
             organs=hybrid_organs,
             capabilities=hybrid_capabilities,
-            genus_code=parent1.genus_code,
+            genus_code=primary_parent.genus_code,
             taxonomic_rank="hybrid",
-            hybrid_parent_codes=[parent1.lineage_code, parent2.lineage_code],
+            hybrid_parent_codes=hybrid_parent_codes,
             hybrid_fertility=fertility,
             diet_type=diet_type,
             prey_species=prey_species,
@@ -385,20 +425,24 @@ class HybridizationService:
         
         return path
     
-    def _generate_hybrid_code(self, ancestor_code: str, existing_codes: set[str]) -> str:
+    def _generate_hybrid_code(self, parent_code: str, existing_codes: set[str]) -> str:
         """生成杂交种的编码
         
-        使用格式: 祖先编码 + h + 数字
-        例如: B1h1, B1h2, A1h1
+        【v2】使用格式: 主亲本编码 + h + 数字
+        例如: A1h1, A1h2, B1h1（挂在主亲本下）
+        
+        Args:
+            parent_code: 主亲本的lineage_code
+            existing_codes: 已存在的编码集合
         """
-        if not ancestor_code:
-            # 无公共祖先时，使用H作为基础
-            ancestor_code = "H"
+        if not parent_code:
+            # 无主亲本时（理论上不应发生），使用H作为基础
+            parent_code = "H"
         
         # 尝试生成唯一编码
         idx = 1
         while True:
-            hybrid_code = f"{ancestor_code}h{idx}"
+            hybrid_code = f"{parent_code}h{idx}"
             if hybrid_code not in existing_codes:
                 return hybrid_code
             idx += 1

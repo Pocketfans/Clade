@@ -218,6 +218,7 @@ export interface LineageNode {
   extinction_turn?: number | null;
   ecological_role: string;
   tier?: string | null;
+  trophic_level: number;  // 营养级，用于确定族谱颜色
   speciation_type: string;
   current_population: number;
   peak_population: number;

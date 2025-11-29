@@ -166,6 +166,7 @@ class LineageNode(BaseModel):
     extinction_turn: int | None = None
     ecological_role: str = "unknown"
     tier: str | None = None
+    trophic_level: float = 1.0  # 营养级，用于确定族谱颜色
     speciation_type: str = "normal"
     current_population: int = 0
     peak_population: int = 0
