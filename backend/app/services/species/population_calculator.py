@@ -92,49 +92,72 @@ class PopulationCalculator:
         body_length_cm: float,
         body_weight_g: float | None = None,
         habitat_quality: float = 1.0,
+        trophic_level: float = 1.0,
     ) -> int:
         """获取推荐的初始种群数量。
         
-        【平衡修复】提高微生物初始种群，确保有足够的生存基数
-        - 微生物（<0.1mm）：50万-100万（高繁殖率需要更大基数）
-        - 小型微生物（0.1-1mm）：10万-50万
-        - 小型生物（1mm-10cm）：1万-10万
-        - 中型生物（10cm-1m）：5000-2万
-        - 大型生物（>1m）：1000-5000
+        【平衡修复】基于生态学原理计算差异化的初始种群
+        - 生产者比消费者有更大的种群基数
+        - 体重影响种群规模（重的个体种群小）
+        - 添加随机变化避免完全相同
+        
+        营养级影响：
+        - 生产者（营养级1）：基数 × 1.5
+        - 一级消费者（营养级2）：基数 × 1.0
+        - 二级消费者（营养级3+）：基数 × 0.6
         """
         import math
+        import random
         
         # 基于体长确定初始规模
-        # 使用对数缩放：体长越大，初始种群越小
-        log_length = math.log10(max(0.001, body_length_cm))  # -3 到 3 范围
+        log_length = math.log10(max(0.001, body_length_cm))
         
-        # 【修复】提高微生物基数
-        # 微生物需要更大的种群基数来抵御随机波动
+        # 基础种群（体长越小，基础值越大）
         if body_length_cm < 0.01:  # <0.1mm，真正的微生物
-            base_initial = 500_000  # 50万
+            base_initial = 600_000
         elif body_length_cm < 0.1:  # 0.1-1mm，小型微生物
-            base_initial = 100_000  # 10万
+            base_initial = 150_000
         elif body_length_cm < 1.0:  # 1-10mm，小型生物
-            base_initial = 30_000   # 3万
+            base_initial = 50_000
         elif body_length_cm < 10.0:  # 1-10cm
-            base_initial = 10_000   # 1万
+            base_initial = 15_000
         elif body_length_cm < 100.0:  # 10cm-1m
-            base_initial = 5_000    # 5千
+            base_initial = 5_000
         else:  # >1m
-            base_initial = 2_000    # 2千
+            base_initial = 2_000
         
-        # 缩放因子：体长每增加10倍，初始种群减少到1/2（比原来1/3更温和）
-        scale = 2.0 ** (-max(0, log_length))  # 只对大型生物应用缩放
-        initial_pop = int(base_initial * scale)
+        # 【新增】营养级修正：生产者种群更大，高级消费者更小
+        if trophic_level <= 1.0:
+            trophic_modifier = 1.5  # 生产者
+        elif trophic_level <= 2.0:
+            trophic_modifier = 1.0  # 一级消费者
+        else:
+            trophic_modifier = 0.6  # 高级消费者
+        
+        # 【新增】体重修正：同体长下，更重的个体种群更小
+        weight_modifier = 1.0
+        if body_weight_g is not None and body_weight_g > 0:
+            # 根据体长估算"标准"体重
+            expected_weight = (body_length_cm ** 3) * 0.1
+            if expected_weight > 0:
+                weight_ratio = body_weight_g / expected_weight
+                # 比标准重2倍 -> 种群减少到0.7
+                # 比标准轻一半 -> 种群增加到1.3
+                weight_modifier = 1.0 / (weight_ratio ** 0.25)
+                weight_modifier = max(0.5, min(1.5, weight_modifier))
+        
+        # 【新增】随机变化：±20%，避免完全相同
+        random_factor = 0.8 + random.random() * 0.4  # 0.8 - 1.2
+        
+        # 计算最终值
+        initial_pop = int(base_initial * trophic_modifier * weight_modifier * random_factor)
         
         # 应用栖息地质量
         habitat_quality = max(0.5, min(2.0, habitat_quality))
         initial_pop = int(initial_pop * habitat_quality)
         
-        # 边界限制
-        # 最小：2,000（从1000提高，保证物种有足够的生存基数）
-        # 最大：1,000,000（从500,000提高，允许微生物有更大种群）
-        initial_pop = max(2_000, min(initial_pop, 1_000_000))
+        # 边界限制（扩大范围以体现差异）
+        initial_pop = max(2_000, min(initial_pop, 2_000_000))
         
         return initial_pop
     

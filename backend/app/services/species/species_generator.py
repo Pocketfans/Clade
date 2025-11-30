@@ -202,14 +202,15 @@ class SpeciesGenerator:
         if "morphology_stats" not in data:
             data["morphology_stats"] = {}
         
-        # 根据体型计算合理的种群数量
+        # 根据体型和营养级计算合理的种群数量
         # 【修复】检查 population 是否存在且为正数，否则重新计算
         current_pop = data["morphology_stats"].get("population")
         if current_pop is None or (isinstance(current_pop, (int, float)) and current_pop <= 0):
             body_length = data["morphology_stats"].get("body_length_cm", 1.0)
             body_weight = data["morphology_stats"].get("body_weight_g")
+            trophic_level = data.get("trophic_level", 1.0)
             data["morphology_stats"]["population"] = self.pop_calc.get_initial_population(
-                body_length, body_weight
+                body_length, body_weight, trophic_level=trophic_level
             )
         
         if "abstract_traits" not in data:
