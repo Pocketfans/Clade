@@ -81,8 +81,17 @@ class EcologicalIntelligenceStage:
         ctx.emit_event("stage", "🧠 生态智能体评估", "AI")
         
         # 检查是否有物种需要评估
-        if not ctx.species_batch or not ctx.combined_results:
+        # 注意：此阶段在初步死亡率(50)之后、最终死亡率之前运行
+        # 所以应检查 preliminary_mortality 而非 combined_results
+        mortality_available = getattr(ctx, 'combined_results', None) or getattr(ctx, 'preliminary_mortality', None)
+        if not ctx.species_batch:
             logger.info("[生态智能体] 无物种需要评估")
+            ctx.biological_assessment_results = {}
+            ctx.modifier_applicator = ModifierApplicator()
+            return
+        
+        if not mortality_available:
+            logger.warning("[生态智能体] 没有死亡率数据，跳过评估")
             ctx.biological_assessment_results = {}
             ctx.modifier_applicator = ModifierApplicator()
             return
@@ -106,8 +115,9 @@ class EcologicalIntelligenceStage:
             
             # Step 1: 分档
             # 优先使用 combined_results（最终死亡率），如果不可用则使用 preliminary_mortality（初步死亡率）
-            mortality_data = getattr(ctx, 'combined_results', None) or ctx.preliminary_mortality
-            logger.info("[生态智能体] Step 1: 物种分档...")
+            mortality_data = getattr(ctx, 'combined_results', None) or getattr(ctx, 'preliminary_mortality', [])
+            using_combined = bool(getattr(ctx, 'combined_results', None))
+            logger.info(f"[生态智能体] Step 1: 物种分档... (使用 {'combined_results' if using_combined else 'preliminary_mortality'})")
             partition = intelligence.partition_species(
                 species_list=ctx.species_batch,
                 mortality_results=mortality_data,
