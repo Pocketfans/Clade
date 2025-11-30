@@ -1049,7 +1049,18 @@ class PopulationUpdateStage(BaseStage):
             
             # 【关键】通过 ModifierApplicator 应用承载力 K 修正
             # 承载力限制最终种群上限
-            base_carrying_capacity = item.species.morphology_stats.get("carrying_capacity", 1000000)
+            # 【修复】动态计算承载力，不再使用硬编码默认值
+            from ..services.species.population_calculator import PopulationCalculator
+            stored_k = item.species.morphology_stats.get("carrying_capacity")
+            if stored_k and stored_k > 0:
+                base_carrying_capacity = stored_k
+            else:
+                # 基于体型动态计算承载力
+                body_length = item.species.morphology_stats.get("body_length_cm", 1.0)
+                body_weight = item.species.morphology_stats.get("body_weight_g")
+                _, base_carrying_capacity = PopulationCalculator.calculate_reasonable_population(
+                    body_length, body_weight
+                )
             if use_modifier:
                 adjusted_k = modifier.apply(code, base_carrying_capacity, "carrying_capacity")
             else:
