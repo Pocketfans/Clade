@@ -42,16 +42,19 @@ class ReproductionService:
     - t: 经历的代数 (Generations)
     """
     
+    # JavaScript安全整数上限，作为技术上限而非生态上限
+    MAX_SAFE_POPULATION = 9_007_199_254_740_991
+    
     def __init__(self, 
-                 global_carrying_capacity: int = 1_000_000_000_000, 
+                 global_carrying_capacity: int = MAX_SAFE_POPULATION, 
                  turn_years: int = 500_000,
                  enable_regional_capacity: bool = True):  # P3: 默认启用区域承载力
         """初始化繁殖服务。
         
         Args:
-            global_carrying_capacity: 全球总承载力（生态负荷单位kg，而非绝对个体数）
-                建议值：1万亿kg = 1 Gt（地球总生物量约550 Gt，模拟单个地块约占1/500）
-                注意：这是生物量单位，不是个体数量
+            global_carrying_capacity: 全球总承载力（仅作为技术安全上限）
+                实际种群由生态因素软性限制：竞争、捕食、资源、环境等
+                默认值：JavaScript安全整数上限 ≈ 9千万亿
             turn_years: 每回合代表的年数（默认50万年）
             enable_regional_capacity: 是否启用区域承载力（P3）
                 - True: 使用地块级承载力（默认，更精确）✅
@@ -203,16 +206,9 @@ class ReproductionService:
                 resource_saturation=saturation
             )
             
-            # 确保不超过全球承载力的硬性限制
-            # 单一物种最多占全球承载力的20%（更合理的生态上限）
-            # 【关键修复】使用JavaScript安全整数上限，避免前端精度丢失
-            MAX_SAFE_POPULATION = 9_007_199_254_740_991  # JavaScript安全整数上限
-            max_single_species = min(int(self.global_carrying_capacity * 0.2), MAX_SAFE_POPULATION)
-            if new_pop > max_single_species:
-                logger.warning(f"[种群上限] {species.common_name} 超过单物种上限: {new_pop} -> {max_single_species}")
-                new_pop = max_single_species
-            # 额外保护：确保不超过JavaScript安全整数上限
-            new_pop = min(new_pop, MAX_SAFE_POPULATION)
+            # 【移除硬上限】只保留技术安全限制（JavaScript整数上限）
+            # 生态上限由竞争、捕食、资源等因素决定，不再使用20%硬性限制
+            new_pop = min(new_pop, self.MAX_SAFE_POPULATION)
             
             # 记录日志
             if abs(new_pop - current_pop) / max(current_pop, 1) > 0.5:
@@ -385,15 +381,9 @@ class ReproductionService:
             # 7. 汇总各地块的种群
             new_total_pop = sum(new_tile_populations.values())
             
-            # 8. 全局上限检查（防止单一物种过度繁殖）
-            # 【关键修复】使用JavaScript安全整数上限，避免前端精度丢失
-            MAX_SAFE_POPULATION = 9_007_199_254_740_991  # JavaScript安全整数上限
-            max_single_species = min(int(self.global_carrying_capacity * 0.2), MAX_SAFE_POPULATION)
-            if new_total_pop > max_single_species:
-                logger.warning(f"[P3种群上限] {species.common_name} 超过单物种上限: {new_total_pop:,} -> {max_single_species:,}")
-                new_total_pop = max_single_species
-            # 额外保护：确保不超过JavaScript安全整数上限
-            new_total_pop = min(new_total_pop, MAX_SAFE_POPULATION)
+            # 【移除硬上限】只保留技术安全限制
+            # 生态上限由地块资源、竞争、捕食等因素决定
+            new_total_pop = min(new_total_pop, self.MAX_SAFE_POPULATION)
             
             # 记录日志
             if abs(new_total_pop - current_total_pop) / max(current_total_pop, 1) > 0.5:

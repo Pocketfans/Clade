@@ -33,7 +33,9 @@ class Settings(BaseSettings):
     exports_dir: str = str(PROJECT_ROOT / "data/exports")
     saves_dir: str = str(PROJECT_ROOT / "data/saves")
     cache_dir: str = str(PROJECT_ROOT / "data/cache")
-    global_carrying_capacity: int = 10_000_000_000  # 全球承载力100亿（生物量/生态负荷单位，平衡调整）
+    # 全球承载力：使用JavaScript安全整数上限，让生态因素决定实际软上限
+    # 9_007_199_254_740_991 ≈ 9千万亿，远超地球生物量，但数值安全
+    global_carrying_capacity: int = 9_007_199_254_740_991
     background_population_threshold: int = 50_000
     mass_extinction_threshold: float = 0.6
     background_promotion_quota: int = 3

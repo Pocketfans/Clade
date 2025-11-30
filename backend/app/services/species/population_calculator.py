@@ -82,11 +82,12 @@ class PopulationCalculator:
         min_biomass_kg = int(min_biomass_kg * habitat_quality)
         max_biomass_kg = int(max_biomass_kg * habitat_quality)
         
-        # 【平衡修复】更保守的边界
+        # 【移除硬上限】让生态因素决定实际承载力
         # 最小：1,000 kg（保证物种有一定规模）
-        # 最大：10^9 kg = 10亿 kg（单物种上限，避免数值爆炸）
-        min_biomass_kg = max(1_000, min(min_biomass_kg, int(1e9)))
-        max_biomass_kg = max(10_000, min(max_biomass_kg, int(1e9)))
+        # 最大：无硬上限，由竞争、资源、捕食等生态因素软性限制
+        MAX_SAFE = 9_007_199_254_740_991  # JavaScript安全整数
+        min_biomass_kg = max(1_000, min_biomass_kg)
+        max_biomass_kg = max(10_000, min(max_biomass_kg, MAX_SAFE))
         
         return (min_biomass_kg, max_biomass_kg)
     
