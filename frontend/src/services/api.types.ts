@@ -336,6 +336,9 @@ export interface UIConfig {
   load_balance_enabled?: boolean;     // 是否启用多服务商负载均衡
   load_balance_strategy?: "round_robin" | "random" | "least_latency";  // 负载均衡策略
 
+  // 8. AI 叙事开关
+  ai_narrative_enabled?: boolean;     // 是否启用 AI 生成物种叙事（默认关闭）
+
   // --- Legacy Fields (For backward compatibility types) ---
   ai_provider?: string | null;
   ai_model?: string | null;

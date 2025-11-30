@@ -1637,6 +1637,32 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
               
               <div className="memory-layout">
                 <div className="memory-main">
+                  {/* AI 叙事开关 */}
+                  <div className="feature-toggle-card">
+                    <div className="toggle-card-content">
+                      <div className="toggle-info">
+                        <span className="toggle-icon">📖</span>
+                        <div className="toggle-text">
+                          <span className="toggle-title">AI 物种叙事</span>
+                          <span className="toggle-desc">为每个物种生成演化故事和描述性文本</span>
+                        </div>
+                      </div>
+                      <label className="toggle-switch">
+                        <input 
+                          type="checkbox" 
+                          checked={form.ai_narrative_enabled ?? false}
+                          onChange={(e) => dispatch({ type: 'UPDATE_GLOBAL', field: 'ai_narrative_enabled', value: e.target.checked })}
+                        />
+                        <span className="toggle-slider"></span>
+                      </label>
+                    </div>
+                    {!form.ai_narrative_enabled && (
+                      <div className="toggle-hint">
+                        💡 关闭后可节省 API 调用，推演速度更快
+                      </div>
+                    )}
+                  </div>
+
                   <div className="tip-box info">
                     💡 超时时间决定了系统等待 AI 响应的最长时间。如果 AI 在超时前未能完成，系统将使用规则降级处理。
                     <br/><br/>

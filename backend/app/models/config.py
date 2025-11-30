@@ -70,6 +70,9 @@ class UIConfig(BaseModel):
     load_balance_enabled: bool = False   # 是否启用多服务商负载均衡
     load_balance_strategy: str = "round_robin"  # 负载均衡策略: round_robin, random, least_latency
     
+    # 8. AI 叙事开关
+    ai_narrative_enabled: bool = False   # 是否启用 AI 生成物种叙事（默认关闭，节省 API 调用）
+    
     # --- Legacy Fields (Keep for migration) ---
     ai_provider: str | None = None
     ai_model: str | None = None

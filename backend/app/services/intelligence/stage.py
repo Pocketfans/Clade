@@ -76,9 +76,17 @@ class EcologicalIntelligenceStage:
         from .llm_orchestrator import LLMOrchestrator
         from .modifier_applicator import ModifierApplicator
         from .config import load_config_from_yaml
+        from ...repositories.environment_repository import environment_repository
+        from pathlib import Path
+        from ...core.config import settings
         
         logger.info("开始生态智能体评估...")
         ctx.emit_event("stage", "🧠 生态智能体评估", "AI")
+        
+        # 【新增】读取 UI 配置，检查 AI 叙事开关
+        ui_config_path = Path(settings.ui_config_path)
+        ui_config = environment_repository.load_ui_config(ui_config_path)
+        narrative_enabled = getattr(ui_config, 'ai_narrative_enabled', False)
         
         # 检查是否有物种需要评估
         # 注意：此阶段在初步死亡率(50)之后、最终死亡率之前运行
@@ -193,7 +201,14 @@ class EcologicalIntelligenceStage:
                     if code not in ctx.biological_assessment_results:
                         ctx.biological_assessment_results[code] = assessment
             
-            # Step 5: 设置 ModifierApplicator
+            # Step 5: 清除叙事（如果禁用）
+            if not narrative_enabled:
+                for code, assessment in ctx.biological_assessment_results.items():
+                    assessment.narrative = ""
+                    assessment.headline = ""
+                logger.info("[生态智能体] AI 叙事已禁用，已清除叙事内容")
+            
+            # Step 6: 设置 ModifierApplicator
             modifier.set_assessments(ctx.biological_assessment_results)
             ctx.modifier_applicator = modifier
             
