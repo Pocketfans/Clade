@@ -947,23 +947,17 @@ def get_lineage_tree() -> LineageTree:
     from sqlmodel import select, func
     
     for species in all_species:
-        # 获取该物种的峰值人口和当前人口
+        # 【修复】当前种群直接从 morphology_stats 获取，与物种图鉴保持一致
+        current_pop = int(species.morphology_stats.get("population", 0) or 0)
+        
+        # 峰值种群：从快照表获取历史最大值，与当前值取较大者
         with session_scope() as session:
-            # 当前人口 (最新回合)
-            latest_pop_query = (
-                select(PopulationSnapshot)
-                .where(PopulationSnapshot.species_id == species.id)
-                .order_by(PopulationSnapshot.turn_index.desc())
-                .limit(1)
-            )
-            latest_pop = session.exec(latest_pop_query).first()
-            current_pop = latest_pop.count if latest_pop else 0
-            
-            # 峰值人口
             peak_query = select(func.max(PopulationSnapshot.count)).where(
                 PopulationSnapshot.species_id == species.id
             )
-            peak_pop = session.exec(peak_query).first() or 0
+            historical_peak = session.exec(peak_query).first() or 0
+            # 确保峰值不小于当前值
+            peak_pop = max(int(historical_peak), current_pop)
         
         # 推断生态角色：基于营养级
         ecological_role = _infer_ecological_role(species)
