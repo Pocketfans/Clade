@@ -862,7 +862,7 @@ class MapStateManager:
                     consumer_tile_populations={item.tile_id: consumer_pop} if consumer_pop > 0 else None,
                 )
                 
-                from ..schemas.responses import SuitabilityBreakdown
+                from ...schemas.responses import SuitabilityBreakdown
                 breakdown = SuitabilityBreakdown(
                     temp_score=round(breakdown_data["temp_score"], 3),
                     humidity_score=round(breakdown_data["humidity_score"], 3),
