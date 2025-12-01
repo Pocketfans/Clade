@@ -38,11 +38,17 @@ class FocusBatchProcessor:
             for item in chunk
         ]
         
-        # 【修复】添加超时保护，防止批次请求卡住
+        # 【优化】使用带心跳的调用
+        from ...ai.streaming_helper import invoke_with_heartbeat
+        
         try:
-            response = await asyncio.wait_for(
-                self.router.ainvoke("focus_batch", {"batch": payload}),
-                timeout=90  # 批次90秒超时
+            response = await invoke_with_heartbeat(
+                router=self.router,
+                capability="focus_batch",
+                payload={"batch": payload},
+                task_name=f"Focus批次[{len(chunk)}物种]",
+                timeout=90,
+                heartbeat_interval=2.0,
             )
         except asyncio.TimeoutError:
             logger.error(f"[Focus] 批次AI调用超时 (包含{len(chunk)}个物种)")

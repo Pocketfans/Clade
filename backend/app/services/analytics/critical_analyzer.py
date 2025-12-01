@@ -34,11 +34,17 @@ class CriticalAnalyzer:
             },
         }
         
-        # 【修复】添加超时保护，防止单个请求卡住
+        # 【优化】使用带心跳的调用
+        from ...ai.streaming_helper import invoke_with_heartbeat
+        
         try:
-            response = await asyncio.wait_for(
-                self.router.ainvoke("critical_detail", payload),
-                timeout=60  # 单个物种60秒超时
+            response = await invoke_with_heartbeat(
+                router=self.router,
+                capability="critical_detail",
+                payload=payload,
+                task_name=f"Critical分析[{item.species.common_name[:8]}]",
+                timeout=60,
+                heartbeat_interval=2.0,
             )
             return response
         except asyncio.TimeoutError:

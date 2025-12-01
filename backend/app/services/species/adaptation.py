@@ -376,16 +376,18 @@ class AdaptationService:
                 pressure_context=pressure_context
             )
 
-        # 【优化】使用非流式调用，避免流式传输卡住
-        # 【修复】添加硬超时保护，防止无限等待
+        # 【优化】使用带心跳的调用
+        from ...ai.streaming_helper import acall_with_heartbeat
+        
         try:
-            full_content = await asyncio.wait_for(
-                self.router.acall_capability(
-                    capability="narrative",
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"}
-                ),
-                timeout=60  # 硬超时60秒
+            full_content = await acall_with_heartbeat(
+                router=self.router,
+                capability="narrative",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                task_name=f"描述更新[{species.common_name[:8]}]",
+                timeout=60,
+                heartbeat_interval=2.0,
             )
         except asyncio.TimeoutError:
             logger.error(f"[描述更新] {species.common_name} 超时（60秒）")
@@ -986,16 +988,18 @@ class AdaptationService:
             organs_summary=organs_summary,
         )
         
-        # 【优化】使用非流式调用，避免流式传输卡住
-        # 【修复】添加硬超时保护，防止无限等待
+        # 【优化】使用带心跳的调用
+        from ...ai.streaming_helper import acall_with_heartbeat
+        
         try:
-            full_content = await asyncio.wait_for(
-                self.router.acall_capability(
-                    capability="pressure_adaptation",
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"}
-                ),
-                timeout=90  # 硬超时90秒
+            full_content = await acall_with_heartbeat(
+                router=self.router,
+                capability="pressure_adaptation",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                task_name=f"LLM适应[{species.common_name[:8]}]",
+                timeout=90,
+                heartbeat_interval=2.0,
             )
         except asyncio.TimeoutError:
             logger.error(f"[LLM适应] {species.common_name} 超时（90秒）")

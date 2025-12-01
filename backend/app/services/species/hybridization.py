@@ -367,10 +367,16 @@ class HybridizationService:
             "hybrid_code": hybrid_code,
         }
         
+        from ...ai.streaming_helper import invoke_with_heartbeat
+        
         try:
-            response = await asyncio.wait_for(
-                self.router.ainvoke("hybridization", payload),
-                timeout=30  # 30秒超时
+            response = await invoke_with_heartbeat(
+                router=self.router,
+                capability="hybridization",
+                payload=payload,
+                task_name=f"杂交[{sp1.common_name[:6]}×{sp2.common_name[:6]}]",
+                timeout=30,
+                heartbeat_interval=2.0,
             )
             content = response.get("content") if isinstance(response, dict) else None
             if isinstance(content, dict):
@@ -1129,10 +1135,16 @@ class HybridizationService:
             "chimera_code": chimera_code,
         }
         
+        from ...ai.streaming_helper import invoke_with_heartbeat
+        
         try:
-            response = await asyncio.wait_for(
-                self.router.ainvoke("forced_hybridization", payload),
-                timeout=45  # 强行杂交需要更多创意，给更长时间
+            response = await invoke_with_heartbeat(
+                router=self.router,
+                capability="forced_hybridization",
+                payload=payload,
+                task_name=f"嵌合体[{parent1.common_name[:5]}+{parent2.common_name[:5]}]",
+                timeout=45,
+                heartbeat_interval=2.0,
             )
             content = response.get("content") if isinstance(response, dict) else None
             if isinstance(content, dict):

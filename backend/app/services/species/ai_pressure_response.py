@@ -1289,11 +1289,17 @@ class AIPressureResponseService:
             
             prompt = PRESSURE_RESPONSE_PROMPTS["pressure_assessment"].format(**prompt_params)
             
-            # 调用AI（使用 acall_capability）
-            full_content = await self.router.acall_capability(
-                capability="pressure_adaptation",  # 复用已有的capability
+            # 【优化】使用带心跳的调用
+            from ...ai.streaming_helper import acall_with_heartbeat
+            full_content = await acall_with_heartbeat(
+                router=self.router,
+                capability="pressure_adaptation",
                 messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                task_name=f"压力评估[{species.common_name[:8]}]",
+                timeout=60,
+                heartbeat_interval=2.0,
+                event_callback=self._emit_event if self._event_callback else None,
             )
             
             if stream_callback and full_content:
@@ -1368,11 +1374,17 @@ class AIPressureResponseService:
                 species_list="\n\n".join(species_info_list)
             )
             
-            # 调用AI（使用 acall_capability）
-            full_content = await self.router.acall_capability(
-                capability="pressure_adaptation",  # 复用已有的capability
+            # 【优化】使用带心跳的调用
+            from ...ai.streaming_helper import acall_with_heartbeat
+            full_content = await acall_with_heartbeat(
+                router=self.router,
+                capability="pressure_adaptation",
                 messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                task_name=f"批量压力评估[{len(species_to_assess)}物种]",
+                timeout=90,
+                heartbeat_interval=2.0,
+                event_callback=self._emit_event if self._event_callback else None,
             )
             
             if stream_callback and full_content:
@@ -1588,10 +1600,17 @@ class AIPressureResponseService:
                 environment_context=environment_context,
             )
             
-            full_content = await self.router.acall_capability(
+            # 【优化】使用带心跳的调用
+            from ...ai.streaming_helper import acall_with_heartbeat
+            full_content = await acall_with_heartbeat(
+                router=self.router,
                 capability="pressure_adaptation",
                 messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                task_name=f"互动[{species_a.common_name[:5]}↔{species_b.common_name[:5]}]",
+                timeout=60,
+                heartbeat_interval=2.0,
+                event_callback=self._emit_event if self._event_callback else None,
             )
             
             if stream_callback and full_content:
@@ -1722,10 +1741,17 @@ class AIPressureResponseService:
                 alternative_food="根据营养级自动搜索",
             )
             
-            full_content = await self.router.acall_capability(
+            # 【优化】使用带心跳的调用
+            from ...ai.streaming_helper import acall_with_heartbeat
+            full_content = await acall_with_heartbeat(
+                router=self.router,
                 capability="pressure_adaptation",
                 messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                task_name=f"紧急响应[{species.common_name[:8]}]",
+                timeout=60,
+                heartbeat_interval=2.0,
+                event_callback=self._emit_event if self._event_callback else None,
             )
             
             if stream_callback and full_content:
@@ -1834,10 +1860,17 @@ class AIPressureResponseService:
                 candidate_destinations="\n".join(dest_list),
             )
             
-            full_content = await self.router.acall_capability(
+            # 【优化】使用带心跳的调用
+            from ...ai.streaming_helper import acall_with_heartbeat
+            full_content = await acall_with_heartbeat(
+                router=self.router,
                 capability="pressure_adaptation",
                 messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                task_name=f"迁徙建议[{species.common_name[:8]}]",
+                timeout=60,
+                heartbeat_interval=2.0,
+                event_callback=self._emit_event if self._event_callback else None,
             )
             
             if stream_callback and full_content:

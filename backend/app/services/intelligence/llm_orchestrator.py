@@ -401,13 +401,16 @@ class LLMOrchestrator:
                 {"role": "user", "content": user_prompt},
             ]
             
-            response = await asyncio.wait_for(
-                self.router.acall_capability(
-                    capability,
-                    messages,
-                    response_format={"type": "json_object"},
-                ),
+            # 【优化】使用带心跳的调用
+            from ...ai.streaming_helper import acall_with_heartbeat
+            response = await acall_with_heartbeat(
+                router=self.router,
+                capability=capability,
+                messages=messages,
+                response_format={"type": "json_object"},
+                task_name=f"生态评估[{tier.value}档×{len(batch.lineage_codes)}]",
                 timeout=self.config.llm_timeout_seconds,
+                heartbeat_interval=2.0,
             )
             
             # 解析响应
