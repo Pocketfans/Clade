@@ -977,32 +977,73 @@ class ReproductionService:
         if current_pop <= 0:
             return 0
         
+        # 【改进v6】从配置加载繁殖参数
+        try:
+            from ...core.config import PROJECT_ROOT
+            from ...repositories.environment_repository import environment_repository
+            ui_cfg = environment_repository.load_ui_config(PROJECT_ROOT / "data/settings.json")
+            repro_cfg = ui_cfg.reproduction
+            # 繁殖参数
+            growth_rate_per_speed = repro_cfg.growth_rate_per_repro_speed
+            size_bonus_microbe = repro_cfg.size_bonus_microbe
+            size_bonus_tiny = repro_cfg.size_bonus_tiny
+            size_bonus_small = repro_cfg.size_bonus_small
+            repro_bonus_weekly = repro_cfg.repro_bonus_weekly
+            repro_bonus_monthly = repro_cfg.repro_bonus_monthly
+            repro_bonus_halfyear = repro_cfg.repro_bonus_halfyear
+            survival_mod_base = repro_cfg.survival_modifier_base
+            survival_mod_rate = repro_cfg.survival_modifier_rate
+            instinct_threshold = repro_cfg.survival_instinct_threshold
+            instinct_bonus = repro_cfg.survival_instinct_bonus
+            t2_efficiency = repro_cfg.t2_birth_efficiency
+            t3_efficiency = repro_cfg.t3_birth_efficiency
+            t4_efficiency = repro_cfg.t4_birth_efficiency
+            saturation_penalty = repro_cfg.resource_saturation_penalty_mild
+            saturation_floor = repro_cfg.resource_saturation_floor
+        except Exception:
+            # 默认值
+            growth_rate_per_speed = 0.4
+            size_bonus_microbe = 2.0
+            size_bonus_tiny = 1.5
+            size_bonus_small = 1.2
+            repro_bonus_weekly = 1.8
+            repro_bonus_monthly = 1.4
+            repro_bonus_halfyear = 1.2
+            survival_mod_base = 0.4
+            survival_mod_rate = 1.2
+            instinct_threshold = 0.5
+            instinct_bonus = 0.8
+            t2_efficiency = 0.9
+            t3_efficiency = 0.7
+            t4_efficiency = 0.5
+            saturation_penalty = 0.4
+            saturation_floor = 0.2
+        
         # 1. 基础增长率（基于繁殖速度属性）
         repro_speed = species.abstract_traits.get("繁殖速度", 5)
-        base_growth_multiplier = 1.0 + (repro_speed * 0.4)  # 1.4 - 5.0
+        base_growth_multiplier = 1.0 + (repro_speed * growth_rate_per_speed)
         
-        # 【新增】2. 体型/世代加成
-        # 微生物和快繁殖物种有更高的增长潜力
+        # 2. 体型/世代加成
         body_length = species.morphology_stats.get("body_length_cm", 10.0)
         generation_time = species.morphology_stats.get("generation_time_days", 365)
         
         # 体型加成：越小增长越快
         if body_length < 0.01:  # 微生物（<0.1mm）
-            size_bonus = 2.0
+            size_bonus = size_bonus_microbe
         elif body_length < 0.1:  # 小型生物（0.1mm-1mm）
-            size_bonus = 1.5
+            size_bonus = size_bonus_tiny
         elif body_length < 1.0:  # 小型生物（1mm-1cm）
-            size_bonus = 1.2
+            size_bonus = size_bonus_small
         else:
             size_bonus = 1.0
         
         # 繁殖速度加成：世代越短增长越快
         if generation_time < 7:  # <1周
-            repro_bonus = 1.8
+            repro_bonus = repro_bonus_weekly
         elif generation_time < 30:  # <1月
-            repro_bonus = 1.4
+            repro_bonus = repro_bonus_monthly
         elif generation_time < 180:  # <半年
-            repro_bonus = 1.2
+            repro_bonus = repro_bonus_halfyear
         else:
             repro_bonus = 1.0
         
@@ -1010,61 +1051,55 @@ class ReproductionService:
         fertility_bonus = max(size_bonus, repro_bonus)
         base_growth_multiplier *= fertility_bonus
         
-        # 【改进v5】营养级效率惩罚
-        # 高营养级物种繁殖效率受能量传递效率限制
+        # 【改进v6】营养级效率惩罚 - 从配置读取
         trophic_level = getattr(species, 'trophic_level', 1.0) or 1.0
-        try:
-            from ...core.config import PROJECT_ROOT
-            from ...repositories.environment_repository import environment_repository
-            ui_cfg = environment_repository.load_ui_config(PROJECT_ROOT / "data/settings.json")
-            eco_cfg = ui_cfg.ecology_balance
-            high_trophic_penalty = eco_cfg.high_trophic_birth_penalty
-            apex_penalty = eco_cfg.apex_predator_penalty
-        except Exception:
-            high_trophic_penalty = 0.7
-            apex_penalty = 0.5
         
         if trophic_level >= 4.0:
             # 顶级捕食者（T4+）受最大效率惩罚
-            base_growth_multiplier *= apex_penalty
-            logger.debug(f"[营养级效率] {species.common_name} (T{trophic_level:.1f}) 应用顶级捕食者惩罚 {apex_penalty:.1%}")
+            base_growth_multiplier *= t4_efficiency
+            logger.debug(f"[营养级效率] {species.common_name} (T{trophic_level:.1f}) 应用顶级捕食者惩罚 {t4_efficiency:.1%}")
         elif trophic_level >= 3.0:
             # 高级消费者（T3）受中等效率惩罚
-            base_growth_multiplier *= high_trophic_penalty
-            logger.debug(f"[营养级效率] {species.common_name} (T{trophic_level:.1f}) 应用高营养级惩罚 {high_trophic_penalty:.1%}")
+            base_growth_multiplier *= t3_efficiency
+            logger.debug(f"[营养级效率] {species.common_name} (T{trophic_level:.1f}) 应用高营养级惩罚 {t3_efficiency:.1%}")
         elif trophic_level >= 2.0:
             # 初级消费者（T2）轻微惩罚
-            base_growth_multiplier *= 0.9
+            base_growth_multiplier *= t2_efficiency
         # T1 生产者无惩罚
         
         # 3. 生存率修正
-        survival_modifier = 0.4 + survival_rate * 1.2  # 0.4 - 1.6
+        survival_modifier = survival_mod_base + survival_rate * survival_mod_rate
         
-        # 【新增】4. 生存本能加成
-        # 当种群处于衰退（死亡率>50%）时，繁殖效率提高
-        # 这模拟了r-策略物种在危机时的适应性反应
+        # 4. 生存本能加成
+        # 当种群处于衰退（死亡率超过阈值）时，繁殖效率提高
         death_rate = 1.0 - survival_rate
-        if death_rate > 0.5:
-            # 死亡率50%以上时激活生存本能
-            survival_instinct = 1.0 + (death_rate - 0.5) * 0.8  # 最多1.4倍加成
+        if death_rate > instinct_threshold:
+            survival_instinct = 1.0 + (death_rate - instinct_threshold) * instinct_bonus
             survival_modifier *= survival_instinct
             logger.debug(f"[生存本能] {species.common_name} 激活生存本能，繁殖加成 {survival_instinct:.2f}x")
         
-        # 5. 资源压力修正（更温和）
+        # 5. 资源压力修正（使用配置参数）
         if resource_saturation <= 1.0:
             resource_modifier = 1.0
         elif resource_saturation <= 2.0:
-            resource_modifier = 1.0 - (resource_saturation - 1.0) * 0.4  # 从0.5改为0.4，更温和
+            resource_modifier = 1.0 - (resource_saturation - 1.0) * saturation_penalty
         else:
-            resource_modifier = max(0.2, 0.6 - (resource_saturation - 2.0) * 0.15)  # 从0.1提高到0.2
+            resource_modifier = max(saturation_floor, 0.6 - (resource_saturation - 2.0) * 0.15)
         
         # 综合增长倍数
         growth_multiplier = base_growth_multiplier * survival_modifier * resource_modifier
         
-        # 限制单回合增长倍数
-        # 最小 0.6倍（从0.5提高，给更多生存机会）
-        # 最大 15倍（从10提高，允许快速繁殖物种爆发）
-        growth_multiplier = max(0.6, min(15.0, growth_multiplier))
+        # 限制单回合增长倍数（从配置读取）
+        try:
+            growth_min = repro_cfg.growth_multiplier_min
+            growth_max = repro_cfg.growth_multiplier_max
+            overshoot_decay = repro_cfg.overshoot_decay_rate
+        except Exception:
+            growth_min = 0.6
+            growth_max = 15.0
+            overshoot_decay = 0.25
+        
+        growth_multiplier = max(growth_min, min(growth_max, growth_multiplier))
         
         # 6. 使用改进的逻辑斯谛模型计算新种群
         P0 = float(current_pop)
@@ -1072,9 +1107,8 @@ class ReproductionService:
         
         if P0 >= K:
             # 已超过承载力，应用衰减
-            decay_rate = 0.25  # 从0.3降到0.25，更缓慢收敛
             overshoot = P0 - K
-            new_pop = K + overshoot * (1.0 - decay_rate)
+            new_pop = K + overshoot * (1.0 - overshoot_decay)
         else:
             # 低于承载力，应用增长
             utilization = P0 / K  # 0 - 1

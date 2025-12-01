@@ -30,7 +30,7 @@ from ..services.species.niche import NicheMetrics
 from ..services.species.predation import PredationService
 from ..services.geo.suitability import get_habitat_type_mask as unified_habitat_mask
 from ..core.config import get_settings, PROJECT_ROOT
-from ..models.config import EcologyBalanceConfig
+from ..models.config import EcologyBalanceConfig, MortalityConfig
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,18 @@ def _load_ecology_config() -> EcologyBalanceConfig:
     except Exception as e:
         logger.warning(f"[生态平衡] 无法加载配置，使用默认值: {e}")
         return EcologyBalanceConfig()
+
+
+def _load_mortality_config() -> MortalityConfig:
+    """从 UI 配置中加载死亡率参数"""
+    try:
+        from ..repositories.environment_repository import environment_repository
+        ui_config_path = PROJECT_ROOT / "data/settings.json"
+        ui_config = environment_repository.load_ui_config(ui_config_path)
+        return ui_config.mortality
+    except Exception as e:
+        logger.warning(f"[死亡率] 无法加载配置，使用默认值: {e}")
+        return MortalityConfig()
 
 
 @dataclass(slots=True)
@@ -930,93 +942,76 @@ class TileBasedMortalityEngine:
         # 【新增】计算并缓存食草压力（供结果汇总使用）
         self._compute_and_cache_herbivory_pressure(species_list)
         
-        # ========== 【平衡修复v3】重新平衡死亡率计算 ==========
-        # 问题诊断：之前的修复让死亡率太高，即使在适宜条件下也有44%+
-        # 
-        # 修复方向：
-        # 1. 降低各压力因素的上限和权重
-        # 2. 恢复部分抗性减免
-        # 3. 让适宜环境真正安全（死亡率 < 15%）
-        # 4. 极端环境仍然危险（死亡率 > 50%）
+        # ========== 【改进v6】从配置加载死亡率参数 ==========
+        mort_cfg = _load_mortality_config()
         
-        # 【修复1】降低压力上限，让适宜环境更安全
-        env_capped = np.minimum(0.50, env_pressure)          # 从0.65降到0.50
-        competition_capped = np.minimum(0.40, competition_pressure)  # 从0.50降到0.40
-        trophic_capped = np.minimum(0.45, trophic_pressure)  # 从0.60降到0.45
-        resource_capped = np.minimum(0.40, resource_pressure)  # 从0.55降到0.40
-        predation_capped = np.minimum(0.50, predation_network_pressure)  # 从0.60降到0.50
-        plant_competition_capped = np.minimum(0.30, plant_competition_pressure)  # 从0.40降到0.30
+        # 【修复1】压力上限（从配置读取）
+        env_capped = np.minimum(mort_cfg.env_pressure_cap, env_pressure)
+        competition_capped = np.minimum(mort_cfg.competition_pressure_cap, competition_pressure)
+        trophic_capped = np.minimum(mort_cfg.trophic_pressure_cap, trophic_pressure)
+        resource_capped = np.minimum(mort_cfg.resource_pressure_cap, resource_pressure)
+        predation_capped = np.minimum(mort_cfg.predation_pressure_cap, predation_network_pressure)
+        plant_competition_capped = np.minimum(mort_cfg.plant_competition_cap, plant_competition_pressure)
         
         # 【修复2】恢复部分抗性
         body_size = species_arrays['body_size']
         generation_time = species_arrays['generation_time']
         
-        # 体型抗性：恢复到中等水平
-        # body_size < 0.01cm (微生物) -> 0.30 抗性
-        # body_size 0.01-0.1cm -> 0.22 抗性
-        # body_size 0.1-1cm -> 0.15 抗性
-        # body_size > 1cm -> 0.08 抗性
+        # 体型抗性：基于体型大小
         size_resistance = np.where(
             body_size < 0.01, 0.30,
             np.where(body_size < 0.1, 0.22,
                 np.where(body_size < 1.0, 0.15, 0.08))
         )
         
-        # 繁殖速度抗性：恢复到中等水平
-        # generation_time < 7天 -> 0.25 抗性
-        # generation_time 7-30天 -> 0.18 抗性
-        # generation_time 30-365天 -> 0.12 抗性
-        # generation_time > 365天 -> 0.05 抗性
+        # 繁殖速度抗性：基于世代时间
         repro_resistance = np.where(
             generation_time < 7, 0.25,
             np.where(generation_time < 30, 0.18,
                 np.where(generation_time < 365, 0.12, 0.05))
         )
         
-        # 【修复3】综合抗性上限恢复
-        # 微生物最大抗性约28%
-        total_resistance = size_resistance * 0.5 + repro_resistance * 0.5
-        # 广播到矩阵形状 (n_tiles, n_species)
+        # 【修复3】综合抗性（从配置读取上限）
+        total_resistance = np.minimum(
+            size_resistance * 0.5 + repro_resistance * 0.5,
+            mort_cfg.max_resistance
+        )
         resistance_matrix = total_resistance[np.newaxis, :]
         
-        # 【修复4】降低加权和系数，让低压力环境更安全
-        # 目标：所有压力都是0.1时，加权和约0.15
+        # 【修复4】加权和模型（从配置读取权重）
         weighted_sum = (
-            env_capped * 0.40 +           # 从0.60降到0.40
-            competition_capped * 0.30 +   # 从0.45降到0.30
-            trophic_capped * 0.40 +       # 从0.55降到0.40
-            resource_capped * 0.35 +      # 从0.50降到0.35
-            predation_capped * 0.35 +     # 从0.50降到0.35
-            plant_competition_capped * 0.25  # 从0.35降到0.25
-        )  # 总权重 = 2.05（从2.95降低）
+            env_capped * mort_cfg.env_weight +
+            competition_capped * mort_cfg.competition_weight +
+            trophic_capped * mort_cfg.trophic_weight +
+            resource_capped * mort_cfg.resource_weight +
+            predation_capped * mort_cfg.predation_weight +
+            plant_competition_capped * mort_cfg.plant_competition_weight
+        )
         
-        # 【修复5】降低乘法模型的压力系数
+        # 【修复5】乘法模型（从配置读取系数）
         survival_product = (
-            (1.0 - env_capped * 0.50) *        # 从0.70降到0.50
-            (1.0 - competition_capped * 0.45) * # 从0.60降到0.45
-            (1.0 - trophic_capped * 0.55) *    # 从0.70降到0.55
-            (1.0 - resource_capped * 0.45) *   # 从0.60降到0.45
-            (1.0 - predation_capped * 0.55) *  # 从0.70降到0.55
-            (1.0 - plant_competition_capped * 0.35)  # 从0.50降到0.35
+            (1.0 - env_capped * mort_cfg.env_mult_coef) *
+            (1.0 - competition_capped * mort_cfg.competition_mult_coef) *
+            (1.0 - trophic_capped * mort_cfg.trophic_mult_coef) *
+            (1.0 - resource_capped * mort_cfg.resource_mult_coef) *
+            (1.0 - predation_capped * mort_cfg.predation_mult_coef) *
+            (1.0 - plant_competition_capped * mort_cfg.plant_mult_coef)
         )
         multiplicative_mortality = 1.0 - survival_product
         
-        # 【修复6】增加加权和比例（更稳定）
-        # 加权和占70%，乘法占30%
-        raw_mortality = weighted_sum * 0.70 + multiplicative_mortality * 0.30
+        # 【修复6】混合模型（从配置读取比例）
+        additive_weight = mort_cfg.additive_model_weight
+        raw_mortality = weighted_sum * additive_weight + multiplicative_mortality * (1.0 - additive_weight)
         
-        # 【修复7】增加抗性减免幅度
-        # 抗性最多减少35%死亡率
+        # 【修复7】抗性减免
         mortality = raw_mortality * (1.0 - resistance_matrix * 0.70)
         
         # ========== 7. 应用世代累积死亡率 ==========
         if _settings.enable_generational_mortality:
             mortality = self._apply_generational_mortality(species_arrays, mortality)
         
-        # ========== 8. 边界约束 ==========
-        # 【平衡v3】最低死亡率降到1%，给适宜条件下的物种更多生存空间
-        # 最高死亡率保持98%
-        mortality = np.clip(mortality, 0.01, 0.98)
+        # ========== 8. 边界约束（从配置读取） ==========
+        mortality = np.clip(mortality, mort_cfg.min_mortality, mort_cfg.max_mortality)
         
         return mortality
     

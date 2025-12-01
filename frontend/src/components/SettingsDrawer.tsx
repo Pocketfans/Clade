@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useReducer, useMemo } from "react";
-import type { UIConfig, ProviderConfig, CapabilityRouteConfig, ProviderType, SpeciationConfig } from "../services/api.types";
+import type { UIConfig, ProviderConfig, CapabilityRouteConfig, ProviderType, SpeciationConfig, ReproductionConfig, MortalityConfig, EcologyBalanceConfig } from "../services/api.types";
 import { testApiConnection, fetchProviderModels, type ModelInfo } from "../services/api";
 import { GamePanel } from "./common/GamePanel";
 import { ConfirmDialog } from "./common/ConfirmDialog";
@@ -12,7 +12,7 @@ interface Props {
   onSave: (config: UIConfig) => Promise<void>;
 }
 
-type Tab = "connection" | "models" | "memory" | "autosave" | "performance" | "speciation";
+type Tab = "connection" | "models" | "memory" | "autosave" | "performance" | "speciation" | "reproduction" | "mortality" | "ecology";
 
 // ========== 常量定义 ==========
 
@@ -232,7 +232,13 @@ type Action =
   // 多服务商负载均衡
   | { type: 'TOGGLE_ROUTE_PROVIDER'; capKey: string; providerId: string }
   // 分化配置
-  | { type: 'UPDATE_SPECIATION'; updates: Partial<SpeciationConfig> };
+  | { type: 'UPDATE_SPECIATION'; updates: Partial<SpeciationConfig> }
+  // 繁殖配置
+  | { type: 'UPDATE_REPRODUCTION'; updates: Partial<ReproductionConfig> }
+  // 死亡率配置
+  | { type: 'UPDATE_MORTALITY'; updates: Partial<MortalityConfig> }
+  // 生态平衡配置
+  | { type: 'UPDATE_ECOLOGY'; updates: Partial<EcologyBalanceConfig> };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -413,6 +419,42 @@ function reducer(state: State, action: Action): State {
           ...state.form,
           speciation: {
             ...(state.form.speciation || {}),
+            ...action.updates
+          }
+        }
+      };
+    }
+    case 'UPDATE_REPRODUCTION': {
+      return {
+        ...state,
+        form: {
+          ...state.form,
+          reproduction: {
+            ...(state.form.reproduction || {}),
+            ...action.updates
+          }
+        }
+      };
+    }
+    case 'UPDATE_MORTALITY': {
+      return {
+        ...state,
+        form: {
+          ...state.form,
+          mortality: {
+            ...(state.form.mortality || {}),
+            ...action.updates
+          }
+        }
+      };
+    }
+    case 'UPDATE_ECOLOGY': {
+      return {
+        ...state,
+        form: {
+          ...state.form,
+          ecology_balance: {
+            ...(state.form.ecology_balance || {}),
             ...action.updates
           }
         }
@@ -955,9 +997,30 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
             <NavButton 
               active={tab === "speciation"} 
               onClick={() => dispatch({ type: 'SET_TAB', tab: 'speciation' })} 
-              icon="🧬" 
+              icon="🌱" 
               label="分化设置" 
               desc="物种演化参数"
+            />
+            <NavButton 
+              active={tab === "reproduction"} 
+              onClick={() => dispatch({ type: 'SET_TAB', tab: 'reproduction' })} 
+              icon="🐣" 
+              label="繁殖设置" 
+              desc="种群增长参数"
+            />
+            <NavButton 
+              active={tab === "mortality"} 
+              onClick={() => dispatch({ type: 'SET_TAB', tab: 'mortality' })} 
+              icon="💀" 
+              label="死亡率设置" 
+              desc="压力与死亡计算"
+            />
+            <NavButton 
+              active={tab === "ecology"} 
+              onClick={() => dispatch({ type: 'SET_TAB', tab: 'ecology' })} 
+              icon="🌍" 
+              label="生态平衡" 
+              desc="动态平衡参数"
             />
           </div>
           
@@ -2579,6 +2642,1014 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                       <div>
                         <strong>演化潜力</strong>
                         <p>物种本身的遗传多样性和变异能力。高潜力的物种更容易产生新变种。</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 7: 繁殖设置 */}
+          {tab === "reproduction" && (
+            <div className="tab-content fade-in">
+              <div className="section-header">
+                <h3>🐣 繁殖参数设置</h3>
+                <p>控制物种繁殖行为，影响种群增长速度和稳定性。</p>
+              </div>
+              
+              <div className="memory-layout">
+                <div className="memory-main">
+                  {/* 快速预设 */}
+                  <div className="preset-section">
+                    <h4>🎮 快速配置</h4>
+                    <div className="preset-buttons autosave-presets">
+                      <button
+                        type="button"
+                        className="preset-btn"
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_REPRODUCTION', updates: {
+                            growth_multiplier_max: 20.0,
+                            size_bonus_microbe: 2.5,
+                            survival_instinct_bonus: 1.0,
+                            t2_birth_efficiency: 0.95,
+                            t3_birth_efficiency: 0.85,
+                            t4_birth_efficiency: 0.7,
+                          }});
+                        }}
+                      >
+                        🚀 爆发模式
+                        <span className="preset-desc">种群增长迅速，适合早期生态构建</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-btn"
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_REPRODUCTION', updates: {
+                            growth_multiplier_max: 15.0,
+                            size_bonus_microbe: 2.0,
+                            survival_instinct_bonus: 0.8,
+                            t2_birth_efficiency: 0.9,
+                            t3_birth_efficiency: 0.7,
+                            t4_birth_efficiency: 0.5,
+                          }});
+                        }}
+                      >
+                        ⚖️ 平衡模式
+                        <span className="preset-desc">推荐设置，增长与稳定兼顾</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-btn"
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_REPRODUCTION', updates: {
+                            growth_multiplier_max: 8.0,
+                            size_bonus_microbe: 1.5,
+                            survival_instinct_bonus: 0.5,
+                            t2_birth_efficiency: 0.8,
+                            t3_birth_efficiency: 0.5,
+                            t4_birth_efficiency: 0.3,
+                          }});
+                        }}
+                      >
+                        🐢 稳定模式
+                        <span className="preset-desc">缓慢增长，强调生态平衡</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 基础增长参数 */}
+                  <div className="speciation-section">
+                    <h4>📈 基础增长参数</h4>
+                    <div className="form-grid two-column">
+                      <label className="form-field">
+                        <span className="field-label">繁殖速度增长率</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.1"
+                            max="1"
+                            step="0.1"
+                            value={form.reproduction?.growth_rate_per_repro_speed ?? 0.4}
+                            onChange={(e) => dispatch({ type: 'UPDATE_REPRODUCTION', updates: { growth_rate_per_repro_speed: parseFloat(e.target.value) || 0.4 } })}
+                          />
+                        </div>
+                        <span className="field-hint">每点繁殖速度属性提供的增长率加成</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">增长倍数上限</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="2"
+                            max="50"
+                            step="1"
+                            value={form.reproduction?.growth_multiplier_max ?? 15}
+                            onChange={(e) => dispatch({ type: 'UPDATE_REPRODUCTION', updates: { growth_multiplier_max: parseFloat(e.target.value) || 15 } })}
+                          />
+                          <span className="unit-label">倍</span>
+                        </div>
+                        <span className="field-hint">单回合最大增长倍数限制</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">增长倍数下限</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.1"
+                            max="1"
+                            step="0.1"
+                            value={form.reproduction?.growth_multiplier_min ?? 0.6}
+                            onChange={(e) => dispatch({ type: 'UPDATE_REPRODUCTION', updates: { growth_multiplier_min: parseFloat(e.target.value) || 0.6 } })}
+                          />
+                          <span className="unit-label">倍</span>
+                        </div>
+                        <span className="field-hint">保护濒危物种不会快速灭绝</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">超载衰减率</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.1"
+                            max="0.5"
+                            step="0.05"
+                            value={form.reproduction?.overshoot_decay_rate ?? 0.25}
+                            onChange={(e) => dispatch({ type: 'UPDATE_REPRODUCTION', updates: { overshoot_decay_rate: parseFloat(e.target.value) || 0.25 } })}
+                          />
+                        </div>
+                        <span className="field-hint">超过承载力时每回合衰减比例</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 体型加成 */}
+                  <div className="speciation-section">
+                    <h4>📏 体型繁殖加成</h4>
+                    <div className="form-grid three-column">
+                      <label className="form-field">
+                        <span className="field-label">微生物加成</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="1"
+                            max="5"
+                            step="0.1"
+                            value={form.reproduction?.size_bonus_microbe ?? 2.0}
+                            onChange={(e) => dispatch({ type: 'UPDATE_REPRODUCTION', updates: { size_bonus_microbe: parseFloat(e.target.value) || 2.0 } })}
+                          />
+                          <span className="unit-label">倍</span>
+                        </div>
+                        <span className="field-hint">&lt;0.1mm 体长</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">小型生物加成</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="1"
+                            max="3"
+                            step="0.1"
+                            value={form.reproduction?.size_bonus_tiny ?? 1.5}
+                            onChange={(e) => dispatch({ type: 'UPDATE_REPRODUCTION', updates: { size_bonus_tiny: parseFloat(e.target.value) || 1.5 } })}
+                          />
+                          <span className="unit-label">倍</span>
+                        </div>
+                        <span className="field-hint">0.1mm-1mm 体长</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">中小型加成</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="1"
+                            max="2"
+                            step="0.1"
+                            value={form.reproduction?.size_bonus_small ?? 1.2}
+                            onChange={(e) => dispatch({ type: 'UPDATE_REPRODUCTION', updates: { size_bonus_small: parseFloat(e.target.value) || 1.2 } })}
+                          />
+                          <span className="unit-label">倍</span>
+                        </div>
+                        <span className="field-hint">1mm-1cm 体长</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 营养级效率 */}
+                  <div className="speciation-section">
+                    <h4>🔺 营养级繁殖效率</h4>
+                    <p className="section-desc">高营养级物种受能量传递效率限制，繁殖效率降低</p>
+                    <div className="form-grid three-column">
+                      <label className="form-field">
+                        <span className="field-label">T2 初级消费者</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.3"
+                            max="1"
+                            step="0.05"
+                            value={form.reproduction?.t2_birth_efficiency ?? 0.9}
+                            onChange={(e) => dispatch({ type: 'UPDATE_REPRODUCTION', updates: { t2_birth_efficiency: parseFloat(e.target.value) || 0.9 } })}
+                          />
+                        </div>
+                        <span className="field-hint">食草动物、滤食者</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">T3 高级消费者</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.2"
+                            max="1"
+                            step="0.05"
+                            value={form.reproduction?.t3_birth_efficiency ?? 0.7}
+                            onChange={(e) => dispatch({ type: 'UPDATE_REPRODUCTION', updates: { t3_birth_efficiency: parseFloat(e.target.value) || 0.7 } })}
+                          />
+                        </div>
+                        <span className="field-hint">小型捕食者</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">T4+ 顶级捕食者</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.1"
+                            max="1"
+                            step="0.05"
+                            value={form.reproduction?.t4_birth_efficiency ?? 0.5}
+                            onChange={(e) => dispatch({ type: 'UPDATE_REPRODUCTION', updates: { t4_birth_efficiency: parseFloat(e.target.value) || 0.5 } })}
+                          />
+                        </div>
+                        <span className="field-hint">顶级捕食者</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 生存本能 */}
+                  <div className="speciation-section">
+                    <h4>💪 生存本能</h4>
+                    <p className="section-desc">当物种面临高死亡率时，繁殖效率会提高（r-策略）</p>
+                    <div className="form-grid two-column">
+                      <label className="form-field">
+                        <span className="field-label">激活阈值</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.3"
+                            max="0.8"
+                            step="0.05"
+                            value={form.reproduction?.survival_instinct_threshold ?? 0.5}
+                            onChange={(e) => dispatch({ type: 'UPDATE_REPRODUCTION', updates: { survival_instinct_threshold: parseFloat(e.target.value) || 0.5 } })}
+                          />
+                        </div>
+                        <span className="field-hint">死亡率超过此值时激活</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">最大加成</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.2"
+                            max="1.5"
+                            step="0.1"
+                            value={form.reproduction?.survival_instinct_bonus ?? 0.8}
+                            onChange={(e) => dispatch({ type: 'UPDATE_REPRODUCTION', updates: { survival_instinct_bonus: parseFloat(e.target.value) || 0.8 } })}
+                          />
+                          <span className="unit-label">倍</span>
+                        </div>
+                        <span className="field-hint">生存本能提供的最大繁殖加成</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 说明面板 */}
+                <div className="memory-sidebar">
+                  <div className="info-panel">
+                    <h4>💡 繁殖机制说明</h4>
+                    <div className="info-item">
+                      <span className="info-icon">📈</span>
+                      <div>
+                        <strong>逻辑斯谛增长</strong>
+                        <p>种群增长遵循S型曲线，接近承载力时增长减缓。</p>
+                      </div>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-icon">🔺</span>
+                      <div>
+                        <strong>能量金字塔</strong>
+                        <p>每升一个营养级，可用能量约减少85%，限制高营养级种群。</p>
+                      </div>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-icon">🦠</span>
+                      <div>
+                        <strong>r/K 策略</strong>
+                        <p>小型快繁殖物种（r策略）增长快但受环境波动影响大。</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 8: 死亡率设置 */}
+          {tab === "mortality" && (
+            <div className="tab-content fade-in">
+              <div className="section-header">
+                <h3>💀 死亡率参数设置</h3>
+                <p>控制各类压力对物种死亡率的影响程度。</p>
+              </div>
+              
+              <div className="memory-layout">
+                <div className="memory-main">
+                  {/* 快速预设 */}
+                  <div className="preset-section">
+                    <h4>🎮 快速配置</h4>
+                    <div className="preset-buttons autosave-presets">
+                      <button
+                        type="button"
+                        className="preset-btn"
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_MORTALITY', updates: {
+                            env_pressure_cap: 0.35,
+                            competition_pressure_cap: 0.30,
+                            max_mortality: 0.80,
+                            max_resistance: 0.35,
+                          }});
+                        }}
+                      >
+                        🛡️ 保护模式
+                        <span className="preset-desc">低压力上限，物种更容易存活</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-btn"
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_MORTALITY', updates: {
+                            env_pressure_cap: 0.50,
+                            competition_pressure_cap: 0.40,
+                            max_mortality: 0.95,
+                            max_resistance: 0.25,
+                          }});
+                        }}
+                      >
+                        ⚖️ 平衡模式
+                        <span className="preset-desc">推荐设置，自然选择与稳定兼顾</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-btn"
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_MORTALITY', updates: {
+                            env_pressure_cap: 0.70,
+                            competition_pressure_cap: 0.60,
+                            max_mortality: 0.99,
+                            max_resistance: 0.15,
+                          }});
+                        }}
+                      >
+                        ☠️ 严酷模式
+                        <span className="preset-desc">高压力，物种淘汰更激烈</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 压力上限 */}
+                  <div className="speciation-section">
+                    <h4>📊 压力上限</h4>
+                    <p className="section-desc">各类压力的最大值限制，防止单一因素导致极端死亡率</p>
+                    <div className="form-grid three-column">
+                      <label className="form-field">
+                        <span className="field-label">🌡️ 环境压力</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.2"
+                            max="0.9"
+                            step="0.05"
+                            value={form.mortality?.env_pressure_cap ?? 0.50}
+                            onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { env_pressure_cap: parseFloat(e.target.value) || 0.50 } })}
+                          />
+                        </div>
+                        <span className="field-hint">气候、温度、辐射等</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">⚔️ 竞争压力</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.2"
+                            max="0.8"
+                            step="0.05"
+                            value={form.mortality?.competition_pressure_cap ?? 0.40}
+                            onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { competition_pressure_cap: parseFloat(e.target.value) || 0.40 } })}
+                          />
+                        </div>
+                        <span className="field-hint">生态位竞争</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">🔺 营养级压力</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.2"
+                            max="0.8"
+                            step="0.05"
+                            value={form.mortality?.trophic_pressure_cap ?? 0.45}
+                            onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { trophic_pressure_cap: parseFloat(e.target.value) || 0.45 } })}
+                          />
+                        </div>
+                        <span className="field-hint">食物链压力</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">🍖 资源压力</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.2"
+                            max="0.8"
+                            step="0.05"
+                            value={form.mortality?.resource_pressure_cap ?? 0.40}
+                            onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { resource_pressure_cap: parseFloat(e.target.value) || 0.40 } })}
+                          />
+                        </div>
+                        <span className="field-hint">资源匮乏</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">🦈 捕食压力</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.2"
+                            max="0.8"
+                            step="0.05"
+                            value={form.mortality?.predation_pressure_cap ?? 0.50}
+                            onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { predation_pressure_cap: parseFloat(e.target.value) || 0.50 } })}
+                          />
+                        </div>
+                        <span className="field-hint">被捕食风险</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">🌿 植物竞争</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.1"
+                            max="0.6"
+                            step="0.05"
+                            value={form.mortality?.plant_competition_cap ?? 0.30}
+                            onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { plant_competition_cap: parseFloat(e.target.value) || 0.30 } })}
+                          />
+                        </div>
+                        <span className="field-hint">植物间竞争</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 压力权重 */}
+                  <div className="speciation-section">
+                    <h4>⚖️ 压力权重</h4>
+                    <p className="section-desc">各类压力在综合死亡率计算中的权重比例</p>
+                    <div className="form-grid three-column">
+                      <label className="form-field">
+                        <span className="field-label">环境权重</span>
+                        <input
+                          className="field-input"
+                          type="number"
+                          min="0.1"
+                          max="1"
+                          step="0.05"
+                          value={form.mortality?.env_weight ?? 0.40}
+                          onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { env_weight: parseFloat(e.target.value) || 0.40 } })}
+                        />
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">竞争权重</span>
+                        <input
+                          className="field-input"
+                          type="number"
+                          min="0.1"
+                          max="1"
+                          step="0.05"
+                          value={form.mortality?.competition_weight ?? 0.30}
+                          onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { competition_weight: parseFloat(e.target.value) || 0.30 } })}
+                        />
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">营养级权重</span>
+                        <input
+                          className="field-input"
+                          type="number"
+                          min="0.1"
+                          max="1"
+                          step="0.05"
+                          value={form.mortality?.trophic_weight ?? 0.40}
+                          onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { trophic_weight: parseFloat(e.target.value) || 0.40 } })}
+                        />
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">资源权重</span>
+                        <input
+                          className="field-input"
+                          type="number"
+                          min="0.1"
+                          max="1"
+                          step="0.05"
+                          value={form.mortality?.resource_weight ?? 0.35}
+                          onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { resource_weight: parseFloat(e.target.value) || 0.35 } })}
+                        />
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">捕食权重</span>
+                        <input
+                          className="field-input"
+                          type="number"
+                          min="0.1"
+                          max="1"
+                          step="0.05"
+                          value={form.mortality?.predation_weight ?? 0.35}
+                          onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { predation_weight: parseFloat(e.target.value) || 0.35 } })}
+                        />
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">植物竞争权重</span>
+                        <input
+                          className="field-input"
+                          type="number"
+                          min="0.1"
+                          max="0.5"
+                          step="0.05"
+                          value={form.mortality?.plant_competition_weight ?? 0.25}
+                          onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { plant_competition_weight: parseFloat(e.target.value) || 0.25 } })}
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 抗性与边界 */}
+                  <div className="speciation-section">
+                    <h4>🛡️ 抗性与边界</h4>
+                    <div className="form-grid two-column">
+                      <label className="form-field">
+                        <span className="field-label">最大抗性</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.1"
+                            max="0.5"
+                            step="0.05"
+                            value={form.mortality?.max_resistance ?? 0.25}
+                            onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { max_resistance: parseFloat(e.target.value) || 0.25 } })}
+                          />
+                        </div>
+                        <span className="field-hint">体型和世代时间提供的总抗性上限</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">加权模型占比</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.3"
+                            max="0.9"
+                            step="0.05"
+                            value={form.mortality?.additive_model_weight ?? 0.70}
+                            onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { additive_model_weight: parseFloat(e.target.value) || 0.70 } })}
+                          />
+                        </div>
+                        <span className="field-hint">加权和模型占比，剩余为乘法模型</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">最低死亡率</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.01"
+                            max="0.1"
+                            step="0.01"
+                            value={form.mortality?.min_mortality ?? 0.02}
+                            onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { min_mortality: parseFloat(e.target.value) || 0.02 } })}
+                          />
+                        </div>
+                        <span className="field-hint">即使环境完美也有自然死亡</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">最高死亡率</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.7"
+                            max="0.99"
+                            step="0.01"
+                            value={form.mortality?.max_mortality ?? 0.95}
+                            onChange={(e) => dispatch({ type: 'UPDATE_MORTALITY', updates: { max_mortality: parseFloat(e.target.value) || 0.95 } })}
+                          />
+                        </div>
+                        <span className="field-hint">防止单回合完全灭绝</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 说明面板 */}
+                <div className="memory-sidebar">
+                  <div className="info-panel">
+                    <h4>💡 死亡率计算说明</h4>
+                    <div className="info-item">
+                      <span className="info-icon">📊</span>
+                      <div>
+                        <strong>混合模型</strong>
+                        <p>死亡率由加权和模型与乘法模型混合计算，兼顾稳定性和真实性。</p>
+                      </div>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-icon">🛡️</span>
+                      <div>
+                        <strong>抗性机制</strong>
+                        <p>体型越大、世代越长的物种对环境压力抗性越强。</p>
+                      </div>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-icon">⚖️</span>
+                      <div>
+                        <strong>压力平衡</strong>
+                        <p>多种压力叠加但有上限，避免单一极端压力导致物种快速灭绝。</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 9: 生态平衡设置 */}
+          {tab === "ecology" && (
+            <div className="tab-content fade-in">
+              <div className="section-header">
+                <h3>🌍 生态平衡参数设置</h3>
+                <p>控制生态系统的动态平衡，包括竞争、扩散和食物链。</p>
+              </div>
+              
+              <div className="memory-layout">
+                <div className="memory-main">
+                  {/* 快速预设 */}
+                  <div className="preset-section">
+                    <h4>🎮 快速配置</h4>
+                    <div className="preset-buttons autosave-presets">
+                      <button
+                        type="button"
+                        className="preset-btn"
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_ECOLOGY', updates: {
+                            competition_base_coefficient: 0.40,
+                            competition_total_cap: 0.60,
+                            scarcity_weight: 0.3,
+                            terrestrial_top_k: 6,
+                            marine_top_k: 5,
+                          }});
+                        }}
+                      >
+                        🌸 低竞争模式
+                        <span className="preset-desc">物种分布广，竞争压力小</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-btn"
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_ECOLOGY', updates: {
+                            competition_base_coefficient: 0.60,
+                            competition_total_cap: 0.80,
+                            scarcity_weight: 0.5,
+                            terrestrial_top_k: 4,
+                            marine_top_k: 3,
+                          }});
+                        }}
+                      >
+                        ⚖️ 平衡模式
+                        <span className="preset-desc">推荐设置，适中的竞争与分布</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="preset-btn"
+                        onClick={() => {
+                          dispatch({ type: 'UPDATE_ECOLOGY', updates: {
+                            competition_base_coefficient: 0.80,
+                            competition_total_cap: 0.95,
+                            scarcity_weight: 0.7,
+                            terrestrial_top_k: 2,
+                            marine_top_k: 2,
+                          }});
+                        }}
+                      >
+                        🔥 高竞争模式
+                        <span className="preset-desc">激烈竞争，物种高度集中</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 竞争强度 */}
+                  <div className="speciation-section">
+                    <h4>⚔️ 竞争强度</h4>
+                    <div className="form-grid two-column">
+                      <label className="form-field">
+                        <span className="field-label">基础竞争系数</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.2"
+                            max="1"
+                            step="0.05"
+                            value={form.ecology_balance?.competition_base_coefficient ?? 0.60}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { competition_base_coefficient: parseFloat(e.target.value) || 0.60 } })}
+                          />
+                        </div>
+                        <span className="field-hint">物种间生态位竞争的基础强度</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">单竞争者上限</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.1"
+                            max="0.6"
+                            step="0.05"
+                            value={form.ecology_balance?.competition_per_species_cap ?? 0.35}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { competition_per_species_cap: parseFloat(e.target.value) || 0.35 } })}
+                          />
+                        </div>
+                        <span className="field-hint">单个竞争物种可造成的最大压力</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">总竞争上限</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.4"
+                            max="1"
+                            step="0.05"
+                            value={form.ecology_balance?.competition_total_cap ?? 0.80}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { competition_total_cap: parseFloat(e.target.value) || 0.80 } })}
+                          />
+                        </div>
+                        <span className="field-hint">所有竞争者造成的总压力上限</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">同级竞争系数</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.05"
+                            max="0.5"
+                            step="0.05"
+                            value={form.ecology_balance?.same_level_competition_k ?? 0.15}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { same_level_competition_k: parseFloat(e.target.value) || 0.15 } })}
+                          />
+                        </div>
+                        <span className="field-hint">同营养级物种之间的额外竞争</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 食物匮乏 */}
+                  <div className="speciation-section">
+                    <h4>🍖 食物匮乏惩罚</h4>
+                    <div className="form-grid three-column">
+                      <label className="form-field">
+                        <span className="field-label">匮乏阈值</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.1"
+                            max="0.5"
+                            step="0.05"
+                            value={form.ecology_balance?.food_scarcity_threshold ?? 0.3}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { food_scarcity_threshold: parseFloat(e.target.value) || 0.3 } })}
+                          />
+                        </div>
+                        <span className="field-hint">猎物丰富度低于此值开始惩罚</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">惩罚系数</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.1"
+                            max="1"
+                            step="0.1"
+                            value={form.ecology_balance?.food_scarcity_penalty ?? 0.4}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { food_scarcity_penalty: parseFloat(e.target.value) || 0.4 } })}
+                          />
+                        </div>
+                        <span className="field-hint">食物不足时死亡率增加的系数</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">稀缺权重</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.2"
+                            max="0.8"
+                            step="0.1"
+                            value={form.ecology_balance?.scarcity_weight ?? 0.5}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { scarcity_weight: parseFloat(e.target.value) || 0.5 } })}
+                          />
+                        </div>
+                        <span className="field-hint">食物稀缺在死亡率中的权重</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 扩散行为 */}
+                  <div className="speciation-section">
+                    <h4>🗺️ 扩散行为</h4>
+                    <div className="form-grid two-column">
+                      <label className="form-field">
+                        <span className="field-label">陆生分布地块</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="1"
+                            max="10"
+                            step="1"
+                            value={form.ecology_balance?.terrestrial_top_k ?? 4}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { terrestrial_top_k: parseInt(e.target.value) || 4 } })}
+                          />
+                          <span className="unit-label">块</span>
+                        </div>
+                        <span className="field-hint">陆生物种最多分布的地块数</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">海洋分布地块</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="1"
+                            max="10"
+                            step="1"
+                            value={form.ecology_balance?.marine_top_k ?? 3}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { marine_top_k: parseInt(e.target.value) || 3 } })}
+                          />
+                          <span className="unit-label">块</span>
+                        </div>
+                        <span className="field-hint">海洋物种最多分布的地块数</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">宜居度截断</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.1"
+                            max="0.5"
+                            step="0.05"
+                            value={form.ecology_balance?.suitability_cutoff ?? 0.25}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { suitability_cutoff: parseFloat(e.target.value) || 0.25 } })}
+                          />
+                        </div>
+                        <span className="field-hint">低于此宜居度的地块不分配种群</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">宜居度指数</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="1"
+                            max="3"
+                            step="0.1"
+                            value={form.ecology_balance?.suitability_weight_alpha ?? 1.5}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { suitability_weight_alpha: parseFloat(e.target.value) || 1.5 } })}
+                          />
+                        </div>
+                        <span className="field-hint">&gt;1时种群更集中在高宜居度地块</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">高营养级扩散阻尼</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.3"
+                            max="1"
+                            step="0.1"
+                            value={form.ecology_balance?.high_trophic_dispersal_damping ?? 0.7}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { high_trophic_dispersal_damping: parseFloat(e.target.value) || 0.7 } })}
+                          />
+                        </div>
+                        <span className="field-hint">T3+物种的分布范围倍率</span>
+                      </label>
+
+                      <label className="form-field">
+                        <span className="field-label">能量传递效率</span>
+                        <div className="input-with-unit">
+                          <input
+                            className="field-input"
+                            type="number"
+                            min="0.05"
+                            max="0.3"
+                            step="0.05"
+                            value={form.ecology_balance?.trophic_transfer_efficiency ?? 0.15}
+                            onChange={(e) => dispatch({ type: 'UPDATE_ECOLOGY', updates: { trophic_transfer_efficiency: parseFloat(e.target.value) || 0.15 } })}
+                          />
+                        </div>
+                        <span className="field-hint">每升一个营养级的能量保留率</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 说明面板 */}
+                <div className="memory-sidebar">
+                  <div className="info-panel">
+                    <h4>💡 生态平衡机制说明</h4>
+                    <div className="info-item">
+                      <span className="info-icon">🔺</span>
+                      <div>
+                        <strong>能量金字塔</strong>
+                        <p>每升一个营养级，可用能量约减少85%（默认15%效率）。</p>
+                      </div>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-icon">📍</span>
+                      <div>
+                        <strong>分布集中</strong>
+                        <p>物种倾向于集中在高宜居度地块，减少"铺满地图"现象。</p>
+                      </div>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-icon">⚔️</span>
+                      <div>
+                        <strong>竞争排斥</strong>
+                        <p>相似生态位的物种会激烈竞争，促进生态位分化。</p>
+                      </div>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-icon">🍖</span>
+                      <div>
+                        <strong>食物链平衡</strong>
+                        <p>消费者数量受猎物丰富度限制，形成动态平衡。</p>
                       </div>
                     </div>
                   </div>

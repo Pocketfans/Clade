@@ -348,6 +348,88 @@ export interface SpeciationConfig {
 }
 
 /**
+ * 繁殖配置 - 控制物种繁殖行为
+ */
+export interface ReproductionConfig {
+  // 基础增长
+  growth_rate_per_repro_speed?: number;  // 每点繁殖速度的增长率
+  growth_multiplier_min?: number;        // 增长倍数下限
+  growth_multiplier_max?: number;        // 增长倍数上限
+  
+  // 体型加成
+  size_bonus_microbe?: number;           // 微生物加成
+  size_bonus_tiny?: number;              // 小型生物加成
+  size_bonus_small?: number;             // 中小型生物加成
+  
+  // 世代时间加成
+  repro_bonus_weekly?: number;           // 极快繁殖加成
+  repro_bonus_monthly?: number;          // 快速繁殖加成
+  repro_bonus_halfyear?: number;         // 中速繁殖加成
+  
+  // 存活率修正
+  survival_modifier_base?: number;       // 存活率修正基础
+  survival_modifier_rate?: number;       // 存活率修正系数
+  
+  // 生存本能
+  survival_instinct_threshold?: number;  // 激活阈值
+  survival_instinct_bonus?: number;      // 最大加成
+  
+  // 资源压力
+  resource_saturation_penalty_mild?: number;  // 饱和惩罚率
+  resource_saturation_floor?: number;    // 最低效率
+  
+  // 承载力超载
+  overshoot_decay_rate?: number;         // 衰减率
+  near_capacity_efficiency?: number;     // 接近承载力效率
+  
+  // 营养级惩罚
+  t2_birth_efficiency?: number;          // T2繁殖效率
+  t3_birth_efficiency?: number;          // T3繁殖效率
+  t4_birth_efficiency?: number;          // T4+繁殖效率
+}
+
+/**
+ * 死亡率配置 - 控制物种死亡率计算
+ */
+export interface MortalityConfig {
+  // 压力上限
+  env_pressure_cap?: number;             // 环境压力上限
+  competition_pressure_cap?: number;     // 竞争压力上限
+  trophic_pressure_cap?: number;         // 营养级压力上限
+  resource_pressure_cap?: number;        // 资源压力上限
+  predation_pressure_cap?: number;       // 捕食网压力上限
+  plant_competition_cap?: number;        // 植物竞争上限
+  
+  // 加权求和权重
+  env_weight?: number;                   // 环境权重
+  competition_weight?: number;           // 竞争权重
+  trophic_weight?: number;               // 营养级权重
+  resource_weight?: number;              // 资源权重
+  predation_weight?: number;             // 捕食网权重
+  plant_competition_weight?: number;     // 植物竞争权重
+  
+  // 乘法模型系数
+  env_mult_coef?: number;
+  competition_mult_coef?: number;
+  trophic_mult_coef?: number;
+  resource_mult_coef?: number;
+  predation_mult_coef?: number;
+  plant_mult_coef?: number;
+  
+  // 模型混合
+  additive_model_weight?: number;        // 加权和占比
+  
+  // 抗性系数
+  size_resistance_per_10cm?: number;     // 体型抗性
+  generation_resistance_coef?: number;   // 世代抗性
+  max_resistance?: number;               // 抗性上限
+  
+  // 死亡率边界
+  min_mortality?: number;                // 最低死亡率
+  max_mortality?: number;                // 最高死亡率
+}
+
+/**
  * 生态平衡配置 - 控制种群动态平衡的参数
  */
 export interface EcologyBalanceConfig {
@@ -431,6 +513,12 @@ export interface UIConfig {
   
   // 11. 生态平衡配置
   ecology_balance?: EcologyBalanceConfig;
+  
+  // 12. 繁殖配置
+  reproduction?: ReproductionConfig;
+  
+  // 13. 死亡率配置
+  mortality?: MortalityConfig;
 
   // --- Legacy Fields (For backward compatibility types) ---
   ai_provider?: string | null;

@@ -109,6 +109,146 @@ class SpeciationConfig(BaseModel):
     threshold_multiplier_high_saturation: float = 1.2
 
 
+class ReproductionConfig(BaseModel):
+    """繁殖配置 - 控制物种繁殖行为的参数
+    
+    【设计理念】
+    - 基础增长率由繁殖速度属性决定
+    - 体型和世代时间提供额外加成
+    - 高营养级受能量传递效率限制
+    - 生存本能在危机时提高繁殖效率
+    """
+    model_config = ConfigDict(extra="ignore")
+    
+    # ========== 基础增长 ==========
+    # 每点繁殖速度提供的增长率加成
+    growth_rate_per_repro_speed: float = 0.4
+    # 增长倍数下限（保护濒危物种）
+    growth_multiplier_min: float = 0.6
+    # 增长倍数上限（限制爆发）
+    growth_multiplier_max: float = 15.0
+    
+    # ========== 体型加成 ==========
+    # 微生物（<0.1mm）增长加成
+    size_bonus_microbe: float = 2.0
+    # 小型生物（0.1mm-1mm）增长加成
+    size_bonus_tiny: float = 1.5
+    # 中小型生物（1mm-1cm）增长加成
+    size_bonus_small: float = 1.2
+    
+    # ========== 世代时间加成 ==========
+    # 极快繁殖（<1周）加成
+    repro_bonus_weekly: float = 1.8
+    # 快速繁殖（<1月）加成
+    repro_bonus_monthly: float = 1.4
+    # 中速繁殖（<半年）加成
+    repro_bonus_halfyear: float = 1.2
+    
+    # ========== 存活率修正 ==========
+    # 存活率修正基础值
+    survival_modifier_base: float = 0.4
+    # 存活率修正系数
+    survival_modifier_rate: float = 1.2
+    
+    # ========== 生存本能 ==========
+    # 生存本能激活阈值（死亡率超过此值）
+    survival_instinct_threshold: float = 0.5
+    # 生存本能最大加成
+    survival_instinct_bonus: float = 0.8
+    
+    # ========== 资源压力 ==========
+    # 资源饱和时的惩罚率（饱和度1.0-2.0区间）
+    resource_saturation_penalty_mild: float = 0.4
+    # 资源严重不足时的最低效率
+    resource_saturation_floor: float = 0.2
+    
+    # ========== 承载力超载 ==========
+    # 超载时的衰减率
+    overshoot_decay_rate: float = 0.25
+    # 接近承载力时的增长效率
+    near_capacity_efficiency: float = 0.6
+    
+    # ========== 营养级惩罚 ==========
+    # T2 初级消费者繁殖效率
+    t2_birth_efficiency: float = 0.9
+    # T3 高级消费者繁殖效率
+    t3_birth_efficiency: float = 0.7
+    # T4+ 顶级捕食者繁殖效率
+    t4_birth_efficiency: float = 0.5
+
+
+class MortalityConfig(BaseModel):
+    """死亡率配置 - 控制物种死亡率计算的参数
+    
+    【设计理念】
+    - 多种压力源叠加计算死亡率
+    - 各压力有独立上限避免极端值
+    - 抗性机制降低压力影响
+    - 权重系统平衡各因素贡献
+    """
+    model_config = ConfigDict(extra="ignore")
+    
+    # ========== 压力上限 ==========
+    # 环境压力上限
+    env_pressure_cap: float = 0.50
+    # 竞争压力上限
+    competition_pressure_cap: float = 0.40
+    # 营养级压力上限（捕食/被捕食）
+    trophic_pressure_cap: float = 0.45
+    # 资源压力上限
+    resource_pressure_cap: float = 0.40
+    # 捕食网压力上限
+    predation_pressure_cap: float = 0.50
+    # 植物竞争压力上限
+    plant_competition_cap: float = 0.30
+    
+    # ========== 加权求和权重 ==========
+    # 环境压力权重
+    env_weight: float = 0.40
+    # 竞争压力权重
+    competition_weight: float = 0.30
+    # 营养级压力权重
+    trophic_weight: float = 0.40
+    # 资源压力权重
+    resource_weight: float = 0.35
+    # 捕食网压力权重
+    predation_weight: float = 0.35
+    # 植物竞争权重
+    plant_competition_weight: float = 0.25
+    
+    # ========== 乘法模型系数 ==========
+    # 环境压力乘法系数
+    env_mult_coef: float = 0.50
+    # 竞争压力乘法系数
+    competition_mult_coef: float = 0.45
+    # 营养级压力乘法系数
+    trophic_mult_coef: float = 0.55
+    # 资源压力乘法系数
+    resource_mult_coef: float = 0.45
+    # 捕食网压力乘法系数
+    predation_mult_coef: float = 0.55
+    # 植物竞争乘法系数
+    plant_mult_coef: float = 0.35
+    
+    # ========== 模型混合 ==========
+    # 加权和模型占比（乘法模型占1-此值）
+    additive_model_weight: float = 0.70
+    
+    # ========== 抗性系数 ==========
+    # 体型抗性系数（每10cm体长的抗性）
+    size_resistance_per_10cm: float = 0.02
+    # 世代时间抗性系数
+    generation_resistance_coef: float = 0.05
+    # 最大抗性上限
+    max_resistance: float = 0.25
+    
+    # ========== 死亡率边界 ==========
+    # 最低死亡率（保证自然死亡）
+    min_mortality: float = 0.02
+    # 最高死亡率上限
+    max_mortality: float = 0.95
+
+
 class EcologyBalanceConfig(BaseModel):
     """生态平衡配置 - 控制种群动态平衡的所有参数
     
@@ -142,9 +282,9 @@ class EcologyBalanceConfig(BaseModel):
     # ========== 营养传递效率 ==========
     # 能量传递效率（10%规则）：每升一个营养级，可用能量降至此比例
     trophic_transfer_efficiency: float = 0.15
-    # 高营养级出生效率惩罚（T3+）
+    # 高营养级出生效率惩罚（T3+）- 已移至 ReproductionConfig
     high_trophic_birth_penalty: float = 0.7
-    # 顶级捕食者（T4+）额外效率惩罚
+    # 顶级捕食者（T4+）额外效率惩罚 - 已移至 ReproductionConfig
     apex_predator_penalty: float = 0.5
     
     # ========== 扩散行为 ==========
@@ -225,6 +365,12 @@ class UIConfig(BaseModel):
     
     # 11. 生态平衡配置
     ecology_balance: EcologyBalanceConfig = Field(default_factory=EcologyBalanceConfig)
+    
+    # 12. 繁殖配置
+    reproduction: ReproductionConfig = Field(default_factory=ReproductionConfig)
+    
+    # 13. 死亡率配置
+    mortality: MortalityConfig = Field(default_factory=MortalityConfig)
     
     # --- Legacy Fields (Keep for migration) ---
     ai_provider: str | None = None
