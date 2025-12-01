@@ -64,6 +64,35 @@ class ReproductionService:
         self.turn_years = turn_years
         self.enable_regional_capacity = enable_regional_capacity
         self.env_modifier = 1.0  # P2: 动态承载力修正系数
+        self.resource_boost = 1.0  # 【新增v8】资源繁荣时的繁殖率加成
+    
+    def update_resource_boost(self, pressure_modifiers: dict[str, float]) -> None:
+        """【新增v8】根据正面压力更新繁殖率加成
+        
+        资源繁荣等正面条件会提高繁殖效率：
+        - resource_boost: 资源丰富 -> 最多+20%繁殖
+        - productivity: 高生产力 -> 最多+15%繁殖
+        - competition 负值: 竞争减弱 -> 最多+10%繁殖
+        
+        Args:
+            pressure_modifiers: 压力修饰符字典
+        """
+        resource_boost_val = pressure_modifiers.get('resource_boost', 0.0)
+        productivity_val = pressure_modifiers.get('productivity', 0.0)
+        competition_val = pressure_modifiers.get('competition', 0.0)
+        
+        # 计算繁殖加成（最大+35%）
+        bonus = 1.0
+        bonus += min(0.20, resource_boost_val * 0.20)     # 资源丰富最多+20%
+        bonus += min(0.15, productivity_val * 0.15)       # 高生产力最多+15%
+        if competition_val < 0:  # 竞争减弱（负值）
+            bonus += min(0.10, abs(competition_val) * 0.30)  # 竞争减弱最多+10%
+        
+        self.resource_boost = min(1.35, bonus)  # 上限1.35倍
+        
+        if self.resource_boost > 1.01:
+            logger.info(f"[繁殖加成] 资源繁荣加成: {self.resource_boost:.0%} "
+                       f"(资源={resource_boost_val:.1f}, 生产力={productivity_val:.1f}, 竞争={competition_val:.1f})")
     
     def update_environmental_modifier(self, temp_change: float, sea_level_change: float):
         """更新环境动态修正系数
@@ -1113,7 +1142,8 @@ class ReproductionService:
             resource_modifier = max(saturation_floor, 0.6 - (resource_saturation - 2.0) * 0.15)
         
         # 综合增长倍数
-        growth_multiplier = base_growth_multiplier * survival_modifier * resource_modifier
+        # 【v8新增】应用资源繁荣加成
+        growth_multiplier = base_growth_multiplier * survival_modifier * resource_modifier * self.resource_boost
         
         # 限制单回合增长倍数（从配置读取）
         try:

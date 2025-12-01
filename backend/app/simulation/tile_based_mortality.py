@@ -1392,6 +1392,24 @@ class TileBasedMortalityEngine:
         )
         global_pressure = (other_pressure / 30.0) * base_sens[np.newaxis, :]
         
+        # ========== 【新增】正面压力减免 ==========
+        # 资源繁盛、高生产力等正面条件会降低环境压力
+        resource_boost = pressure_modifiers.get('resource_boost', 0.0)
+        productivity_boost = pressure_modifiers.get('productivity', 0.0)
+        oxygen_boost = max(0.0, pressure_modifiers.get('oxygen', 0.0))  # 正值才是加成
+        habitat_expansion = pressure_modifiers.get('habitat_expansion', 0.0)
+        
+        # 综合正面效果：最大可减免 30% 压力
+        positive_bonus = min(0.30, (
+            resource_boost * 0.15 +      # 资源丰富最多减免15%
+            productivity_boost * 0.10 +  # 高生产力最多减免10%
+            oxygen_boost * 0.03 +        # 高氧环境最多减免3%
+            habitat_expansion * 0.02     # 栖息地扩展最多减免2%
+        ))
+        
+        if positive_bonus > 0.01:
+            logger.debug(f"[正面压力] 环境减免={positive_bonus:.1%} (资源={resource_boost:.1f}, 生产力={productivity_boost:.1f})")
+        
         # ========== 组合压力 ==========
         # 【优化v7】动态权重：极端温度时提升温度压力权重
         # 检测是否存在极端温度条件
@@ -1417,6 +1435,9 @@ class TileBasedMortalityEngine:
                 special_pressure * 0.28 +   # 特殊事件影响显著
                 global_pressure * 0.17      # 其他综合影响
             )
+        
+        # 【新增】应用正面压力减免
+        pressure = pressure * (1.0 - positive_bonus)
         
         # 【修改】提高环境压力上限，允许极端条件下更高的压力值
         return np.clip(pressure, 0.0, 1.2)  # 从1.0提升到1.2

@@ -999,6 +999,10 @@ class PopulationUpdateStage(BaseStage):
             ctx.current_map_state._prev_sea_level = ctx.current_map_state.sea_level
         engine.reproduction_service.update_environmental_modifier(temp_change, sea_level_change)
         
+        # 【v8新增】更新资源繁荣加成（正面压力提高繁殖率）
+        if ctx.modifiers:
+            engine.reproduction_service.update_resource_boost(ctx.modifiers)
+        
         # 【修复】先计算所有物种的调整后死亡率，用于构建真实存活率
         # 这样繁殖模块才能正确反应压力造成的高死亡率
         adjusted_death_rates = {}
