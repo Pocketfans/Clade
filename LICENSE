@@ -1,98 +1,136 @@
-Commons Clause License Condition v1.0
+# Clade 双重许可证 / Dual License
 
-The Software is provided to you by the Licensor under the License, as defined
-below, subject to the following condition.
+本项目采用双重许可证模式，不同组件适用不同的开源许可证。
 
-Without limiting other conditions in the License, the grant of rights under the
-License will not include, and the License does not grant to you, the right to
-Sell the Software.
-
-For purposes of the foregoing, "Sell" means practicing any or all of the rights
-granted to you under the License to provide to third parties, for a fee or other
-consideration (including without limitation fees for hosting or consulting/
-support services related to the Software), a product or service whose value
-derives, entirely or substantially, from the functionality of the Software. Any
-license notice or attribution required by the License must also include this
-Commons Clause License Condition notice.
-
-Software: Clade
-License: MIT License
-Licensor: Pocketfans
+This project uses a dual-license model with different open source licenses
+for different components.
 
 ---
 
-MIT License
+## 📋 许可证概览 / License Overview
+
+| 组件 / Component | 许可证 / License | 路径 / Path |
+|------------------|------------------|-------------|
+| 后端核心 / Backend Core | AGPL-3.0 | `backend/` |
+| 前端界面 / Frontend UI | MPL-2.0 | `frontend/` |
+| 文档 / Documentation | CC-BY-4.0 | `docs/`, `*.md` |
+| 配置与数据 / Config & Data | MIT | `data/`, `*.json`, `*.yaml` |
+
+---
+
+## 🔒 AGPL-3.0 (后端核心 / Backend Core)
+
+**适用范围 / Scope**: `backend/` 目录下的所有代码
+
+GNU Affero General Public License v3.0
+
+这意味着：
+- ✅ 可以自由使用、修改、分发
+- ✅ 可以用于商业目的
+- ⚠️ 修改后的版本必须以 AGPL-3.0 开源
+- ⚠️ 通过网络提供服务时，必须提供源代码
+- ⚠️ 必须保留版权声明和许可证
+
+This means:
+- ✅ Free to use, modify, and distribute
+- ✅ Commercial use allowed
+- ⚠️ Modified versions must be open-sourced under AGPL-3.0
+- ⚠️ Network use requires source code disclosure
+- ⚠️ Must retain copyright and license notices
+
+完整许可证文本见 / Full license text: `LICENSE-AGPL-3.0`
+
+---
+
+## 🔓 MPL-2.0 (前端界面 / Frontend UI)
+
+**适用范围 / Scope**: `frontend/` 目录下的所有代码
+
+Mozilla Public License 2.0
+
+这意味着：
+- ✅ 可以自由使用、修改、分发
+- ✅ 可以用于商业目的
+- ✅ 可以与私有代码混合使用
+- ⚠️ 修改的 MPL 文件必须以 MPL-2.0 开源
+- ⚠️ 新增的文件可以使用其他许可证
+- ⚠️ 必须保留版权声明
+
+This means:
+- ✅ Free to use, modify, and distribute
+- ✅ Commercial use allowed
+- ✅ Can be combined with proprietary code
+- ⚠️ Modified MPL files must remain MPL-2.0
+- ⚠️ New files can use different licenses
+- ⚠️ Must retain copyright notices
+
+完整许可证文本见 / Full license text: `LICENSE-MPL-2.0`
+
+---
+
+## 📝 简要说明 / Quick Summary
+
+### ✅ 允许 / Allowed
+
+- 个人学习和研究使用
+- 修改代码并创建衍生作品
+- 在商业项目中使用（需遵守相应许可证条款）
+- 贡献代码回馈社区
+- 将前端组件嵌入其他项目（遵守 MPL-2.0）
+
+### ⚠️ 需要注意 / Requirements
+
+**使用后端代码时 (AGPL-3.0)**:
+- 如果你修改了后端代码，必须开源你的修改
+- 如果你通过网络提供基于本后端的服务，必须提供源代码
+- 衍生作品必须同样采用 AGPL-3.0
+
+**使用前端代码时 (MPL-2.0)**:
+- 如果你修改了现有的前端文件，修改后的文件必须开源
+- 你可以添加新的私有文件与 MPL 代码一起使用
+- 可以将前端组件编译后嵌入其他应用
+
+---
+
+## 🤝 贡献者协议 / Contributor Agreement
+
+向本项目贡献代码即表示您同意：
+
+1. 您的贡献将按照本项目的许可证条款发布
+2. 后端贡献采用 AGPL-3.0，前端贡献采用 MPL-2.0
+3. 您拥有贡献代码的版权或已获得必要授权
+
+By contributing to this project, you agree that:
+
+1. Your contributions will be released under this project's licenses
+2. Backend contributions under AGPL-3.0, frontend under MPL-2.0
+3. You own the copyright or have necessary permissions for your contributions
+
+---
+
+## 📞 商业许可 / Commercial Licensing
+
+如果 AGPL-3.0 或 MPL-2.0 的条款不适合您的使用场景，
+我们可以提供商业许可选项。请联系：
+
+If AGPL-3.0 or MPL-2.0 terms don't fit your use case,
+commercial licensing options are available. Please contact:
+
+- GitHub: https://github.com/Pocketfans
+- Email: [联系项目维护者]
+
+---
+
+## 📚 参考资源 / References
+
+- AGPL-3.0: https://www.gnu.org/licenses/agpl-3.0.html
+- MPL-2.0: https://www.mozilla.org/en-US/MPL/2.0/
+- AGPL-3.0 FAQ: https://www.gnu.org/licenses/gpl-faq.html
+- MPL-2.0 FAQ: https://www.mozilla.org/en-US/MPL/2.0/FAQ/
+
+---
 
 Copyright (c) 2025 Pocketfans
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
----
-
-Commons Clause 许可条件 v1.0（中文翻译，仅供参考，以英文原文为准）
-
-本软件由许可方根据下述许可证提供给您，但须遵守以下条件。
-
-在不限制许可证中其他条件的前提下，许可证授予的权利不包括、且许可证不授予您"销售"本软件的权利。
-
-就上述目的而言，"销售"是指行使许可证授予您的任何或全部权利，以向第三方提供收费或其他对价
-（包括但不限于与本软件相关的托管或咨询/支持服务费用）的产品或服务，且该产品或服务的价值
-全部或主要来源于本软件的功能。许可证要求的任何许可声明或归属信息还必须包含此 Commons 
-Clause 许可条件声明。
-
-软件：Clade
-许可证：MIT 许可证
-许可方：Pocketfans
-
----
-
-MIT 开源许可证（中文翻译，仅供参考，以英文原文为准）
-
-版权所有 (c) 2025 Pocketfans
-
-特此免费授予任何获得本软件及相关文档文件（以下简称"软件"）副本的人不受限制地处理本软件的权利，
-包括但不限于使用、复制、修改、合并、发布、分发、再许可和/或销售本软件副本的权利，
-以及允许获得本软件的人这样做，但须符合以下条件：
-
-上述版权声明和本许可声明应包含在本软件的所有副本或重要部分中。
-
-本软件按"原样"提供，不提供任何形式的明示或暗示担保，包括但不限于对适销性、
-特定用途适用性和非侵权性的担保。在任何情况下，作者或版权持有人均不对任何索赔、
-损害或其他责任负责，无论是在合同诉讼、侵权行为还是其他方面，
-由本软件或本软件的使用或其他交易引起或与之相关。
-
----
-
-简要说明 / Quick Summary
-
-✅ 允许 (Allowed):
-- 个人学习和研究使用
-- 修改和创建衍生作品
-- 非商业目的的分发
-- 在非盈利项目中使用
-- 贡献代码回馈社区
-
-❌ 禁止 (Not Allowed):
-- 销售本软件或其副本
-- 提供基于本软件的付费托管服务
-- 提供基于本软件的付费咨询/支持服务
-- 将本软件作为付费产品的核心功能
-
-如有商业使用需求，请联系许可方获取商业授权。
-For commercial licensing, please contact the Licensor.
+软件：Clade - AI 驱动的生命演化模拟器
+Software: Clade - AI-Powered Life Evolution Simulator
