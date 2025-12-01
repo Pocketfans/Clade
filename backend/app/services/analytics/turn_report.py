@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from ..species.trophic_interaction import TrophicInteractionService
 
 from ...schemas.responses import SpeciesSnapshot
+from ...core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,51 @@ class TurnReportService:
                     "births": getattr(result, 'births', 0),
                     "survivors": getattr(result, 'survivors', 0),
                 })
+        
+        # ========== 检查 LLM 回合报告开关 ==========
+        # 优先从 UI 配置读取，否则从系统配置读取
+        try:
+            from pathlib import Path
+            settings = get_settings()
+            ui_config_path = Path(settings.ui_config_path)
+            ui_config = self.environment_repository.load_ui_config(ui_config_path)
+            enable_turn_report_llm = ui_config.turn_report_llm_enabled
+        except Exception:
+            # 回退到系统配置
+            settings = get_settings()
+            enable_turn_report_llm = settings.enable_turn_report_llm
+        
+        # 如果开关关闭，直接使用简单模式，不调用 LLM
+        if not enable_turn_report_llm:
+            logger.info("[TurnReportService] LLM 回合报告已关闭，使用简单模式")
+            self._emit_event("info", "📝 LLM 回合报告已关闭", "报告")
+            
+            narrative = f"回合 {turn_index} 完成。"
+            
+            if mortality_results:
+                alive_count = sum(1 for r in mortality_results if r.species.status == "alive")
+                narrative += f" 存活物种: {alive_count} 个。"
+            
+            if branching_events:
+                narrative += f" 发生了 {len(branching_events)} 次物种分化。"
+            
+            if migration_events:
+                narrative += f" 发生了 {len(migration_events)} 次迁徙。"
+            
+            # 简单模式下流式输出
+            if stream_callback:
+                for char in narrative:
+                    await stream_callback(char)
+                    await asyncio.sleep(0.01)
+            
+            return TurnReport(
+                turn_index=turn_index,
+                narrative=narrative,
+                pressures_summary=pressure_summary,
+                species=species_data,
+                branching_events=branching_events or [],
+                major_events=major_events or [],
+            )
         
         # ========== 【修复】调用 LLM 叙事引擎 ==========
         # 将 mortality_results 转换为 SpeciesSnapshot 列表

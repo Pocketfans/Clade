@@ -1637,14 +1637,40 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
               
               <div className="memory-layout">
                 <div className="memory-main">
-                  {/* AI 叙事开关 */}
+                  {/* 回合报告 LLM 开关 */}
+                  <div className="feature-toggle-card">
+                    <div className="toggle-card-content">
+                      <div className="toggle-info">
+                        <span className="toggle-icon">📜</span>
+                        <div className="toggle-text">
+                          <span className="toggle-title">回合报告（LLM）</span>
+                          <span className="toggle-desc">生成每回合的整体生态总结与演化叙事</span>
+                        </div>
+                      </div>
+                      <label className="toggle-switch">
+                        <input 
+                          type="checkbox" 
+                          checked={form.turn_report_llm_enabled ?? true}
+                          onChange={(e) => dispatch({ type: 'UPDATE_GLOBAL', field: 'turn_report_llm_enabled', value: e.target.checked })}
+                        />
+                        <span className="toggle-slider"></span>
+                      </label>
+                    </div>
+                    {!(form.turn_report_llm_enabled ?? true) && (
+                      <div className="toggle-hint">
+                        💡 关闭后使用简单模板生成回合摘要，节省 Token
+                      </div>
+                    )}
+                  </div>
+
+                  {/* AI 物种叙事开关 */}
                   <div className="feature-toggle-card">
                     <div className="toggle-card-content">
                       <div className="toggle-info">
                         <span className="toggle-icon">📖</span>
                         <div className="toggle-text">
                           <span className="toggle-title">AI 物种叙事</span>
-                          <span className="toggle-desc">为每个物种生成演化故事和描述性文本</span>
+                          <span className="toggle-desc">为每个物种单独生成演化故事和行为描述</span>
                         </div>
                       </div>
                       <label className="toggle-switch">
@@ -1661,6 +1687,15 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                         💡 关闭后可节省 API 调用，推演速度更快
                       </div>
                     )}
+                  </div>
+                  
+                  {/* 开关区别说明 */}
+                  <div className="tip-box" style={{ marginTop: '8px' }}>
+                    <strong>💡 两个开关的区别：</strong>
+                    <ul style={{ margin: '8px 0 0 16px', padding: 0, fontSize: '0.85rem', opacity: 0.9 }}>
+                      <li><strong>回合报告（LLM）</strong>：控制整回合的宏观总结，汇总所有物种的生态变化</li>
+                      <li><strong>AI 物种叙事</strong>：控制单个物种的微观描述，生成个体行为和适应故事</li>
+                    </ul>
                   </div>
 
                   <div className="tip-box info">

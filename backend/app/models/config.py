@@ -73,6 +73,9 @@ class UIConfig(BaseModel):
     # 8. AI 叙事开关
     ai_narrative_enabled: bool = False   # 是否启用 AI 生成物种叙事（默认关闭，节省 API 调用）
     
+    # 9. 回合报告 LLM 开关（与物种叙事分开）
+    turn_report_llm_enabled: bool = True  # 是否启用 LLM 生成回合总结（默认开启）
+    
     # --- Legacy Fields (Keep for migration) ---
     ai_provider: str | None = None
     ai_model: str | None = None

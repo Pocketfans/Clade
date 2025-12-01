@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     # 杂交遗传距离上限（超过此值无法杂交）- 略微放宽允许更多杂交
     hybridization_distance_max: float = Field(default=0.50, alias="HYBRIDIZATION_DISTANCE_MAX")
     
+    # ========== AI 功能开关 ==========
+    # 回合报告 LLM 叙事开关（与 AI 物种叙事分开控制）
+    # True: 使用 LLM 生成每回合的整体总结/叙事
+    # False: 使用简单模板生成回合报告，节省 Token
+    enable_turn_report_llm: bool = Field(default=True, alias="ENABLE_TURN_REPORT_LLM")
+    
     # 日志配置
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_dir: str = Field(default=str(PROJECT_ROOT / "data/logs"))

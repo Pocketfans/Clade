@@ -338,6 +338,9 @@ export interface UIConfig {
 
   // 8. AI 叙事开关
   ai_narrative_enabled?: boolean;     // 是否启用 AI 生成物种叙事（默认关闭）
+  
+  // 9. 回合报告 LLM 开关（与物种叙事分开）
+  turn_report_llm_enabled?: boolean;  // 是否启用 LLM 生成回合总结（默认开启）
 
   // --- Legacy Fields (For backward compatibility types) ---
   ai_provider?: string | null;
