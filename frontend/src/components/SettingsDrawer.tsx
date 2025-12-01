@@ -2005,14 +2005,14 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
             <div className="tab-content fade-in">
               <div className="section-header">
                 <h3>🧬 物种分化参数</h3>
-                <p>调整物种演化分化的触发条件和概率，影响新物种产生的频率与时机。</p>
+                <p>调整新物种产生的频率与时机。数值越低 = 分化越容易发生。</p>
               </div>
               
               <div className="memory-layout">
                 <div className="memory-main">
                   {/* 快速预设 */}
                   <div className="preset-section">
-                    <h4>快速配置预设</h4>
+                    <h4>🎮 快速配置</h4>
                     <div className="preset-buttons autosave-presets">
                       <button
                         type="button"
@@ -2030,7 +2030,7 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                         }}
                       >
                         🌱 爆发模式
-                        <span className="preset-desc">早期大量分化，适合新游戏</span>
+                        <span className="preset-desc">前15回合疯狂分化，快速建立生态多样性</span>
                       </button>
                       <button
                         type="button"
@@ -2048,7 +2048,7 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                         }}
                       >
                         ⚖️ 平衡模式
-                        <span className="preset-desc">默认设置，平衡分化速度</span>
+                        <span className="preset-desc">推荐设置，前10回合适度鼓励分化</span>
                       </button>
                       <button
                         type="button"
@@ -2066,23 +2066,22 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                         }}
                       >
                         🔬 写实模式
-                        <span className="preset-desc">分化困难，适合长期游戏</span>
+                        <span className="preset-desc">分化困难，需要真正的环境压力才会演化</span>
                       </button>
                     </div>
                   </div>
 
                   <div className="tip-box info">
-                    💡 分化是新物种产生的核心机制。早期阶段参数会在游戏前期降低分化门槛，帮助建立多样化的生态系统。
+                    💡 <strong>什么是分化？</strong> 一个物种分裂成两个或多个新物种的过程。游戏早期会自动降低分化门槛，让生态系统快速多样化。后期条件会收紧，需要真正的环境压力才能触发分化。
                   </div>
 
                   {/* 基础参数 */}
                   <div className="speciation-section">
-                    <h4>🎯 基础分化参数</h4>
+                    <h4>🎯 基础参数</h4>
                     <div className="form-fields">
                       <label className="form-field">
                         <span className="field-label">
-                          冷却回合
-                          <span className="field-hint-inline">（分化后等待回合数）</span>
+                          分化冷却期
                         </span>
                         <div className="input-with-unit">
                           <input
@@ -2095,13 +2094,12 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                           />
                           <span className="unit-label">回合</span>
                         </div>
-                        <span className="field-hint">物种分化后需要等待的回合数才能再次分化</span>
+                        <span className="field-hint">物种分化后，需等待N回合才能再次分化。设为0表示无冷却限制。</span>
                       </label>
 
                       <label className="form-field">
                         <span className="field-label">
-                          物种软上限
-                          <span className="field-hint-inline">（密度衰减阈值）</span>
+                          生态系统物种上限
                         </span>
                         <div className="input-with-unit">
                           <input
@@ -2114,13 +2112,12 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                           />
                           <span className="unit-label">种</span>
                         </div>
-                        <span className="field-hint">超过此数量后分化概率开始衰减</span>
+                        <span className="field-hint">当物种数量接近此值时，新分化会越来越困难。防止物种爆炸式增长。</span>
                       </label>
 
                       <label className="form-field">
                         <span className="field-label">
-                          基础分化率
-                          <span className="field-hint-inline">（达成条件后的基础概率）</span>
+                          基础分化成功率
                         </span>
                         <div className="input-with-unit">
                           <input
@@ -2132,24 +2129,23 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                             value={form.speciation?.base_speciation_rate ?? 0.5}
                             onChange={(e) => dispatch({ type: 'UPDATE_SPECIATION', updates: { base_speciation_rate: parseFloat(e.target.value) || 0.5 } })}
                           />
-                          <span className="unit-label">%</span>
+                          <span className="unit-label">（0-1）</span>
                         </div>
-                        <span className="field-hint">满足分化条件时的基础成功概率</span>
+                        <span className="field-hint">满足所有条件后，分化实际发生的概率。0.5 = 50%成功率。</span>
                       </label>
                     </div>
                   </div>
 
                   {/* 早期优化参数 */}
                   <div className="speciation-section">
-                    <h4>🌅 早期分化优化</h4>
+                    <h4>🌅 早期阶段设置</h4>
                     <div className="tip-box">
-                      💡 这些参数在游戏早期降低分化难度，帮助生态系统快速多样化。
+                      💡 游戏初期物种较少，这些设置会暂时降低分化难度，帮助快速建立多样化的生态系统。
                     </div>
                     <div className="form-fields">
                       <label className="form-field">
                         <span className="field-label">
-                          早期阶段回合数
-                          <span className="field-hint-inline">（使用宽松规则的回合数）</span>
+                          早期阶段持续时间
                         </span>
                         <div className="input-with-unit">
                           <input
@@ -2162,13 +2158,12 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                           />
                           <span className="unit-label">回合</span>
                         </div>
-                        <span className="field-hint">前N回合使用更宽松的分化条件</span>
+                        <span className="field-hint">前N回合视为"早期阶段"，使用更宽松的分化规则。之后恢复正常难度。</span>
                       </label>
 
                       <label className="form-field">
                         <span className="field-label">
-                          门槛最低系数
-                          <span className="field-hint-inline">（门槛降低的最低比例）</span>
+                          种群门槛最低倍率
                         </span>
                         <div className="input-with-unit">
                           <input
@@ -2180,15 +2175,14 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                             value={form.speciation?.early_threshold_min_factor ?? 0.3}
                             onChange={(e) => dispatch({ type: 'UPDATE_SPECIATION', updates: { early_threshold_min_factor: parseFloat(e.target.value) || 0.3 } })}
                           />
-                          <span className="unit-label">倍</span>
+                          <span className="unit-label">（0-1）</span>
                         </div>
-                        <span className="field-hint">门槛最低可降至基础值的多少倍（0.3 = 30%）</span>
+                        <span className="field-hint">早期阶段种群要求最低可降至正常值的多少倍。例如0.3表示门槛最低降到30%。</span>
                       </label>
 
                       <label className="form-field">
                         <span className="field-label">
-                          门槛衰减速率
-                          <span className="field-hint-inline">（每回合降低的比例）</span>
+                          门槛每回合恢复速度
                         </span>
                         <div className="input-with-unit">
                           <input
@@ -2200,15 +2194,14 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                             value={form.speciation?.early_threshold_decay_rate ?? 0.07}
                             onChange={(e) => dispatch({ type: 'UPDATE_SPECIATION', updates: { early_threshold_decay_rate: parseFloat(e.target.value) || 0.07 } })}
                           />
-                          <span className="unit-label">/回合</span>
+                          <span className="unit-label">（0-0.2）</span>
                         </div>
-                        <span className="field-hint">每回合门槛降低的速率（0.07 = 第0回合100%，第5回合65%）</span>
+                        <span className="field-hint">每回合门槛恢复多少。0.07表示：第1回合门槛=93%，第5回合=65%，第10回合=30%。</span>
                       </label>
 
                       <label className="form-field">
                         <span className="field-label">
-                          跳过冷却回合数
-                          <span className="field-hint-inline">（早期不受冷却限制）</span>
+                          无冷却期回合数
                         </span>
                         <div className="input-with-unit">
                           <input
@@ -2221,19 +2214,22 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                           />
                           <span className="unit-label">回合</span>
                         </div>
-                        <span className="field-hint">前N回合忽略分化冷却期</span>
+                        <span className="field-hint">前N回合完全忽略分化冷却期，允许物种连续分化。</span>
                       </label>
                     </div>
                   </div>
 
                   {/* 触发阈值 */}
                   <div className="speciation-section">
-                    <h4>📊 触发条件阈值</h4>
+                    <h4>📊 环境压力触发阈值</h4>
+                    <div className="tip-box">
+                      💡 只有当环境压力超过阈值时，才可能触发分化。数值越低 = 越容易达到分化条件。
+                    </div>
                     <div className="form-fields two-column">
                       <div className="column">
-                        <h5 style={{margin: '0 0 8px', color: 'var(--accent-color)'}}>🌅 早期阶段</h5>
+                        <h5 style={{margin: '0 0 8px', color: 'var(--accent-color)'}}>🌅 早期阶段（更宽松）</h5>
                         <label className="form-field compact">
-                          <span className="field-label">压力阈值</span>
+                          <span className="field-label">环境压力</span>
                           <input
                             className="field-input"
                             type="number"
@@ -2245,7 +2241,7 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                           />
                         </label>
                         <label className="form-field compact">
-                          <span className="field-label">资源阈值</span>
+                          <span className="field-label">资源竞争</span>
                           <input
                             className="field-input"
                             type="number"
@@ -2257,7 +2253,7 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                           />
                         </label>
                         <label className="form-field compact">
-                          <span className="field-label">演化潜力阈值</span>
+                          <span className="field-label">演化潜力</span>
                           <input
                             className="field-input"
                             type="number"
@@ -2270,9 +2266,9 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                         </label>
                       </div>
                       <div className="column">
-                        <h5 style={{margin: '0 0 8px', color: 'var(--text-secondary)'}}>🌙 后期阶段</h5>
+                        <h5 style={{margin: '0 0 8px', color: 'var(--text-secondary)'}}>🌙 后期阶段（更严格）</h5>
                         <label className="form-field compact">
-                          <span className="field-label">压力阈值</span>
+                          <span className="field-label">环境压力</span>
                           <input
                             className="field-input"
                             type="number"
@@ -2284,7 +2280,7 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                           />
                         </label>
                         <label className="form-field compact">
-                          <span className="field-label">资源阈值</span>
+                          <span className="field-label">资源竞争</span>
                           <input
                             className="field-input"
                             type="number"
@@ -2296,7 +2292,7 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                           />
                         </label>
                         <label className="form-field compact">
-                          <span className="field-label">演化潜力阈值</span>
+                          <span className="field-label">演化潜力</span>
                           <input
                             className="field-input"
                             type="number"
@@ -2310,21 +2306,20 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                       </div>
                     </div>
                     <span className="field-hint" style={{display: 'block', marginTop: '8px'}}>
-                      超过阈值时更容易触发分化。早期使用更低阈值，后期收紧。
+                      <strong>环境压力</strong>：气候变化、灾难等外部因素 | <strong>资源竞争</strong>：食物/栖息地争夺程度 | <strong>演化潜力</strong>：物种本身的变异能力
                     </span>
                   </div>
 
                   {/* 辐射演化 */}
                   <div className="speciation-section">
-                    <h4>☀️ 辐射演化参数</h4>
+                    <h4>☀️ 辐射演化（繁荣分化）</h4>
                     <div className="tip-box">
-                      💡 辐射演化是繁荣物种在无压力情况下的自然分化，概率较低但可产生多样性。
+                      💡 当物种非常繁荣、没有明显压力时，也可能自然分化出新种。这是一种"太成功导致分裂"的机制。
                     </div>
                     <div className="form-fields">
                       <label className="form-field">
                         <span className="field-label">
-                          基础概率
-                          <span className="field-hint-inline">（无压力时的分化基础概率）</span>
+                          辐射演化基础概率
                         </span>
                         <div className="input-with-unit">
                           <input
@@ -2336,14 +2331,14 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                             value={form.speciation?.radiation_base_chance ?? 0.05}
                             onChange={(e) => dispatch({ type: 'UPDATE_SPECIATION', updates: { radiation_base_chance: parseFloat(e.target.value) || 0.05 } })}
                           />
-                          <span className="unit-label">%</span>
+                          <span className="unit-label">（0-0.5）</span>
                         </div>
+                        <span className="field-hint">即使没有环境压力，繁荣物种每回合也有此概率触发分化。0.05 = 5%。</span>
                       </label>
 
                       <label className="form-field">
                         <span className="field-label">
                           早期额外加成
-                          <span className="field-hint-inline">（早期辐射演化的额外概率）</span>
                         </span>
                         <div className="input-with-unit">
                           <input
@@ -2355,14 +2350,14 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                             value={form.speciation?.radiation_early_bonus ?? 0.15}
                             onChange={(e) => dispatch({ type: 'UPDATE_SPECIATION', updates: { radiation_early_bonus: parseFloat(e.target.value) || 0.15 } })}
                           />
-                          <span className="unit-label">%</span>
+                          <span className="unit-label">（0-0.5）</span>
                         </div>
+                        <span className="field-hint">早期阶段额外增加的辐射演化概率。0.15 = 额外+15%概率。</span>
                       </label>
 
                       <label className="form-field">
                         <span className="field-label">
-                          早期无隔离惩罚
-                          <span className="field-hint-inline">（无地理隔离时的概率乘数）</span>
+                          无地理隔离时的概率衰减（早期）
                         </span>
                         <div className="input-with-unit">
                           <input
@@ -2374,14 +2369,14 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                             value={form.speciation?.no_isolation_penalty_early ?? 0.8}
                             onChange={(e) => dispatch({ type: 'UPDATE_SPECIATION', updates: { no_isolation_penalty_early: parseFloat(e.target.value) || 0.8 } })}
                           />
-                          <span className="unit-label">倍</span>
+                          <span className="unit-label">（0-1）</span>
                         </div>
-                        <span className="field-hint">无地理隔离时概率乘以此系数（0.8 = 降低20%）</span>
+                        <span className="field-hint">物种分布连续（无地理隔离）时，分化概率乘以此系数。0.8表示概率降为80%。</span>
                       </label>
 
                       <label className="form-field">
                         <span className="field-label">
-                          后期无隔离惩罚
+                          无地理隔离时的概率衰减（后期）
                         </span>
                         <div className="input-with-unit">
                           <input
@@ -2393,20 +2388,23 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                             value={form.speciation?.no_isolation_penalty_late ?? 0.5}
                             onChange={(e) => dispatch({ type: 'UPDATE_SPECIATION', updates: { no_isolation_penalty_late: parseFloat(e.target.value) || 0.5 } })}
                           />
-                          <span className="unit-label">倍</span>
+                          <span className="unit-label">（0-1）</span>
                         </div>
+                        <span className="field-hint">后期阶段无隔离时的衰减更严重。0.5表示概率降为50%。</span>
                       </label>
                     </div>
                   </div>
 
                   {/* 候选地块筛选 */}
                   <div className="speciation-section">
-                    <h4>🗺️ 候选地块筛选</h4>
+                    <h4>🗺️ 分化候选条件</h4>
+                    <div className="tip-box">
+                      💡 只有满足这些条件的栖息地才会被考虑作为分化发生地。过于稀疏或死亡率极端的地区不适合产生新物种。
+                    </div>
                     <div className="form-fields">
                       <label className="form-field">
                         <span className="field-label">
-                          最小种群
-                          <span className="field-hint-inline">（地块成为候选的最低种群）</span>
+                          地块最低种群数
                         </span>
                         <div className="input-with-unit">
                           <input
@@ -2419,12 +2417,12 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                           />
                           <span className="unit-label">个体</span>
                         </div>
+                        <span className="field-hint">地块上至少要有这么多个体，才能成为分化候选地。数值越低，小种群也能分化。</span>
                       </label>
 
                       <label className="form-field">
                         <span className="field-label">
-                          死亡率范围
-                          <span className="field-hint-inline">（允许分化的死亡率区间）</span>
+                          允许分化的死亡率区间
                         </span>
                         <div className="range-inputs">
                           <input
@@ -2447,7 +2445,7 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
                             onChange={(e) => dispatch({ type: 'UPDATE_SPECIATION', updates: { candidate_tile_death_rate_max: parseFloat(e.target.value) || 0.75 } })}
                           />
                         </div>
-                        <span className="field-hint">死亡率过低或过高的地块不会成为分化候选</span>
+                        <span className="field-hint">死亡率太低（太安逸）或太高（濒临灭绝）都不利于分化。默认2%-75%。</span>
                       </label>
                     </div>
                   </div>
@@ -2455,41 +2453,48 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
 
                 {/* 右侧说明 */}
                 <div className="memory-stats">
-                  <h4>📝 分化机制说明</h4>
+                  <h4>📖 名词解释</h4>
                   <div className="info-list">
                     <div className="info-item">
                       <span className="info-icon">🌍</span>
                       <div>
-                        <strong>地理隔离</strong>
-                        <p>物理分隔导致的分化，是最主要的分化途径</p>
+                        <strong>地理隔离分化</strong>
+                        <p>山脉、海洋等物理屏障将种群分开，各自演化成新物种。最常见的分化方式。</p>
                       </div>
                     </div>
                     <div className="info-item">
                       <span className="info-icon">🌿</span>
                       <div>
-                        <strong>生态隔离</strong>
-                        <p>同区域内因资源/环境差异导致的分化</p>
+                        <strong>生态隔离分化</strong>
+                        <p>同一区域内，因食物、作息等生态位差异导致的分化。如白天/夜间活动的物种分化。</p>
                       </div>
                     </div>
                     <div className="info-item">
                       <span className="info-icon">☀️</span>
                       <div>
                         <strong>辐射演化</strong>
-                        <p>繁荣物种的自然分化，概率较低但持续进行</p>
+                        <p>繁荣物种自然分化，就像企业做大后会分拆子公司。概率较低但持续进行。</p>
                       </div>
                     </div>
                     <div className="info-item">
-                      <span className="info-icon">⚖️</span>
+                      <span className="info-icon">📈</span>
                       <div>
-                        <strong>早期优化</strong>
-                        <p>游戏前期使用更宽松的条件，帮助建立多样性</p>
+                        <strong>环境压力</strong>
+                        <p>气候变化、灾难、栖息地变化等。高压力促进演化，但过高会导致灭绝。</p>
                       </div>
                     </div>
                     <div className="info-item">
-                      <span className="info-icon">💀</span>
+                      <span className="info-icon">⚔️</span>
                       <div>
-                        <strong>自然淘汰</strong>
-                        <p>分化多不等于存活多，不适应环境的物种会灭绝</p>
+                        <strong>资源竞争</strong>
+                        <p>食物和栖息地的争夺程度。激烈竞争促使物种寻找新的生态位。</p>
+                      </div>
+                    </div>
+                    <div className="info-item">
+                      <span className="info-icon">🧬</span>
+                      <div>
+                        <strong>演化潜力</strong>
+                        <p>物种本身的遗传多样性和变异能力。高潜力的物种更容易产生新变种。</p>
                       </div>
                     </div>
                   </div>
