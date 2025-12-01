@@ -2646,177 +2646,211 @@ function CapabilityCard({
   loadBalanceEnabled?: boolean;
   onToggleProvider?: (providerId: string) => void;
 }) {
+  // 计算实际生效的服务商和模型
   const effectiveProviderId = route.provider_id || defaultProviderId;
+  const effectiveModel = route.model || defaultModel || "";
   const routeProvider = effectiveProviderId ? providers[effectiveProviderId] : null;
   
   const hasThinking = supportsThinking(routeProvider);
   const poolProviderIds = route.provider_ids || [];
   
-  // 获取已获取的模型列表
+  // 获取已获取的模型列表（基于实际生效的服务商）
   const fetchedModels = effectiveProviderId && providerModels ? providerModels[effectiveProviderId] : undefined;
   const hasFetchedModels = fetchedModels && fetchedModels.length > 0;
-  const isKnownModel = hasFetchedModels && fetchedModels.some(m => m.id === route.model);
 
   // 有效的服务商列表（有API Key的）
   const validProviders = Object.values(providers).filter(p => !!p.api_key);
 
-  // 获取用户已选择的模型
+  // 获取实际生效服务商的已收藏模型
   const selectedModels = routeProvider?.selected_models || [];
   const hasSelectedModels = selectedModels.length > 0;
   
-  // 分离已选模型和其他模型
+  // 获取已收藏模型的详情
   const selectedModelInfos = hasFetchedModels 
     ? fetchedModels.filter(m => selectedModels.includes(m.id)) 
     : [];
-  const otherModels = hasFetchedModels 
-    ? fetchedModels.filter(m => !selectedModels.includes(m.id)).slice(0, 30) 
-    : [];
+  
+  // 检查当前模型是否在收藏列表中
+  const currentModelInList = route.model && selectedModels.includes(route.model);
+  
+  // 显示用的模型名称（优先使用详情中的名称）
+  const getModelDisplayName = (modelId: string) => {
+    const info = selectedModelInfos.find(m => m.id === modelId);
+    if (info) {
+      const ctxStr = info.context_window 
+        ? ` (${info.context_window >= 1000000 ? `${(info.context_window/1000000).toFixed(1)}M` : `${Math.round(info.context_window / 1000)}K`})`
+        : '';
+      return info.name + ctxStr;
+    }
+    return modelId;
+  };
+
+  // 判断是否使用默认配置
+  const isUsingDefault = !route.provider_id && !route.model;
+  const isUsingDefaultProvider = !route.provider_id;
+  const isUsingDefaultModel = !route.model;
 
   return (
     <div className={`capability-card ${priority}`}>
       <div className="capability-header">
         <strong>{cap.label}</strong>
-        <div className="capability-provider-badges">
-          {loadBalanceEnabled && poolProviderIds.length > 1 ? (
-            <span className="badge-lb" title={`负载均衡: ${poolProviderIds.length}个服务商`}>
+        <div className="capability-status">
+          {loadBalanceEnabled && poolProviderIds.length > 0 ? (
+            <span className="status-badge lb" title={`负载均衡: ${poolProviderIds.length}个服务商`}>
               ⚖️ {poolProviderIds.length}
             </span>
-          ) : route.provider_id && (
-            <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>
-              {getProviderLogo(providers[route.provider_id])}
+          ) : isUsingDefault ? (
+            <span className="status-badge default" title="使用全局默认配置">
+              🌐 默认
+            </span>
+          ) : (
+            <span className="status-badge custom" title="已自定义配置">
+              ✨ 已配置
             </span>
           )}
         </div>
       </div>
       <p className="capability-desc">{cap.desc}</p>
       
+      {/* 当前生效配置预览 */}
+      <div className="capability-effective">
+        <span className="effective-label">当前生效：</span>
+        <span className="effective-value">
+          {routeProvider ? (
+            <>
+              <span className="effective-provider">{getProviderLogo(routeProvider)} {routeProvider.name}</span>
+              <span className="effective-separator">→</span>
+              <span className="effective-model">{effectiveModel || "未指定模型"}</span>
+            </>
+          ) : (
+            <span className="effective-none">未配置服务商</span>
+          )}
+        </span>
+      </div>
+      
       <div className="capability-controls">
-        {/* 负载均衡模式：多选服务商 */}
+        {/* 负载均衡模式 */}
         {loadBalanceEnabled ? (
-          <div className="provider-pool-select">
-            <span className="pool-label">⚖️ 服务商池（多选）:</span>
-            <div className="pool-checkboxes">
-              {validProviders.map(p => (
-                <label key={p.id} className={`pool-checkbox ${poolProviderIds.includes(p.id) ? 'selected' : ''}`}>
-                  <input
-                    type="checkbox"
-                    checked={poolProviderIds.includes(p.id)}
-                    onChange={() => onToggleProvider?.(p.id)}
-                  />
-                  <span className="pool-provider-logo">{getProviderLogo(p)}</span>
-                  <span className="pool-provider-name">{p.name}</span>
-                </label>
-              ))}
+          <div className="lb-config">
+            <div className="lb-header">
+              <span className="lb-title">⚖️ 服务商池</span>
+              <span className="lb-count">{poolProviderIds.length > 0 ? `已选 ${poolProviderIds.length} 个` : '未选择'}</span>
             </div>
-            {poolProviderIds.length === 0 && (
-              <span className="pool-hint">请选择至少一个服务商</span>
-            )}
+            <div className="lb-providers">
+              {validProviders.length === 0 ? (
+                <span className="lb-empty">请先在服务商页面配置 API Key</span>
+              ) : (
+                validProviders.map(p => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={`lb-provider-btn ${poolProviderIds.includes(p.id) ? 'selected' : ''}`}
+                    onClick={() => onToggleProvider?.(p.id)}
+                    title={p.name}
+                  >
+                    <span className="lb-provider-logo">{getProviderLogo(p)}</span>
+                    <span className="lb-provider-name">{p.name}</span>
+                    {poolProviderIds.includes(p.id) && <span className="lb-check">✓</span>}
+                  </button>
+                ))
+              )}
+            </div>
           </div>
         ) : (
           /* 单服务商模式 */
-          <select
-            className="field-input"
-            value={route.provider_id ?? ""}
-            onChange={(e) => {
-              const newProviderId = e.target.value || null;
-              onUpdate("provider_id", newProviderId);
-              
-              const newProvider = newProviderId 
-                ? providers[newProviderId] 
-                : (defaultProviderId ? providers[defaultProviderId] : null);
-              
-              if (!supportsThinking(newProvider) && route.enable_thinking) {
-                onUpdate("enable_thinking", false);
-              }
-              
-              // 切换服务商时清空模型选择
-              onUpdate("model", "");
-            }}
-            aria-label={`${cap.label} 服务商`}
-          >
-            <option value="">
-              🌐 使用默认 {defaultProviderId ? `(${providers[defaultProviderId]?.name || ""})` : "(未设置)"}
-            </option>
-            {validProviders.map(p => (
-              <option key={p.id} value={p.id}>{getProviderLogo(p)} {p.name}</option>
-            ))}
-          </select>
-        )}
-
-        {/* 模型选择 - 只显示已收藏的模型 */}
-        {hasSelectedModels ? (
-          <div className="model-select-group">
-            <select
-              className="field-input model-select"
-              value={isKnownModel ? (route.model || "") : (route.model ? "__custom__" : "")}
-              onChange={(e) => {
-                if (e.target.value !== "__custom__") {
-                  onUpdate("model", e.target.value);
-                }
-              }}
-              aria-label={`${cap.label} 模型`}
-            >
-              <option value="">选择模型...</option>
-              {selectedModelInfos.map(model => (
-                <option key={model.id} value={model.id}>
-                  {model.name}
-                  {model.context_window ? ` (${model.context_window >= 1000000 ? `${(model.context_window/1000000).toFixed(1)}M` : `${Math.round(model.context_window / 1000)}K`})` : ''}
+          <>
+            <div className="config-row">
+              <label className="config-label">服务商</label>
+              <select
+                className="field-input"
+                value={route.provider_id ?? ""}
+                onChange={(e) => {
+                  const newProviderId = e.target.value || null;
+                  onUpdate("provider_id", newProviderId);
+                  
+                  const newProvider = newProviderId 
+                    ? providers[newProviderId] 
+                    : (defaultProviderId ? providers[defaultProviderId] : null);
+                  
+                  if (!supportsThinking(newProvider) && route.enable_thinking) {
+                    onUpdate("enable_thinking", false);
+                  }
+                  
+                  // 切换服务商时清空模型选择（因为不同服务商的模型不同）
+                  onUpdate("model", null);
+                }}
+              >
+                <option value="">
+                  🌐 使用默认 {defaultProviderId && providers[defaultProviderId] ? `(${providers[defaultProviderId].name})` : ""}
                 </option>
-              ))}
-              {/* 如果有收藏但没有模型信息（未获取），显示原始ID */}
-              {selectedModels.filter(id => !selectedModelInfos.some(m => m.id === id)).map(modelId => (
-                <option key={modelId} value={modelId}>{modelId}</option>
-              ))}
-              <option value="__custom__">✏️ 手动输入...</option>
-            </select>
-            {(!isKnownModel && route.model) && (
+                {validProviders.map(p => (
+                  <option key={p.id} value={p.id}>{getProviderLogo(p)} {p.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* 模型选择 */}
+            <div className="config-row">
+              <label className="config-label">模型</label>
+              {hasSelectedModels ? (
+                <select
+                  className="field-input"
+                  value={route.model ?? ""}
+                  onChange={(e) => onUpdate("model", e.target.value || null)}
+                >
+                  <option value="">
+                    🌐 使用默认 {defaultModel ? `(${defaultModel})` : ""}
+                  </option>
+                  {selectedModels.map(modelId => (
+                    <option key={modelId} value={modelId}>
+                      {getModelDisplayName(modelId)}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="model-input-wrapper">
+                  <input
+                    className="field-input"
+                    type="text"
+                    placeholder={defaultModel ? `使用默认: ${defaultModel}` : "输入模型名称"}
+                    value={route.model || ""}
+                    onChange={(e) => onUpdate("model", e.target.value || null)}
+                  />
+                  {!route.model && !defaultModel && (
+                    <span className="model-hint">💡 在服务商页面收藏模型可快速选择</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* 超时和思考模式 - 横向排列 */}
+        <div className="config-extras">
+          <div className="timeout-config">
+            <label className="config-label-inline">⏱️</label>
+            <input
+              className="field-input timeout-input"
+              type="number"
+              min="10"
+              max="600"
+              value={route.timeout ?? cap.defaultTimeout}
+              onChange={(e) => onUpdate("timeout", parseInt(e.target.value) || cap.defaultTimeout)}
+            />
+            <span className="timeout-unit">秒</span>
+          </div>
+
+          {hasThinking && (
+            <label className="thinking-toggle">
               <input
-                className="field-input model-custom-input"
-                type="text"
-                placeholder="模型名称"
-                value={route.model || ""}
-                onChange={(e) => onUpdate("model", e.target.value)}
+                type="checkbox"
+                checked={route.enable_thinking || false}
+                onChange={(e) => onUpdate("enable_thinking", e.target.checked)}
               />
-            )}
-          </div>
-        ) : (
-          <div className="model-input-group">
-            <input
-              className="field-input"
-              type="text"
-              placeholder={defaultModel ? `默认: ${defaultModel}` : "输入模型名称..."}
-              value={route.model || ""}
-              onChange={(e) => onUpdate("model", e.target.value)}
-              aria-label={`${cap.label} 模型`}
-            />
-            <span className="model-input-hint">在服务商页面收藏模型</span>
-          </div>
-        )}
-
-        <div className="timeout-row">
-          <span className="timeout-label">⏱️ 超时</span>
-          <input
-            className="field-input timeout-input"
-            type="number"
-            min="10"
-            max="600"
-            value={route.timeout ?? cap.defaultTimeout}
-            onChange={(e) => onUpdate("timeout", parseInt(e.target.value) || cap.defaultTimeout)}
-            aria-label={`${cap.label} 超时时间`}
-          />
-          <span className="timeout-unit">秒</span>
+              <span>🧠 深度思考</span>
+            </label>
+          )}
         </div>
-
-        {hasThinking && (
-          <label className="thinking-toggle">
-            <input
-              type="checkbox"
-              checked={route.enable_thinking || false}
-              onChange={(e) => onUpdate("enable_thinking", e.target.checked)}
-            />
-            <span>🧠 深度思考模式</span>
-          </label>
-        )}
       </div>
     </div>
   );

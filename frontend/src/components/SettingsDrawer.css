@@ -1428,6 +1428,229 @@
   height: 18px;
 }
 
+/* ========== Capability Card - Enhanced ========== */
+
+/* 状态标签 */
+.capability-status {
+  display: flex;
+  align-items: center;
+}
+
+.status-badge {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.status-badge.default {
+  background: rgba(100, 116, 139, 0.2);
+  color: #94a3b8;
+}
+
+.status-badge.custom {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+}
+
+.status-badge.lb {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
+/* 当前生效配置预览 */
+.capability-effective {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 8px;
+  font-size: 0.75rem;
+}
+
+.effective-label {
+  color: var(--sd-text-muted);
+  flex-shrink: 0;
+}
+
+.effective-value {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--sd-text);
+  overflow: hidden;
+}
+
+.effective-provider {
+  color: #a5b4fc;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.effective-separator {
+  color: var(--sd-text-muted);
+  opacity: 0.5;
+}
+
+.effective-model {
+  color: #fbbf24;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effective-none {
+  color: #f87171;
+  font-style: italic;
+}
+
+/* 配置行 */
+.config-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.config-label {
+  font-size: 0.75rem;
+  color: var(--sd-text-muted);
+  min-width: 50px;
+  flex-shrink: 0;
+}
+
+.config-row .field-input {
+  flex: 1;
+}
+
+/* 模型输入包装 */
+.model-input-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.model-hint {
+  font-size: 0.65rem;
+  color: var(--sd-text-muted);
+  opacity: 0.7;
+}
+
+/* 配置附加项（超时+思考模式） */
+.config-extras {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  margin-top: 0.25rem;
+}
+
+.timeout-config {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.config-label-inline {
+  font-size: 0.8rem;
+}
+
+.config-extras .timeout-input {
+  width: 60px;
+  padding: 0.375rem 0.5rem !important;
+  font-size: 0.8rem;
+}
+
+.config-extras .thinking-toggle {
+  padding: 0.375rem 0.625rem;
+  font-size: 0.75rem;
+  margin: 0;
+}
+
+.config-extras .thinking-toggle input {
+  width: 14px;
+  height: 14px;
+}
+
+/* 负载均衡配置 */
+.lb-config {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.lb-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.lb-title {
+  font-size: 0.8rem;
+  color: var(--sd-text);
+  font-weight: 500;
+}
+
+.lb-count {
+  font-size: 0.7rem;
+  color: var(--sd-text-muted);
+}
+
+.lb-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.lb-empty {
+  font-size: 0.75rem;
+  color: var(--sd-text-muted);
+  font-style: italic;
+}
+
+.lb-provider-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--sd-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0.75rem;
+  color: var(--sd-text-muted);
+}
+
+.lb-provider-btn:hover {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.lb-provider-btn.selected {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: var(--sd-text);
+}
+
+.lb-provider-logo {
+  font-size: 0.9rem;
+}
+
+.lb-provider-name {
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lb-check {
+  color: #22c55e;
+  font-weight: bold;
+}
+
 /* ========== Memory Tab ========== */
 .memory-layout {
   display: grid;
