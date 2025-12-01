@@ -498,7 +498,16 @@ class SpeciationService:
                         f"早期={is_early_game})"
                     )
                 else:
-                    continue
+                    # 【大浪淘沙v4】移除硬性跳过！
+                    # 即使辐射演化随机检查没通过，分化候选也应该进入后续概率计算
+                    # 只是把 has_pressure 标记为 False，后续会有更低的基础概率
+                    has_pressure = False
+                    speciation_type = "自然分化"
+                    logger.debug(
+                        f"[自然分化候选] {species.common_name}: "
+                        f"辐射演化检查未通过，但作为候选进入概率计算 "
+                        f"(radiation_chance={radiation_chance:.1%})"
+                    )
             
             # 条件4：死亡率检查（已在候选地块筛选时过滤）
             # 对于使用预筛选数据的情况，跳过此检查
@@ -627,6 +636,15 @@ class SpeciationService:
             if niche_overlap > 0.4 and speciation_type not in ["地理隔离", "生态隔离"]:
                 speciation_bonus += 0.05  # 【降低】从 +0.08 降到 +0.05
                 speciation_type = "协同演化"
+            
+            # 【大浪淘沙v4】自然分化兜底加成
+            # 对于通过初步检查的候选，即使没有明显压力也给予基础分化机会
+            if speciation_type == "自然分化":
+                # 基于种群规模给予加成
+                pop_ratio = survivors / min_population if min_population > 0 else 1
+                if pop_ratio >= 1.5:
+                    speciation_bonus += 0.10 + min(0.15, (pop_ratio - 1.5) * 0.05)
+                    logger.debug(f"[自然分化加成] {species.common_name}: 种群比={pop_ratio:.1f}x, 加成={speciation_bonus:.0%}")
             
             # 【新增】动植物协同演化检测
             coevolution_result = self._detect_coevolution(species, mortality_results)
