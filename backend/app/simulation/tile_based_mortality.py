@@ -29,12 +29,25 @@ from ..models.species import Species
 from ..services.species.niche import NicheMetrics
 from ..services.species.predation import PredationService
 from ..services.geo.suitability import get_habitat_type_mask as unified_habitat_mask
-from ..core.config import get_settings
+from ..core.config import get_settings, PROJECT_ROOT
+from ..models.config import EcologyBalanceConfig
 
 logger = logging.getLogger(__name__)
 
 # 获取配置
 _settings = get_settings()
+
+
+def _load_ecology_config() -> EcologyBalanceConfig:
+    """从 UI 配置中加载生态平衡参数"""
+    try:
+        from ..repositories.environment_repository import environment_repository
+        ui_config_path = PROJECT_ROOT / "data/settings.json"
+        ui_config = environment_repository.load_ui_config(ui_config_path)
+        return ui_config.ecology_balance
+    except Exception as e:
+        logger.warning(f"[生态平衡] 无法加载配置，使用默认值: {e}")
+        return EcologyBalanceConfig()
 
 
 @dataclass(slots=True)
@@ -1242,11 +1255,10 @@ class TileBasedMortalityEngine:
         )
         
         # ======== 3. 综合竞争系数矩阵 ========
-        # 竞争系数 = 相似度 × 营养级系数
-        # 【改进v4】进一步提高竞争强度，促进动态平衡
-        # 同营养级、相似生态位的物种应该激烈竞争
-        # 0.45 -> 0.60，让竞争更激烈
-        comp_coef_matrix = (similarity_matrix * trophic_coef * 0.60).astype(np.float64)
+        # 竞争系数 = 相似度 × 营养级系数 × 配置系数
+        # 【改进v5】从配置读取竞争系数，支持动态调参
+        eco_cfg = _load_ecology_config()
+        comp_coef_matrix = (similarity_matrix * trophic_coef * eco_cfg.competition_base_coefficient).astype(np.float64)
         np.fill_diagonal(comp_coef_matrix, 0.0)
         
         # ======== 4. 向量化计算所有地块的竞争压力 ========
@@ -1271,9 +1283,8 @@ class TileBasedMortalityEngine:
             # 竞争强度 = 竞争系数 × 种群压力比
             comp_strength = comp_coef_matrix * pop_ratio
             
-            # 【改进v4】提高单个竞争者的贡献上限
-            # 从0.25提高到0.35，让强竞争者更有压制力
-            comp_strength = np.minimum(comp_strength, 0.35)
+            # 【改进v5】从配置读取竞争上限
+            comp_strength = np.minimum(comp_strength, eco_cfg.competition_per_species_cap)
             
             # 只考虑在场物种之间的竞争
             present_matrix = present_mask[:, np.newaxis] & present_mask[np.newaxis, :]
@@ -1282,9 +1293,8 @@ class TileBasedMortalityEngine:
             # 对每个物种汇总竞争压力
             total_competition = comp_strength.sum(axis=1)
             
-            # 【改进v4】提高竞争上限，促进达尔文式淘汰
-            # 从0.70提高到0.80，让激烈竞争导致更高死亡率
-            competition[tile_idx, :] = np.minimum(total_competition, 0.80)
+            # 【改进v5】从配置读取总竞争压力上限
+            competition[tile_idx, :] = np.minimum(total_competition, eco_cfg.competition_total_cap)
         
         return competition
     
@@ -1387,10 +1397,10 @@ class TileBasedMortalityEngine:
                                np.clip(ratio_t4 - 1.0, 0, SCARCITY_MAX),
                                np.where(t5 > 0, SCARCITY_MAX, 0.0))
         
-        # 【改进v4】增强食物匮乏惩罚
+        # 【改进v5】从配置读取稀缺权重
         # 消费者猎物稀缺时，死亡率显著上升
-        # 这与 MapManager 中的 prey_abundance 逻辑保持一致
-        SCARCITY_WEIGHT = 0.5  # 从0.3提高到0.5，增强食物匮乏惩罚
+        eco_cfg = _load_ecology_config()
+        SCARCITY_WEIGHT = eco_cfg.scarcity_weight
         
         # 将压力分配到各物种
         for sp_idx in range(n_species):

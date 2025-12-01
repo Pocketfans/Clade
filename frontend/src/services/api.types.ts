@@ -347,6 +347,47 @@ export interface SpeciationConfig {
   threshold_multiplier_high_saturation?: number;   // 高资源饱和时门槛乘数
 }
 
+/**
+ * 生态平衡配置 - 控制种群动态平衡的参数
+ */
+export interface EcologyBalanceConfig {
+  // ========== 食物匮乏惩罚 ==========
+  food_scarcity_threshold?: number;    // 猎物丰富度阈值
+  food_scarcity_penalty?: number;      // 食物匮乏惩罚系数
+  scarcity_weight?: number;            // 稀缺压力权重
+  
+  // ========== 竞争强度 ==========
+  competition_base_coefficient?: number;   // 基础竞争系数
+  competition_per_species_cap?: number;    // 单个竞争者贡献上限
+  competition_total_cap?: number;          // 总竞争压力上限
+  same_level_competition_k?: number;       // 同级竞争系数
+  
+  // ========== 营养传递效率 ==========
+  trophic_transfer_efficiency?: number;    // 能量传递效率
+  high_trophic_birth_penalty?: number;     // 高营养级出生效率惩罚
+  apex_predator_penalty?: number;          // 顶级捕食者额外惩罚
+  
+  // ========== 扩散行为 ==========
+  terrestrial_top_k?: number;              // 陆生物种分布地块数
+  marine_top_k?: number;                   // 海洋物种分布地块数
+  suitability_cutoff?: number;             // 宜居度截断阈值
+  suitability_weight_alpha?: number;       // 宜居度权重指数
+  high_trophic_dispersal_damping?: number; // 高营养级扩散阻尼
+  
+  // ========== 资源再生 ==========
+  resource_recovery_rate?: number;         // 资源恢复速率
+  resource_recovery_lag?: number;          // 资源恢复滞后
+  resource_min_recovery?: number;          // 最小恢复率
+  
+  // ========== 环境扰动 ==========
+  resource_perturbation?: number;          // 资源扰动幅度
+  climate_perturbation?: number;           // 气候扰动幅度
+  
+  // ========== 防御/逃逸 ==========
+  base_escape_rate?: number;               // 基础逃逸成功率
+  size_advantage_factor?: number;          // 体型优势因子
+}
+
 export interface UIConfig {
   // 1. 服务商库
   providers: Record<string, ProviderConfig>;
@@ -387,6 +428,9 @@ export interface UIConfig {
   
   // 10. 物种分化配置
   speciation?: SpeciationConfig;
+  
+  // 11. 生态平衡配置
+  ecology_balance?: EcologyBalanceConfig;
 
   // --- Legacy Fields (For backward compatibility types) ---
   ai_provider?: string | null;

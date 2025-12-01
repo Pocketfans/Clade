@@ -109,6 +109,77 @@ class SpeciationConfig(BaseModel):
     threshold_multiplier_high_saturation: float = 1.2
 
 
+class EcologyBalanceConfig(BaseModel):
+    """生态平衡配置 - 控制种群动态平衡的所有参数
+    
+    【设计理念】
+    通过调整这些参数可以控制生态系统的稳定性：
+    - 食物匮乏惩罚：消费者在猎物稀缺时死亡率上升
+    - 竞争强度：同生态位物种之间的竞争压力
+    - 营养传递效率：限制高营养级总量
+    - 扩散行为：控制物种分布范围
+    """
+    model_config = ConfigDict(extra="ignore")
+    
+    # ========== 食物匮乏惩罚 ==========
+    # 猎物丰富度阈值：低于此值开始惩罚
+    food_scarcity_threshold: float = 0.3
+    # 食物匮乏惩罚系数：death_rate += penalty * (threshold - abundance)
+    food_scarcity_penalty: float = 0.4
+    # 稀缺压力在死亡率中的权重
+    scarcity_weight: float = 0.5
+    
+    # ========== 竞争强度 ==========
+    # 基础竞争系数（相似度 × 营养级系数 × 此值）
+    competition_base_coefficient: float = 0.60
+    # 单个竞争者贡献上限
+    competition_per_species_cap: float = 0.35
+    # 总竞争压力上限
+    competition_total_cap: float = 0.80
+    # 同级竞争系数（同营养级物种之间）
+    same_level_competition_k: float = 0.15
+    
+    # ========== 营养传递效率 ==========
+    # 能量传递效率（10%规则）：每升一个营养级，可用能量降至此比例
+    trophic_transfer_efficiency: float = 0.15
+    # 高营养级出生效率惩罚（T3+）
+    high_trophic_birth_penalty: float = 0.7
+    # 顶级捕食者（T4+）额外效率惩罚
+    apex_predator_penalty: float = 0.5
+    
+    # ========== 扩散行为 ==========
+    # 陆生物种分布地块数上限
+    terrestrial_top_k: int = 4
+    # 海洋物种分布地块数上限
+    marine_top_k: int = 3
+    # 宜居度阈值：低于此值的地块不分配种群
+    suitability_cutoff: float = 0.25
+    # 宜居度权重指数：pow(suitability, alpha)，alpha>1 更集中
+    suitability_weight_alpha: float = 1.5
+    # 高营养级扩散阻尼（跨地块成本）
+    high_trophic_dispersal_damping: float = 0.7
+    
+    # ========== 资源再生 ==========
+    # 资源最大恢复速率（logistic r）
+    resource_recovery_rate: float = 0.15
+    # 资源恢复滞后回合数
+    resource_recovery_lag: int = 1
+    # 过度消耗后的最小恢复率
+    resource_min_recovery: float = 0.05
+    
+    # ========== 环境扰动 ==========
+    # 资源随机扰动幅度
+    resource_perturbation: float = 0.05
+    # 气候随机扰动幅度
+    climate_perturbation: float = 0.02
+    
+    # ========== 防御/逃逸 ==========
+    # 基础逃逸成功率（猎物默认）
+    base_escape_rate: float = 0.3
+    # 体型差异对捕食成功率的影响
+    size_advantage_factor: float = 0.1
+
+
 class UIConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -151,6 +222,9 @@ class UIConfig(BaseModel):
     
     # 10. 物种分化配置
     speciation: SpeciationConfig = Field(default_factory=SpeciationConfig)
+    
+    # 11. 生态平衡配置
+    ecology_balance: EcologyBalanceConfig = Field(default_factory=EcologyBalanceConfig)
     
     # --- Legacy Fields (Keep for migration) ---
     ai_provider: str | None = None

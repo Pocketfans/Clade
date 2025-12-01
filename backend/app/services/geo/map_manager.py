@@ -265,7 +265,7 @@ class MapStateManager:
                 continue
             
             suitability.sort(key=lambda item: item[1], reverse=True)
-            top_count = self._get_distribution_count(habitat_type)
+            top_count = self._get_distribution_count(habitat_type, trophic_level)
             
             # 【改进】消费者优先选择与猎物重叠的地块
             if prey_tiles and trophic_level >= 2.0:
@@ -561,7 +561,7 @@ class MapStateManager:
                 continue
             
             suitability.sort(key=lambda item: item[1], reverse=True)
-            top_count = self._get_distribution_count(habitat_type)
+            top_count = self._get_distribution_count(habitat_type, trophic_level)
             
             # 【改进】消费者优先选择与猎物重叠的地块
             if use_prey_tiles and trophic_level >= 2.0:
@@ -682,28 +682,53 @@ class MapStateManager:
         
         return filtered if filtered else tiles  # 如果没有合适的，返回所有地块作为备选
     
-    def _get_distribution_count(self, habitat_type: str) -> int:
-        """根据栖息地类型决定分布地块数量"""
-        # 海洋生物通常分布更广
+    def _get_distribution_count(self, habitat_type: str, trophic_level: float = 1.0) -> int:
+        """根据栖息地类型和营养级决定分布地块数量
+        
+        【改进v5】
+        - 从配置读取基础 top-k 值
+        - 高营养级物种分布更集中（应用扩散阻尼）
+        """
+        # 从配置读取参数
+        from ...core.config import PROJECT_ROOT
+        from ...repositories.environment_repository import environment_repository
+        try:
+            ui_cfg = environment_repository.load_ui_config(PROJECT_ROOT / "data/settings.json")
+            eco_cfg = ui_cfg.ecology_balance
+            marine_base = eco_cfg.marine_top_k
+            terrestrial_base = eco_cfg.terrestrial_top_k
+            dispersal_damping = eco_cfg.high_trophic_dispersal_damping
+        except Exception:
+            marine_base = 3
+            terrestrial_base = 4
+            dispersal_damping = 0.7
+        
+        # 基础分布数量
         if habitat_type in ["marine", "deep_sea"]:
-            return 10
-        # 热泉生物：集中在热液喷口附近
+            base_count = marine_base + 2  # 海洋生物稍微分布广一些
         elif habitat_type == "hydrothermal":
-            return 5
-        # 淡水生物分布较集中
+            base_count = 2  # 热泉生物集中
         elif habitat_type == "freshwater":
-            return 3
-        # 陆生生物中等分布
+            base_count = max(2, terrestrial_base - 1)
         elif habitat_type in ["terrestrial", "amphibious"]:
-            return 5
-        # 海岸生物分布较集中
+            base_count = terrestrial_base
         elif habitat_type == "coastal":
-            return 4
-        # 空中生物分布广泛
+            base_count = max(2, terrestrial_base - 1)
         elif habitat_type == "aerial":
-            return 8
+            base_count = terrestrial_base + 1
         else:
-            return 5
+            base_count = terrestrial_base
+        
+        # 【改进v5】高营养级物种分布更集中
+        # T3+ 应用扩散阻尼，让顶级捕食者更局域化
+        if trophic_level >= 4.0:
+            base_count = max(2, int(base_count * dispersal_damping * 0.8))
+        elif trophic_level >= 3.0:
+            base_count = max(2, int(base_count * dispersal_damping))
+        elif trophic_level >= 2.0:
+            base_count = max(3, int(base_count * 0.9))
+        
+        return base_count
 
     def get_overview(
         self, 

@@ -304,9 +304,36 @@ class ReproductionService:
                 continue
             
             # 6. 按适宜度分配当前种群到各地块
-            tile_populations: dict[int, int] = {}
+            # 【改进v5】使用指数权重 + 低阈值截断，让物种更集中在高适宜度地块
+            from ...core.config import PROJECT_ROOT
+            from ...repositories.environment_repository import environment_repository
+            try:
+                ui_cfg = environment_repository.load_ui_config(PROJECT_ROOT / "data/settings.json")
+                eco_cfg = ui_cfg.ecology_balance
+                suitability_alpha = eco_cfg.suitability_weight_alpha
+                suitability_cutoff = eco_cfg.suitability_cutoff
+            except Exception:
+                suitability_alpha = 1.5
+                suitability_cutoff = 0.25
+            
+            # 过滤低于阈值的地块，并应用指数权重
+            weighted_habitats = []
             for habitat in habitats:
-                tile_pop = int(current_total_pop * (habitat.suitability / total_suitability))
+                if habitat.suitability >= suitability_cutoff:
+                    weight = habitat.suitability ** suitability_alpha
+                    weighted_habitats.append((habitat, weight))
+            
+            # 如果所有地块都被过滤，使用原始宜居度最高的前3个
+            if not weighted_habitats:
+                sorted_habs = sorted(habitats, key=lambda h: h.suitability, reverse=True)[:3]
+                for habitat in sorted_habs:
+                    weight = max(0.1, habitat.suitability) ** suitability_alpha
+                    weighted_habitats.append((habitat, weight))
+            
+            total_weight = sum(w for _, w in weighted_habitats)
+            tile_populations: dict[int, int] = {}
+            for habitat, weight in weighted_habitats:
+                tile_pop = int(current_total_pop * (weight / total_weight))
                 tile_populations[habitat.tile_id] = tile_pop
             
             # 7. 对每个地块分别计算繁殖增长
@@ -982,6 +1009,33 @@ class ReproductionService:
         # 综合繁殖加成（取最大值，避免双重加成过高）
         fertility_bonus = max(size_bonus, repro_bonus)
         base_growth_multiplier *= fertility_bonus
+        
+        # 【改进v5】营养级效率惩罚
+        # 高营养级物种繁殖效率受能量传递效率限制
+        trophic_level = getattr(species, 'trophic_level', 1.0) or 1.0
+        try:
+            from ...core.config import PROJECT_ROOT
+            from ...repositories.environment_repository import environment_repository
+            ui_cfg = environment_repository.load_ui_config(PROJECT_ROOT / "data/settings.json")
+            eco_cfg = ui_cfg.ecology_balance
+            high_trophic_penalty = eco_cfg.high_trophic_birth_penalty
+            apex_penalty = eco_cfg.apex_predator_penalty
+        except Exception:
+            high_trophic_penalty = 0.7
+            apex_penalty = 0.5
+        
+        if trophic_level >= 4.0:
+            # 顶级捕食者（T4+）受最大效率惩罚
+            base_growth_multiplier *= apex_penalty
+            logger.debug(f"[营养级效率] {species.common_name} (T{trophic_level:.1f}) 应用顶级捕食者惩罚 {apex_penalty:.1%}")
+        elif trophic_level >= 3.0:
+            # 高级消费者（T3）受中等效率惩罚
+            base_growth_multiplier *= high_trophic_penalty
+            logger.debug(f"[营养级效率] {species.common_name} (T{trophic_level:.1f}) 应用高营养级惩罚 {high_trophic_penalty:.1%}")
+        elif trophic_level >= 2.0:
+            # 初级消费者（T2）轻微惩罚
+            base_growth_multiplier *= 0.9
+        # T1 生产者无惩罚
         
         # 3. 生存率修正
         survival_modifier = 0.4 + survival_rate * 1.2  # 0.4 - 1.6
