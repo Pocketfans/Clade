@@ -11,8 +11,10 @@ import logging
 from typing import Any, Callable, Coroutine, Dict, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ...schemas.responses import TurnReport
+    from ...schemas.responses import TurnReport, SpeciesSnapshot
     from ..species.trophic_interaction import TrophicInteractionService
+
+from ...schemas.responses import SpeciesSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -135,24 +137,96 @@ class TurnReportService:
                     "survivors": getattr(result, 'survivors', 0),
                 })
         
-        # 构建叙事（简单版本）
-        narrative = f"回合 {turn_index} 完成。"
+        # ========== 【修复】调用 LLM 叙事引擎 ==========
+        # 将 mortality_results 转换为 SpeciesSnapshot 列表
+        species_snapshots: List[SpeciesSnapshot] = []
+        for result in mortality_results:
+            if hasattr(result, 'species') and hasattr(result, 'death_rate'):
+                pop = getattr(result, 'final_population', 0) or result.species.morphology_stats.get("population", 0)
+                initial_pop = getattr(result, 'initial_population', 0) or pop
+                deaths = getattr(result, 'deaths', 0)
+                
+                species_snapshots.append(SpeciesSnapshot(
+                    lineage_code=result.species.lineage_code,
+                    latin_name=result.species.latin_name,
+                    common_name=result.species.common_name,
+                    population=pop,
+                    population_share=pop / total_population,
+                    deaths=deaths,
+                    death_rate=result.death_rate,
+                    ecological_role=self._get_ecological_role(result.species.trophic_level),
+                    status=result.species.status,
+                    notes=getattr(result, 'notes', []) or [],
+                    niche_overlap=getattr(result, 'niche_overlap', None),
+                    resource_pressure=getattr(result, 'resource_pressure', None),
+                    is_background=getattr(result, 'is_background', False),
+                    tier=getattr(result, 'tier', None),
+                    trophic_level=result.species.trophic_level,
+                    grazing_pressure=getattr(result, 'grazing_pressure', None),
+                    predation_pressure=getattr(result, 'predation_pressure', None),
+                    ai_narrative=getattr(result, 'ai_narrative', None),
+                    initial_population=initial_pop,
+                    births=getattr(result, 'births', 0),
+                    survivors=getattr(result, 'survivors', 0),
+                    total_tiles=getattr(result, 'total_tiles', 0),
+                    healthy_tiles=getattr(result, 'healthy_tiles', 0),
+                    warning_tiles=getattr(result, 'warning_tiles', 0),
+                    critical_tiles=getattr(result, 'critical_tiles', 0),
+                ))
         
-        if mortality_results:
-            alive_count = sum(1 for r in mortality_results if r.species.status == "alive")
-            narrative += f" 存活物种: {alive_count} 个。"
+        # 调用 LLM 叙事引擎生成叙事
+        narrative = ""
+        try:
+            if self.report_builder is not None:
+                self._emit_event("info", "🤖 调用 AI 生成回合叙事...", "报告")
+                
+                narrative = await self.report_builder.build_turn_narrative_async(
+                    species=species_snapshots,
+                    pressures=pressures or [],
+                    background=background_summary,
+                    reemergence=reemergence_events,
+                    major_events=major_events,
+                    map_changes=map_changes,
+                    migration_events=migration_events,
+                    branching_events=branching_events,
+                    stream_callback=stream_callback,
+                )
+                
+                if narrative and len(narrative) > 50:
+                    self._emit_event("info", "✅ AI 叙事生成完成", "报告")
+                else:
+                    self._emit_event("warning", "⚠️ AI 叙事过短，使用简单模式", "报告")
+                    narrative = ""
+            else:
+                logger.warning("[TurnReportService] report_builder 未初始化，跳过 LLM 叙事")
+        except asyncio.TimeoutError:
+            logger.warning("[TurnReportService] LLM 叙事生成超时")
+            self._emit_event("warning", "⏱️ AI 叙事超时", "报告")
+            narrative = ""
+        except Exception as e:
+            logger.error(f"[TurnReportService] LLM 叙事生成失败: {e}")
+            self._emit_event("warning", f"⚠️ AI 叙事失败: {e}", "报告")
+            narrative = ""
         
-        if branching_events:
-            narrative += f" 发生了 {len(branching_events)} 次物种分化。"
-        
-        if migration_events:
-            narrative += f" 发生了 {len(migration_events)} 次迁徙。"
-        
-        # 流式输出叙事
-        if stream_callback:
-            for char in narrative:
-                await stream_callback(char)
-                await asyncio.sleep(0.01)
+        # 如果 LLM 失败，使用简单回退叙事
+        if not narrative:
+            narrative = f"回合 {turn_index} 完成。"
+            
+            if mortality_results:
+                alive_count = sum(1 for r in mortality_results if r.species.status == "alive")
+                narrative += f" 存活物种: {alive_count} 个。"
+            
+            if branching_events:
+                narrative += f" 发生了 {len(branching_events)} 次物种分化。"
+            
+            if migration_events:
+                narrative += f" 发生了 {len(migration_events)} 次迁徙。"
+            
+            # 简单模式下流式输出
+            if stream_callback:
+                for char in narrative:
+                    await stream_callback(char)
+                    await asyncio.sleep(0.01)
         
         return TurnReport(
             turn_index=turn_index,
