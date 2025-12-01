@@ -197,10 +197,33 @@ class SpeciationService:
                 else:
                     death_rate = result.death_rate
                 
+                # 【一揽子修改】候选簇人口检查
+                # 要求候选簇内人口 >= 基础门槛的 60%，避免极度分散的小簇触发
+                base_threshold_for_cluster = self._calculate_speciation_threshold(species)
+                min_cluster_pop = int(base_threshold_for_cluster * 0.6)
+                
+                # 检查每个簇的人口
+                valid_clusters = []
+                for cluster in clusters:
+                    cluster_pop = sum(tile_populations.get(t, 0) for t in cluster)
+                    if cluster_pop >= min_cluster_pop:
+                        valid_clusters.append(cluster)
+                
+                # 如果没有有效簇，降级隔离状态
+                if not valid_clusters and clusters:
+                    is_isolated = False
+                    logger.debug(
+                        f"[簇人口不足] {species.common_name}: "
+                        f"所有{len(clusters)}个簇人口 < 门槛60%({min_cluster_pop:,})"
+                    )
+                elif valid_clusters:
+                    clusters = valid_clusters
+                
                 logger.debug(
                     f"[地块分化检查] {species.common_name}: "
                     f"候选地块={len(candidate_tiles)}, 候选种群={candidate_population:,}, "
-                    f"加权死亡率={death_rate:.1%}, 隔离={is_isolated}"
+                    f"加权死亡率={death_rate:.1%}, 隔离={is_isolated}, "
+                    f"有效簇={len(valid_clusters) if valid_clusters else 0}/{len(clusters) if clusters else 0}"
                 )
             else:
                 # 回退到全局数据（兼容旧逻辑）
@@ -226,10 +249,30 @@ class SpeciationService:
             survivors = candidate_population
             resource_pressure = result.resource_pressure
             
+            # 获取生态位信息（用于后续门槛调整）
+            niche_overlap_for_threshold = result.niche_overlap
+            niche_saturation_for_threshold = getattr(result, 'niche_saturation', 0.0)
+            
             # 条件1：计算该物种的动态分化门槛
-            # 【平衡优化v4】直接使用基础门槛，不再乘以系数
+            # 【一揽子修改】根据隔离状态和生态条件动态调整门槛
             base_threshold = self._calculate_speciation_threshold(species)
-            min_population = base_threshold  # 去掉1.3倍系数
+            
+            # 基础门槛修正
+            threshold_multiplier = 1.0
+            
+            # 【关键】无隔离时门槛 ×1.8
+            if not is_isolated:
+                threshold_multiplier *= 1.8
+            
+            # 高生态位重叠（overlap > 0.6）时，门槛 ×1.2
+            if niche_overlap_for_threshold > 0.6:
+                threshold_multiplier *= 1.2
+            
+            # 资源饱和很高（saturation > 0.8）且无隔离时，再 ×1.2
+            if niche_saturation_for_threshold > 0.8 and not is_isolated:
+                threshold_multiplier *= 1.2
+            
+            min_population = int(base_threshold * threshold_multiplier)
             
             # 【改进】使用候选地块的种群，而非全局种群
             if candidate_population < min_population:
@@ -272,14 +315,27 @@ class SpeciationService:
             )
             
             # 条件3：压力或资源饱和
-            # 【平衡优化v4】大幅降低压力阈值，让分化更容易发生
-            # 生物学依据：50万年尺度下，任何环境变化都足以驱动分化
-            has_pressure = (
-                (average_pressure >= 0.3) or  # 极低阈值，几乎任何压力都算
-                (resource_pressure > 0.3) or  # 资源压力阈值也降低
-                is_isolated or                # 地理/生态隔离
-                (evo_potential >= 0.4)        # 高演化潜力本身就是分化驱动力
-            )
+            # 【一揽子修改】收紧压力阈值，地理隔离为主通道
+            # 无隔离时需满足更严格条件
+            
+            # 获取生态位信息（用于生态隔离判断）
+            niche_overlap = result.niche_overlap
+            niche_saturation = getattr(result, 'niche_saturation', 0.0)
+            
+            # 地理隔离时条件宽松
+            if is_isolated:
+                has_pressure = True
+            # 无隔离时需高压力 AND 高资源饱和
+            elif (average_pressure >= 0.7 or resource_pressure >= 0.6):
+                # 还需要资源竞争信号
+                if resource_pressure >= 0.5 or niche_saturation > 0.6:
+                    has_pressure = True
+                else:
+                    has_pressure = False
+            elif evo_potential >= 0.7:  # 只有极高演化潜力才能单独触发
+                has_pressure = True
+            else:
+                has_pressure = False
             
             # 【新增】植物专用分化条件
             is_plant = PlantTraitConfig.is_plant(species)
@@ -311,22 +367,51 @@ class SpeciationService:
                         )
             
             # 自然辐射演化（繁荣物种分化）
-            # 【平衡优化v4】进一步提高辐射演化概率
-            # 生物学依据：50万年足够让任何繁荣物种产生分化
+            # 【一揽子修改】辐射演化为低概率兜底
+            # 基线 0.05~0.10，加成后最高 0.25，无隔离再乘 0.5
             if not has_pressure:
-                pop_factor = min(1.0, survivors / min_population)  # 去掉2.0倍要求
-                # 基础概率提高到0.25，加上种群因子最高可达0.45
-                radiation_chance = 0.25 + (pop_factor * 0.20) + (speciation_pressure * 0.35)
+                # 需要种群远超门槛 AND 资源饱和/竞争高
+                pop_ratio = survivors / min_population if min_population > 0 else 0
                 
-                # 植物辐射演化更容易
+                # 基础概率大幅降低：0.05~0.10
+                radiation_base = 0.05
+                
+                # 种群因子：只有远超门槛（2倍以上）才有显著加成
+                if pop_ratio >= 2.0:
+                    pop_factor = min(0.10, (pop_ratio - 2.0) * 0.02)  # 最多+0.10
+                else:
+                    pop_factor = 0.0
+                
+                # 资源饱和加成：高竞争环境才有意义
+                saturation_factor = 0.0
+                if niche_saturation > 0.7:
+                    saturation_factor = (niche_saturation - 0.7) * 0.15  # 最多+0.045
+                
+                # 累积压力加成（保留但降低权重）
+                pressure_factor = speciation_pressure * 0.20
+                
+                radiation_chance = radiation_base + pop_factor + saturation_factor + pressure_factor
+                
+                # 植物小幅加成
                 if is_plant:
-                    radiation_chance += 0.08
+                    radiation_chance += 0.03
                 
-                # 只要种群达到门槛就有机会
-                if survivors >= min_population and random.random() < radiation_chance:
+                # 硬性上限 0.25
+                radiation_chance = min(0.25, radiation_chance)
+                
+                # 【关键】无隔离再乘 0.5 抑制
+                if not is_isolated:
+                    radiation_chance *= 0.5
+                
+                # 需要种群远超门槛（至少1.5倍）
+                if survivors >= min_population * 1.5 and random.random() < radiation_chance:
                     has_pressure = True
                     speciation_type = "辐射演化"
-                    logger.info(f"[辐射演化] {species.common_name} 触发辐射演化 (候选种群:{survivors:,}, 概率:{radiation_chance:.1%})")
+                    logger.info(
+                        f"[辐射演化] {species.common_name} 触发辐射演化 "
+                        f"(种群:{survivors:,}/{min_population:,}, 饱和度:{niche_saturation:.1%}, "
+                        f"概率:{radiation_chance:.1%})"
+                    )
                 else:
                     continue
             
@@ -357,37 +442,91 @@ class SpeciationService:
             speciation_bonus = 0.0
             speciation_type = "生态隔离"
             
-            # 检测地理隔离机会
-            # 【核心改进】优先使用候选数据中的隔离信息
-            if candidate_data and is_isolated:
-                speciation_bonus += 0.25  # 地理隔离是分化的强触发条件
-                speciation_type = "地理隔离"
-                logger.info(
-                    f"[地块级隔离检测] {species.common_name}: "
-                    f"检测到{len(clusters)}个隔离区域, "
-                    f"死亡率梯度={mortality_gradient:.1%}, "
-                    f"候选地块={len(candidate_tiles)}"
+            # 【一揽子修改】地理隔离为主通道
+            # ========== 死亡率区间检查 ==========
+            # 优选 5%~40%，>40% 线性衰减到 60%，>60% 拒绝
+            death_rate_penalty = 0.0
+            if death_rate < 0.05:
+                # 死亡率过低，分化动力不足
+                death_rate_penalty = -0.1
+            elif death_rate <= 0.40:
+                # 最优区间，无惩罚
+                death_rate_penalty = 0.0
+            elif death_rate <= 0.60:
+                # 40%-60% 线性衰减
+                death_rate_penalty = -0.3 * ((death_rate - 0.40) / 0.20)  # 最多-0.3
+            else:
+                # >60% 直接跳过（极端死亡率不适合分化）
+                logger.debug(
+                    f"[分化跳过-死亡率过高] {species.common_name}: "
+                    f"死亡率{death_rate:.1%} > 60%"
                 )
+                continue
+            
+            # ========== 地理隔离通道（主路径）==========
+            if candidate_data and is_isolated:
+                speciation_bonus += 0.50  # 【强化】从 +0.25 提高到 +0.50
+                speciation_type = "地理隔离"
+                
+                # 死亡率梯度 >0.2 再 +0.1 概率加成
+                if mortality_gradient > 0.2:
+                    speciation_bonus += 0.10
+                    logger.info(
+                        f"[地块级隔离检测] {species.common_name}: "
+                        f"检测到{len(clusters)}个隔离区域, "
+                        f"死亡率梯度={mortality_gradient:.1%} (>20%, +10%加成), "
+                        f"候选地块={len(candidate_tiles)}"
+                    )
+                else:
+                    logger.info(
+                        f"[地块级隔离检测] {species.common_name}: "
+                        f"检测到{len(clusters)}个隔离区域, "
+                        f"死亡率梯度={mortality_gradient:.1%}, "
+                        f"候选地块={len(candidate_tiles)}"
+                    )
             elif not candidate_data:
                 # 回退到旧的检测方法
                 geo_isolation_data = self._detect_geographic_isolation(lineage_code)
                 if geo_isolation_data["is_isolated"]:
-                    speciation_bonus += 0.25
+                    speciation_bonus += 0.50  # 【强化】
                     speciation_type = "地理隔离"
                     clusters = geo_isolation_data["clusters"]
+                    
+                    if geo_isolation_data["mortality_gradient"] > 0.2:
+                        speciation_bonus += 0.10
+                    
                     logger.info(
                         f"[地理隔离检测] {species.common_name}: "
                         f"检测到{geo_isolation_data['num_clusters']}个隔离区域, "
                         f"死亡率差异={geo_isolation_data['mortality_gradient']:.1%}"
                     )
             
+            # ========== 重大地形事件（强触发）==========
             if map_changes:
                 for change in (map_changes or []):
                     change_type = change.get("change_type", "") if isinstance(change, dict) else getattr(change, "change_type", "")
                     if change_type in ["uplift", "volcanic", "glaciation"]:
-                        speciation_bonus += 0.15
-                        speciation_type = "地理隔离"
+                        speciation_bonus += 0.30  # 【强化】从 +0.15 提高到 +0.30
+                        if speciation_type != "地理隔离":
+                            speciation_type = "地理隔离"
                         break
+            
+            # ========== 生态隔离/垂直分化通道（同域分层）==========
+            # 允许无地理隔离时触发，但条件更严
+            ecological_isolation_triggered = False
+            if not is_isolated and speciation_type != "地理隔离":
+                # 条件：高压力/资源 + 生态信号（overlap/saturation）
+                eco_pressure_ok = (average_pressure >= 0.7 or resource_pressure >= 0.65)
+                eco_signal_ok = (niche_overlap > 0.6 or niche_saturation > 0.7)
+                
+                if eco_pressure_ok and eco_signal_ok:
+                    speciation_bonus += 0.25  # 中等加成，低于地理隔离
+                    speciation_type = "生态隔离"
+                    ecological_isolation_triggered = True
+                    logger.info(
+                        f"[生态隔离] {species.common_name}: "
+                        f"同域分层触发 (overlap={niche_overlap:.1%}, saturation={niche_saturation:.1%})"
+                    )
             
             # 检测极端环境特化
             if major_events:
@@ -395,12 +534,13 @@ class SpeciationService:
                     severity = event.get("severity", "") if isinstance(event, dict) else getattr(event, "severity", "")
                     if severity in ["extreme", "catastrophic"]:
                         speciation_bonus += 0.10
-                        speciation_type = "极端环境特化"
+                        if speciation_type == "生态隔离" and not ecological_isolation_triggered:
+                            speciation_type = "极端环境特化"
                         break
             
-            # 检测协同演化
-            if result.niche_overlap > 0.4:
-                speciation_bonus += 0.08
+            # 检测协同演化（降低加成）
+            if niche_overlap > 0.4 and speciation_type not in ["地理隔离", "生态隔离"]:
+                speciation_bonus += 0.05  # 【降低】从 +0.08 降到 +0.05
                 speciation_type = "协同演化"
             
             # 【新增】动植物协同演化检测
@@ -414,9 +554,41 @@ class SpeciationService:
                     f"(+{coevolution_result['bonus']:.0%})"
                 )
             
+            # 应用死亡率区间惩罚
+            speciation_bonus += death_rate_penalty
+            
             # 【修复】将累积分化压力加入概率计算
             # 每回合满足条件但未分化的物种，下回合分化概率+10%
             speciation_chance = base_chance + speciation_bonus + speciation_pressure
+            
+            # ========== 【一揽子修改】迁徙抑制 ==========
+            # 检查最近 2 回合是否有大规模迁徙
+            migration_penalty = 1.0
+            recent_migration_turns = species.morphology_stats.get("recent_migration_turns", [])
+            if recent_migration_turns:
+                # 统计最近2回合的迁徙
+                recent_migrations = [t for t in recent_migration_turns if turn_index - t <= 2]
+                if len(recent_migrations) >= 1:
+                    # 有迁徙记录，对非地理通道 ×0.5 抑制
+                    if speciation_type not in ["地理隔离"]:
+                        migration_penalty = 0.5
+                        logger.debug(
+                            f"[迁徙抑制] {species.common_name}: "
+                            f"最近{len(recent_migrations)}回合有迁徙, 概率×0.5"
+                        )
+            
+            # 生态隔离额外门槛检查
+            if ecological_isolation_triggered:
+                # 生态隔离通道：种群门槛 ×1.5（在已计算的门槛基础上）
+                eco_min_population = int(min_population * 1.5)
+                if candidate_population < eco_min_population:
+                    logger.debug(
+                        f"[分化跳过-生态隔离门槛] {species.common_name}: "
+                        f"种群{candidate_population:,} < 生态隔离门槛{eco_min_population:,}"
+                    )
+                    continue
+            
+            speciation_chance *= migration_penalty
             
             # 【新增】AI 分化信号加成
             # 如果物种被 ModifierApplicator 识别为高分化信号候选，增加概率
@@ -890,6 +1062,7 @@ class SpeciationService:
                 turn_index=turn_index,
                 ai_payload=ai_content,
                 average_pressure=average_pressure,
+                speciation_type=ctx["speciation_type"],  # 【一揽子修改】传递分化类型
             )
             logger.info(f"[分化] 新物种 {new_species.common_name} created_turn={new_species.created_turn} (传入的turn_index={turn_index})")
             new_species = species_repository.upsert(new_species)
@@ -1479,6 +1652,7 @@ class SpeciationService:
         turn_index: int,
         ai_payload,
         average_pressure: float,
+        speciation_type: str = "生态隔离",  # 【一揽子修改】分化类型参数
     ) -> Species:
         """创建新的分化物种。
         
@@ -1490,11 +1664,18 @@ class SpeciationService:
         - 新物种从原物种中分离出20-40%的个体
         - 原物种保留60-80%
         - 总数略减（模拟分化过程的损耗）
+        
+        Args:
+            speciation_type: 分化类型标记（地理隔离/生态隔离/辐射演化等）
         """
         # 种群分配逻辑已在上层处理，这里只负责对象创建
         
         morphology = dict(parent.morphology_stats)
         morphology["population"] = survivors
+        
+        # 【一揽子修改】保存分化类型标记，便于日志和后处理
+        morphology["speciation_type"] = speciation_type
+        morphology["speciation_turn"] = turn_index
         
         hidden = dict(parent.hidden_traits)
         hidden["gene_diversity"] = min(1.0, hidden.get("gene_diversity", 0.5) + 0.05)

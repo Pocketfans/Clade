@@ -392,3 +392,4 @@ class ModifierApplicator:
         self._assessments.clear()
         self._lineage_to_id.clear()
 
+

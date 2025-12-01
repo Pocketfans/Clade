@@ -104,3 +104,4 @@ def load_config_from_yaml(yaml_path: str | None = None) -> IntelligenceConfig:
         logging.getLogger(__name__).warning(f"加载配置失败: {e}，使用默认配置")
         return DEFAULT_CONFIG
 
+

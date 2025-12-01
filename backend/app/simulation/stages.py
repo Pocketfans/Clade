@@ -999,11 +999,34 @@ class PopulationUpdateStage(BaseStage):
             ctx.current_map_state._prev_sea_level = ctx.current_map_state.sea_level
         engine.reproduction_service.update_environmental_modifier(temp_change, sea_level_change)
         
-        # 准备繁殖数据
+        # 【修复】先计算所有物种的调整后死亡率，用于构建真实存活率
+        # 这样繁殖模块才能正确反应压力造成的高死亡率
+        adjusted_death_rates = {}
+        for item in ctx.combined_results:
+            code = item.species.lineage_code
+            base_death_rate = item.death_rate
+            
+            # 通过 ModifierApplicator 应用 AI 死亡率修正
+            if use_modifier:
+                adjusted = modifier.apply(code, base_death_rate, "mortality")
+            else:
+                adjusted = base_death_rate
+            
+            # 确保死亡率在有效范围内
+            adjusted_death_rates[code] = max(0.0, min(0.99, adjusted))
+        
+        # 【关键修复】使用真实存活率（1 - adjusted_death_rate）
+        # 原来硬编码为 1.0，导致繁殖模块忽略了压力/LLM/规则系统计算的死亡率
         survival_rates = {
-            item.species.lineage_code: 1.0
-            for item in ctx.combined_results
+            code: max(0.01, 1.0 - death_rate)  # 保证最低 1% 存活率避免除零
+            for code, death_rate in adjusted_death_rates.items()
         }
+        
+        # 记录高死亡率物种的存活率（便于调试）
+        high_mortality_species = [(code, sr) for code, sr in survival_rates.items() if sr < 0.5]
+        if high_mortality_species:
+            logger.info(f"[种群更新] 高死亡率物种存活率: {high_mortality_species[:5]}...")
+        
         niche_data = {
             code: (metrics.overlap, metrics.saturation)
             for code, metrics in ctx.niche_metrics.items()
@@ -1022,16 +1045,9 @@ class PopulationUpdateStage(BaseStage):
         for item in ctx.combined_results:
             code = item.species.lineage_code
             initial = item.initial_population
-            base_death_rate = item.death_rate
             
-            # 【关键】通过 ModifierApplicator 应用 AI 死亡率修正
-            if use_modifier:
-                adjusted_death_rate = modifier.apply(code, base_death_rate, "mortality")
-            else:
-                adjusted_death_rate = base_death_rate
-            
-            # 确保死亡率在有效范围内
-            death_rate = max(0.0, min(0.99, adjusted_death_rate))
+            # 【复用】使用之前计算的调整后死亡率（保持一致性）
+            death_rate = adjusted_death_rates.get(code, item.death_rate)
             
             repro_pop = ctx.reproduction_results.get(code, initial)
             repro_gain = max(0, repro_pop - initial)

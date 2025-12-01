@@ -282,3 +282,4 @@ pytest app/services/intelligence/tests -v
 - [生态位分析](./niche-compare.md) - Embedding 相似度
 - [开发文档](../../../../DEV_DOC.md) - 整体架构
 
+

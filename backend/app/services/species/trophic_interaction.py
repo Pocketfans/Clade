@@ -134,3 +134,4 @@ def get_trophic_service() -> TrophicInteractionService:
         _trophic_service = TrophicInteractionService()
     return _trophic_service
 
+

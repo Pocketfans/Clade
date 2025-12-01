@@ -148,3 +148,4 @@ def get_ecosystem_metrics_service() -> EcosystemMetricsService:
         _ecosystem_metrics_service = EcosystemMetricsService()
     return _ecosystem_metrics_service
 
+

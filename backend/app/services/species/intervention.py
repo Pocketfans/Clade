@@ -100,3 +100,4 @@ class InterventionService:
         logger.info(f"[干预] 引入: {species.common_name} 到 {len(target_tiles)} 个地块")
         self._emit_event("info", f"🌍 引入: {species.common_name}", "干预")
 
+
