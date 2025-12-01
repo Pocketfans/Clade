@@ -168,7 +168,11 @@ model_router = ModelRouter(
             model=settings.speciation_model,
             extra_body={"response_format": {"type": "json_object"}}
         ),
-        # 注：plant_speciation_batch 已移除，批量植物分化使用 plant_speciation
+        "plant_speciation_batch": ModelConfig(
+            provider="openai", 
+            model=settings.speciation_model,
+            extra_body={"response_format": {"type": "json_object"}}
+        ),
         
         # ========== 物种生成与叙事 ==========
         "species_generation": ModelConfig(
