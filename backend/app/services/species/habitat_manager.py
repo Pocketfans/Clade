@@ -60,6 +60,8 @@ class HabitatManager:
     def _get_species_migration_range(self, species: Species) -> int:
         """根据物种能力获取迁徙范围
         
+        【大浪淘沙v3】整体提高迁徙范围，尤其是水域物种
+        
         迁徙范围基于：
         1. 移动能力（器官系统）
         2. 体型大小
@@ -68,7 +70,7 @@ class HabitatManager:
         Returns:
             最大迁徙距离（地块单位）
         """
-        base_range = 3  # 基础范围：3格
+        base_range = 4  # 【大浪淘沙v3】基础范围从3提高到4格
         
         # 1. 检查器官系统获取移动能力
         organs = getattr(species, 'organs', {})
@@ -77,35 +79,39 @@ class HabitatManager:
         
         if locomotion_type in ('wings', 'flight'):
             # 飞行物种：大范围迁徙
-            base_range = 10
+            base_range = 12  # 原10 -> 12
         elif locomotion_type in ('fins', 'swimming'):
-            # 游泳物种：中等范围
-            base_range = 6
+            # 游泳物种：【大浪淘沙v3】大幅增加
+            base_range = 10  # 原6 -> 10
         elif locomotion_type in ('legs', 'running'):
             # 陆地奔跑：中等范围
-            base_range = 5
+            base_range = 6   # 原5 -> 6
         elif locomotion_type in ('crawling', 'slithering'):
-            # 爬行物种：较小范围
-            base_range = 2
+            # 爬行物种：小幅增加
+            base_range = 3   # 原2 -> 3
         elif locomotion_type in ('sessile', 'rooted'):
-            # 固着/植物：几乎不能迁徙
-            base_range = 1
+            # 固着/植物：小幅增加被动传播
+            base_range = 2   # 原1 -> 2
         
         # 2. 体型调整（小型动物迁徙相对更容易）
         body_size = species.morphology_stats.get("body_length_cm", 10.0)
         if body_size < 1:  # 微型生物
-            base_range = max(1, base_range - 2)  # 微生物主要靠被动传播
+            # 【大浪淘沙v3】微生物被动传播范围增加
+            base_range = max(2, base_range - 1)  # 原max(1, -2) -> max(2, -1)
         elif body_size > 100:  # 大型动物
-            base_range += 2  # 大型动物通常迁徙范围更大
+            base_range += 3  # 原+2 -> +3
         
         # 3. 栖息地类型调整
+        # 【大浪淘沙v3】大幅增加水域物种的迁徙范围
         habitat_type = getattr(species, 'habitat_type', 'terrestrial')
         if habitat_type == 'aerial':
-            base_range += 3  # 空中物种额外加成
-        elif habitat_type == 'marine':
-            base_range += 2  # 海洋物种更易迁徙
+            base_range += 4  # 原+3 -> +4
+        elif habitat_type in ('marine', 'deep_sea'):
+            base_range += 5  # 原+2 -> +5（水域物种大幅加成）
+        elif habitat_type in ('coastal', 'amphibious'):
+            base_range += 3  # 新增：两栖/海岸物种加成
         
-        return max(1, min(15, base_range))  # 限制在1-15范围
+        return max(2, min(18, base_range))  # 【大浪淘沙v3】范围从1-15调整到2-18
     
     def is_migration_on_cooldown(self, lineage_code: str, current_turn: int, cooldown_turns: int = 3) -> bool:
         """检查物种是否处于迁徙冷却期
@@ -670,7 +676,9 @@ class HabitatManager:
             
             base_suitability = self._calculate_suitability(species, tile)
             
-            if base_suitability <= 0.15:
+            # 【大浪淘沙v3】放宽候选格适宜度门槛
+            # 原0.15 -> 0.05，允许"稍差但未饱和"的地块进入候选
+            if base_suitability <= 0.05:
                 # 基础适宜度太低，跳过
                 continue
             
@@ -711,7 +719,8 @@ class HabitatManager:
                     intraspecific_penalty * 0.15
                 )
             
-            if combined_score > 0.15:
+            # 【大浪淘沙v3】放宽综合评分阈值
+            if combined_score > 0.08:  # 原0.15 -> 0.08
                 scored_tiles.append((tile, combined_score, distance))
         
         if not scored_tiles:

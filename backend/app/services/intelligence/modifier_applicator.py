@@ -227,15 +227,18 @@ class ModifierApplicator:
     ) -> float:
         """应用迁徙倾向修正
         
-        迁徙概率 = base_value * (1 + migration_bias * 0.5)
-        migration_bias > 0: 增加迁徙概率
+        【大浪淘沙v3】提高migration_bias权重从0.5到0.8
+        迁徙概率 = base_value * (1 + migration_bias * 0.8)
+        migration_bias > 0: 明显增加迁徙概率
         migration_bias < 0: 减少迁徙概率
+        
+        当AI给出 migration_bias=0.5 时，迁徙概率提升40%（原来只有25%）
         """
         min_bias, max_bias = self.config.migration_bias_range
         effective_bias = max(min_bias, min(max_bias, assessment.migration_bias))
         
-        # 迁徙偏向影响迁徙概率
-        result = base_value * (1 + effective_bias * 0.5)
+        # 【大浪淘沙v3】提高偏向权重，让AI的小正偏好能明显推动外溢
+        result = base_value * (1 + effective_bias * 0.8)
         
         # 限制在 [0, 1] 范围
         return max(0.0, min(1.0, result))
@@ -275,10 +278,13 @@ class ModifierApplicator:
     ) -> float:
         """应用分化信号修正
         
+        【大浪淘沙v3】提高speciation_signal权重从0.1到0.25
         speciation_signal 作为分化概率的加成
+        
+        当AI给出 speciation_signal=0.8 时，分化概率提升20%（原来只有8%）
         """
-        # 分化概率 = 基础概率 + 信号强度 * 权重
-        result = base_value + assessment.speciation_signal * 0.1
+        # 【大浪淘沙v3】分化概率 = 基础概率 + 信号强度 * 权重（提高权重）
+        result = base_value + assessment.speciation_signal * 0.25
         
         return max(0.0, min(1.0, result))
     

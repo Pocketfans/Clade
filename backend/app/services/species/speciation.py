@@ -287,17 +287,27 @@ class SpeciationService:
             # 基础门槛修正
             threshold_multiplier = 1.0
             
-            # 【大浪淘沙v1】无隔离惩罚从1.8降到1.2，让分化更容易
-            if not is_isolated:
-                threshold_multiplier *= 1.2  # 原1.8 -> 1.2
+            # 【大浪淘沙v3】隔离/不隔离的门槛修正
+            if is_isolated:
+                # 已隔离时，门槛降低（奖励隔离分化）
+                threshold_multiplier *= 0.7  # 【新增】隔离奖励
+            else:
+                # 未隔离时，小幅提高门槛
+                threshold_multiplier *= 1.1  # 原1.2 -> 1.1（进一步降低惩罚）
             
-            # 高生态位重叠（overlap > 0.6）时，门槛 ×1.2
-            if niche_overlap_for_threshold > 0.6:
-                threshold_multiplier *= 1.2
+            # 【大浪淘沙v3】高种群时门槛额外降低（巨无霸格奖励）
+            if candidate_population > base_threshold * 3:
+                threshold_multiplier *= 0.8  # 种群是门槛3倍时，门槛再降20%
+            elif candidate_population > base_threshold * 2:
+                threshold_multiplier *= 0.9  # 种群是门槛2倍时，门槛再降10%
             
-            # 资源饱和很高（saturation > 0.8）且无隔离时，再 ×1.2
-            if niche_saturation_for_threshold > 0.8 and not is_isolated:
-                threshold_multiplier *= 1.2
+            # 高生态位重叠（overlap > 0.7）时，门槛小幅提高（原0.6）
+            if niche_overlap_for_threshold > 0.7:
+                threshold_multiplier *= 1.1  # 原1.2 -> 1.1
+            
+            # 资源饱和很高（saturation > 0.85）且无隔离时，门槛小幅提高
+            if niche_saturation_for_threshold > 0.85 and not is_isolated:
+                threshold_multiplier *= 1.1  # 原1.2 -> 1.1
             
             min_population = int(base_threshold * threshold_multiplier)
             
@@ -367,23 +377,38 @@ class SpeciationService:
                 resource_threshold = spec_config.resource_threshold_late
                 evo_threshold = spec_config.evo_potential_threshold_late
             
-            # 地理隔离时条件宽松
+            # 【大浪淘沙v3】大幅放宽分化触发条件
+            
+            # 地理隔离时条件最宽松
             if is_isolated:
                 has_pressure = True
-            # 无隔离时需高压力 AND 高资源饱和
+            # 【新增】高种群直接触发（巨无霸格强制分化）
+            elif candidate_population >= base_threshold * 2.5:
+                has_pressure = True
+                logger.debug(
+                    f"[巨无霸分化] {species.common_name}: "
+                    f"种群{candidate_population:,} >= 门槛×2.5({int(base_threshold*2.5):,})，强制触发分化"
+                )
+            # 累积分化压力足够高时触发
+            elif speciation_pressure >= 0.05:  # 原0.08 -> 0.05
+                has_pressure = True
+            # 无隔离时需压力或资源条件
             elif (average_pressure >= pressure_threshold or resource_pressure >= resource_threshold):
-                # 早期：两者同时满足（更宽松）；后期：还需要资源竞争信号
+                # 早期：任一条件满足即可
                 if is_early_game:
-                    # 早期只需满足压力或资源条件
                     has_pressure = True
                 else:
-                    # 后期还需要资源竞争信号
-                    if resource_pressure >= 0.5 or niche_saturation > 0.6:
+                    # 后期条件放宽：资源压力0.35或饱和度0.4即可
+                    if resource_pressure >= 0.35 or niche_saturation > 0.4:
                         has_pressure = True
                     else:
                         has_pressure = False
             elif evo_potential >= evo_threshold:  # 高演化潜力可单独触发
                 has_pressure = True
+            # 【新增】累积分化压力兜底
+            elif speciation_pressure >= 0.03 and candidate_population >= min_population * 1.5:
+                has_pressure = True
+                logger.debug(f"[累积压力分化] {species.common_name}: speciation_pressure={speciation_pressure:.2f}>=0.03")
             else:
                 has_pressure = False
             
@@ -417,52 +442,51 @@ class SpeciationService:
                         )
             
             # 自然辐射演化（繁荣物种分化）
-            # 辐射演化为低概率兜底，使用配置参数
+            # 【大浪淘沙v3】大幅提高辐射演化概率，降低门槛
             if not has_pressure:
-                # 需要种群远超门槛 AND 资源饱和/竞争高
                 pop_ratio = survivors / min_population if min_population > 0 else 0
                 
-                # 基础概率（从配置）
-                radiation_base = spec_config.radiation_base_chance
+                # 【大浪淘沙v3】基础概率提高
+                radiation_base = spec_config.radiation_base_chance  # 现在是0.15
                 
                 # 早期额外加成（从配置）
                 early_bonus = 0.0
                 min_pop_ratio_for_bonus = spec_config.radiation_pop_ratio_early if is_early_game else spec_config.radiation_pop_ratio_late
                 if is_early_game and pop_ratio >= min_pop_ratio_for_bonus:
-                    early_bonus = spec_config.radiation_early_bonus
+                    early_bonus = spec_config.radiation_early_bonus  # 现在是0.25
                 
-                # 种群因子：只有远超门槛（2倍以上）才有显著加成
-                if pop_ratio >= 2.0:
-                    pop_factor = min(0.10, (pop_ratio - 2.0) * 0.02)  # 最多+0.10
+                # 【大浪淘沙v3】种群因子：降低门槛，提高加成
+                if pop_ratio >= 1.5:  # 原2.0 -> 1.5
+                    pop_factor = min(0.20, (pop_ratio - 1.5) * 0.05)  # 最多+0.20（原0.10）
                 elif is_early_game and pop_ratio >= min_pop_ratio_for_bonus:
-                    pop_factor = min(0.08, (pop_ratio - 1.0) * 0.04)  # 早期更宽松
+                    pop_factor = min(0.15, (pop_ratio - 0.5) * 0.10)  # 早期更宽松
                 else:
                     pop_factor = 0.0
                 
-                # 资源饱和加成：高竞争环境才有意义
+                # 【大浪淘沙v3】资源饱和加成：降低门槛
                 saturation_factor = 0.0
-                if niche_saturation > 0.7:
-                    saturation_factor = (niche_saturation - 0.7) * 0.15  # 最多+0.045
+                if niche_saturation > 0.5:  # 原0.7 -> 0.5
+                    saturation_factor = (niche_saturation - 0.5) * 0.25  # 最多+0.125
                 
-                # 累积压力加成（保留但降低权重）
-                pressure_factor = speciation_pressure * 0.20
+                # 累积压力加成（提高权重）
+                pressure_factor = speciation_pressure * 0.40  # 原0.20 -> 0.40
                 
                 radiation_chance = radiation_base + early_bonus + pop_factor + saturation_factor + pressure_factor
                 
-                # 植物小幅加成
+                # 植物加成提高
                 if is_plant:
-                    radiation_chance += 0.03
+                    radiation_chance += 0.05  # 原0.03 -> 0.05
                 
-                # 硬性上限（从配置）
+                # 【大浪淘沙v3】硬性上限提高
                 max_radiation = spec_config.radiation_max_chance_early if is_early_game else spec_config.radiation_max_chance_late
-                radiation_chance = min(max_radiation, radiation_chance)
+                radiation_chance = min(max_radiation, radiation_chance)  # 早期60%，后期40%
                 
-                # 无隔离惩罚（从配置）
+                # 【大浪淘沙v3】无隔离惩罚减轻
                 no_isolation_penalty = spec_config.no_isolation_penalty_early if is_early_game else spec_config.no_isolation_penalty_late
                 if not is_isolated:
-                    radiation_chance *= no_isolation_penalty
+                    radiation_chance *= no_isolation_penalty  # 早期95%，后期70%
                 
-                # 需要种群超过门槛
+                # 【大浪淘沙v3】种群门槛降低
                 min_pop_ratio = spec_config.radiation_pop_ratio_early if is_early_game else spec_config.radiation_pop_ratio_late
                 if survivors >= min_population * min_pop_ratio and random.random() < radiation_chance:
                     has_pressure = True

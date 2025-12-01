@@ -26,30 +26,38 @@ class MigrationAdvisor:
     """
 
     def __init__(self, 
-                 pressure_migration_threshold: float = 0.18,  # 【平衡v2】从0.25降到0.18，更早触发逃离
-                 saturation_threshold: float = 0.75,          # 【平衡v2】从0.85降到0.75，更早扩散
-                 overflow_growth_threshold: float = 1.10,     # 【平衡v2】从1.15降到1.10
-                 overflow_pressure_threshold: float = 0.50,   # 【平衡v2】从0.6降到0.50
-                 min_population: int = 50,                    # 【平衡v2】从100降到50
-                 prey_scarcity_threshold: float = 0.35,       # 【平衡v2】从0.3提高到0.35，更容易触发追踪
-                 chronic_decline_threshold: float = 0.12,     # 【平衡v2】从0.15降到0.12
-                 chronic_decline_turns: int = 2,              # 保持2回合
+                 pressure_migration_threshold: float = 0.12,  # 【大浪淘沙v3】从0.18降到0.12，极早触发逃离
+                 saturation_threshold: float = 0.60,          # 【大浪淘沙v3】从0.75降到0.60，更早扩散
+                 overflow_growth_threshold: float = 1.05,     # 【大浪淘沙v3】从1.10降到1.05
+                 overflow_pressure_threshold: float = 0.40,   # 【大浪淘沙v3】从0.50降到0.40
+                 min_population: int = 20,                    # 【大浪淘沙v3】从50降到20
+                 prey_scarcity_threshold: float = 0.40,       # 【大浪淘沙v3】从0.35提高到0.40
+                 chronic_decline_threshold: float = 0.08,     # 【大浪淘沙v3】从0.12降到0.08
+                 chronic_decline_turns: int = 1,              # 【大浪淘沙v3】从2降到1回合
+                 oversaturation_threshold: float = 0.80,      # 【新增】过饱和阈值：80%承载力触发溢出
+                 oversaturation_bonus: float = 0.15,          # 【新增】过饱和时基础迁徙概率加成
+                 gradient_reward_k: float = 0.5,              # 【新增】梯度奖励系数：目标格优势越大，加成越多
                  enable_actual_migration: bool = True) -> None:
         """初始化迁移顾问
         
-        【平衡修复v2】进一步降低迁徙阈值，让物种对压力更敏感
+        【大浪淘沙v3】大幅降低迁徙阈值，添加过饱和溢出项和梯度奖励
         
         调整后的逻辑：
-        - 压力驱动（逃离）：门槛18%，轻微压力就开始考虑迁徙
-        - 资源饱和（扩散）：门槛0.75，种群达到75%承载力就开始扩散
-        - 人口溢出（扩张）：门槛110%，种群增长10%就考虑扩张
-        - 猎物追踪：猎物密度<35%就触发追踪迁徙
-        - 慢性衰退迁徙：死亡率>12%且连续2回合衰退就触发
+        - 压力驱动（逃离）：门槛12%，微小压力就开始考虑迁徙
+        - 资源饱和（扩散）：门槛0.60，种群达到60%承载力就开始扩散
+        - 人口溢出（扩张）：门槛105%，种群增长5%就考虑扩张
+        - 猎物追踪：猎物密度<40%就触发追踪迁徙
+        - 慢性衰退迁徙：死亡率>8%且连续1回合衰退就触发
+        - 【新增】过饱和溢出：种群>80%承载力时，额外+15%基础迁徙概率
+        - 【新增】梯度奖励：目标格相对优势越大，迁徙意愿越强
         
         Args:
             prey_scarcity_threshold: 猎物稀缺阈值，当低于此值时触发追踪迁徙
             chronic_decline_threshold: 慢性衰退阈值（死亡率），超过此值开始计数
             chronic_decline_turns: 连续多少回合慢性衰退触发生存迁徙
+            oversaturation_threshold: 过饱和阈值（占用率），超过此值加速溢出
+            oversaturation_bonus: 过饱和时的基础迁徙概率加成
+            gradient_reward_k: 梯度奖励系数
             enable_actual_migration: 是否实际执行迁徙
         """
         self.pressure_migration_threshold = pressure_migration_threshold
@@ -60,6 +68,9 @@ class MigrationAdvisor:
         self.prey_scarcity_threshold = prey_scarcity_threshold
         self.chronic_decline_threshold = chronic_decline_threshold
         self.chronic_decline_turns = chronic_decline_turns
+        self.oversaturation_threshold = oversaturation_threshold  # 【新增】
+        self.oversaturation_bonus = oversaturation_bonus          # 【新增】
+        self.gradient_reward_k = gradient_reward_k                # 【新增】
         self.enable_actual_migration = enable_actual_migration
         
         # 地块死亡率数据缓存
@@ -295,6 +306,18 @@ class MigrationAdvisor:
                     migration_type = "saturation_dispersal"
                     origin, destination, rationale = self._determine_migration(
                         result, pressures, major_events, migration_type
+                    )
+            
+            # 【新增】类型2.5：过饱和溢出 - 种群超过80%承载力时强制外溢
+            if not migration_type and result.resource_pressure > self.oversaturation_threshold:
+                if result.survivors >= effective_min_pop:
+                    migration_type = "oversaturation_overflow"
+                    overflow_pct = (result.resource_pressure - self.oversaturation_threshold) * 100
+                    origin = "高密度核心区域"
+                    destination = "邻近低密度区域"
+                    rationale = (
+                        f"种群占用率{result.resource_pressure:.0%}超过饱和阈值，"
+                        f"额外溢出压力+{overflow_pct:.0f}%，强制向外扩散以缓解拥挤"
                     )
             
             # 类型3：人口溢出

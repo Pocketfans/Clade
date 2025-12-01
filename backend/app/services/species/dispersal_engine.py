@@ -42,14 +42,18 @@ class DispersalEngine:
     使用numpy进行高效的批量地块评分计算
     """
     
-    # 【平衡v2】扩散参数
-    PASSIVE_DISPERSAL_PROB = 0.25       # 被动扩散概率：每回合25%概率向周边扩散
-    LONG_JUMP_PROB = 0.05               # 远距离跳跃概率：5%
-    OVERFLOW_THRESHOLD = 0.7            # 种群溢出阈值：70%承载力触发
-    PRESSURE_DISPERSAL_THRESHOLD = 0.15 # 压力扩散阈值：15%死亡率触发
+    # 【大浪淘沙v3】扩散参数 - 大幅提高扩散积极性
+    PASSIVE_DISPERSAL_PROB = 0.40       # 被动扩散概率：每回合40%概率向周边扩散（原25%）
+    LONG_JUMP_PROB = 0.10               # 远距离跳跃概率：10%（原5%）
+    OVERFLOW_THRESHOLD = 0.55           # 种群溢出阈值：55%承载力触发（原70%）
+    PRESSURE_DISPERSAL_THRESHOLD = 0.08 # 压力扩散阈值：8%死亡率触发（原15%）
+    
+    # 【新增】水域物种扩散优惠
+    AQUATIC_DISTANCE_FACTOR = 0.6       # 水域物种距离成本系数（原1.0）
+    AQUATIC_JUMP_BONUS = 0.08           # 水域物种远跳概率加成
     
     # 迁徙冷却（回合数）
-    MIGRATION_COOLDOWN = 1              # 【平衡v2】从2-3回合降到1回合
+    MIGRATION_COOLDOWN = 0              # 【大浪淘沙v3】从1回合降到0回合
     DISPERSAL_COOLDOWN = 0              # 被动扩散无冷却
     
     def __init__(self, embedding_service: 'EmbeddingIntegrationService | None' = None):
@@ -229,13 +233,17 @@ class DispersalEngine:
     def compute_distance_matrix(
         self,
         origin_tiles: list[int],
-        max_distance: int = 15
+        max_distance: int = 15,
+        is_aquatic: bool = False
     ) -> np.ndarray:
         """计算从原点地块到所有地块的距离权重
+        
+        【大浪淘沙v3】添加水域物种距离优惠
         
         Args:
             origin_tiles: 起点地块ID列表
             max_distance: 最大考虑距离
+            is_aquatic: 是否为水域物种（享受距离优惠）
             
         Returns:
             (n_tiles,) 距离权重向量，近=1，远=0
@@ -263,11 +271,21 @@ class DispersalEngine:
         # 计算曼哈顿距离
         distances = np.abs(self._tile_coords - center).sum(axis=1)
         
-        # 转换为权重（近=1，远=0）
-        weights = np.maximum(0.0, 1.0 - distances / max_distance)
+        # 【大浪淘沙v3】水域物种距离成本打折
+        effective_max_distance = max_distance
+        if is_aquatic:
+            # 水域物种可以更远距离扩散
+            effective_max_distance = int(max_distance / self.AQUATIC_DISTANCE_FACTOR)
         
-        # 【平衡v2】超出范围的地块也有小概率被选中（远距离扩散）
-        weights = np.maximum(weights, self.LONG_JUMP_PROB)
+        # 转换为权重（近=1，远=0）
+        weights = np.maximum(0.0, 1.0 - distances / effective_max_distance)
+        
+        # 【大浪淘沙v3】超出范围的地块也有概率被选中（远距离扩散）
+        # 水域物种远跳概率更高
+        long_jump = self.LONG_JUMP_PROB
+        if is_aquatic:
+            long_jump += self.AQUATIC_JUMP_BONUS
+        weights = np.maximum(weights, long_jump)
         
         return weights
     
