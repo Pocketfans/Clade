@@ -1243,8 +1243,10 @@ class TileBasedMortalityEngine:
         
         # ======== 3. 综合竞争系数矩阵 ========
         # 竞争系数 = 相似度 × 营养级系数
-        # 【强化】提高基础竞争强度（符合达尔文式淘汰）
-        comp_coef_matrix = (similarity_matrix * trophic_coef * 0.45).astype(np.float64)
+        # 【改进v4】进一步提高竞争强度，促进动态平衡
+        # 同营养级、相似生态位的物种应该激烈竞争
+        # 0.45 -> 0.60，让竞争更激烈
+        comp_coef_matrix = (similarity_matrix * trophic_coef * 0.60).astype(np.float64)
         np.fill_diagonal(comp_coef_matrix, 0.0)
         
         # ======== 4. 向量化计算所有地块的竞争压力 ========
@@ -1269,8 +1271,9 @@ class TileBasedMortalityEngine:
             # 竞争强度 = 竞争系数 × 种群压力比
             comp_strength = comp_coef_matrix * pop_ratio
             
-            # 限制单个竞争者的贡献
-            comp_strength = np.minimum(comp_strength, 0.25)
+            # 【改进v4】提高单个竞争者的贡献上限
+            # 从0.25提高到0.35，让强竞争者更有压制力
+            comp_strength = np.minimum(comp_strength, 0.35)
             
             # 只考虑在场物种之间的竞争
             present_matrix = present_mask[:, np.newaxis] & present_mask[np.newaxis, :]
@@ -1279,8 +1282,9 @@ class TileBasedMortalityEngine:
             # 对每个物种汇总竞争压力
             total_competition = comp_strength.sum(axis=1)
             
-            # 【强化v3】提高竞争上限，促进达尔文式淘汰
-            competition[tile_idx, :] = np.minimum(total_competition, 0.70)
+            # 【改进v4】提高竞争上限，促进达尔文式淘汰
+            # 从0.70提高到0.80，让激烈竞争导致更高死亡率
+            competition[tile_idx, :] = np.minimum(total_competition, 0.80)
         
         return competition
     
@@ -1383,20 +1387,36 @@ class TileBasedMortalityEngine:
                                np.clip(ratio_t4 - 1.0, 0, SCARCITY_MAX),
                                np.where(t5 > 0, SCARCITY_MAX, 0.0))
         
+        # 【改进v4】增强食物匮乏惩罚
+        # 消费者猎物稀缺时，死亡率显著上升
+        # 这与 MapManager 中的 prey_abundance 逻辑保持一致
+        SCARCITY_WEIGHT = 0.5  # 从0.3提高到0.5，增强食物匮乏惩罚
+        
         # 将压力分配到各物种
         for sp_idx in range(n_species):
             t_level = int_trophic[sp_idx]
             
             if t_level == 1:
+                # 生产者只受捕食压力
                 trophic_pressure[:, sp_idx] = grazing
             elif t_level == 2:
-                trophic_pressure[:, sp_idx] = np.maximum(pred_t3, scarcity_t2 * 0.3)
+                # T2消费者：受T3捕食 + 猎物(T1)稀缺惩罚
+                pred_component = pred_t3
+                scarcity_component = scarcity_t2 * SCARCITY_WEIGHT
+                trophic_pressure[:, sp_idx] = pred_component + scarcity_component
             elif t_level == 3:
-                trophic_pressure[:, sp_idx] = np.maximum(pred_t4, scarcity_t3 * 0.3)
+                # T3消费者：受T4捕食 + 猎物(T2)稀缺惩罚
+                pred_component = pred_t4
+                scarcity_component = scarcity_t3 * SCARCITY_WEIGHT
+                trophic_pressure[:, sp_idx] = pred_component + scarcity_component
             elif t_level == 4:
-                trophic_pressure[:, sp_idx] = np.maximum(pred_t5, scarcity_t4 * 0.3)
+                # T4消费者：受T5捕食 + 猎物(T3)稀缺惩罚
+                pred_component = pred_t5
+                scarcity_component = scarcity_t4 * SCARCITY_WEIGHT
+                trophic_pressure[:, sp_idx] = pred_component + scarcity_component
             elif t_level >= 5:
-                trophic_pressure[:, sp_idx] = scarcity_t5 * 0.3
+                # 顶级捕食者：只有猎物(T4)稀缺惩罚
+                trophic_pressure[:, sp_idx] = scarcity_t5 * SCARCITY_WEIGHT
         
         # 【关键修复】使用batch_population_matrix而不是self._population_matrix
         trophic_pressure = np.where(batch_population_matrix > 0, trophic_pressure, 0)
