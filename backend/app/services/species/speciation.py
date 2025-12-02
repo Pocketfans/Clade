@@ -1424,20 +1424,22 @@ class SpeciationService:
         
         species_list = "\n".join(species_list_parts)
         
-        # 【修复】转义 species_list 中的花括号，防止 format() 时误替换
-        # 物种描述等字段可能包含 {xxx} 格式的文本，会导致 KeyError
-        species_list_escaped = species_list.replace("{", "{{").replace("}", "}}")
+        # 【修复】不再转义 species_list 中的花括号
+        # prompt format(**payload) 不会递归解析 value 中的花括号
+        species_list_escaped = species_list
         
-        return {
+        payload_data = {
             "average_pressure": average_pressure,
             "pressure_summary": pressure_summary,
             "map_changes_summary": self._summarize_map_changes(map_changes) if map_changes else "无显著地形变化",
             "major_events_summary": self._summarize_major_events(major_events) if major_events else "无重大事件",
-            # 【修复】同时提供 major_events 字段，兼容可能使用旧 key 的 Prompt
+            # 【修复】同时提供 major_events 字段
             "major_events": self._summarize_major_events(major_events) if major_events else "无重大事件",
             "species_list": species_list_escaped,
             "batch_size": len(entries),
         }
+        logger.debug(f"[分化批量] Payload keys: {list(payload_data.keys())}")
+        return payload_data
     
     async def _call_batch_ai(
         self, 

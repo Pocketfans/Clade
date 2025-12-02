@@ -373,6 +373,7 @@ class ModelRouter:
                 formatted_prompt = prompt_template.format(**payload)
             except (KeyError, ValueError) as e:
                 logger.warning(f"[ModelRouter] Prompt format failed ({capability}): {e}")
+                logger.warning(f"[ModelRouter] Available payload keys: {list(payload.keys())}")
                 formatted_prompt = prompt_template
         
         if is_local_mode:
@@ -1550,7 +1551,12 @@ async def staggered_gather(
     def emit_event(event_type: str, message: str, category: str = "AI"):
         if event_callback:
             try:
-                event_callback(event_type, message, category)
+                # 尝试以3参数方式调用 (event_type, message, category)
+                try:
+                    event_callback(event_type, message, category)
+                except TypeError:
+                    # 如果失败，回退到1参数方式
+                    event_callback(message)
             except Exception:
                 pass
     
