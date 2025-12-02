@@ -456,43 +456,102 @@ class HybridizationService:
     def _generate_hybrid_latin_name(self, p1: Species, p2: Species) -> str:
         """生成杂交种的拉丁学名
         
-        格式: Genus × epithet（符合杂交种命名规范）
+        生成更自然的古生物风格学名，而非简单的 A×B 格式。
+        使用拉丁语命名法，融合双亲的特征词素。
         """
-        p1_parts = (p1.latin_name or "").split()
-        p2_parts = (p2.latin_name or "").split()
+        import random
         
-        genus = p1_parts[0] if p1_parts else "Genus"
-        # 从两个亲本的种加词中取字符组合
-        epithet1 = p1_parts[1][:3] if len(p1_parts) > 1 else "hyb"
-        epithet2 = p2_parts[1][:3] if len(p2_parts) > 1 else "rid"
+        p1_parts = (p1.latin_name or "Species unknown").split()
+        p2_parts = (p2.latin_name or "Species unknown").split()
         
-        return f"{genus} × {epithet1}{epithet2}"
+        # 获取属名和种加词
+        genus1 = p1_parts[0] if p1_parts else "Proto"
+        genus2 = p2_parts[0] if p2_parts else "Neo"
+        epithet1 = p1_parts[1] if len(p1_parts) > 1 else "hybridus"
+        epithet2 = p2_parts[1] if len(p2_parts) > 1 else "mixtus"
+        
+        # 创建融合属名（取两个属名的部分组合）
+        # 例如: Primoamoeba + Flagellamoeba -> Primoflagella
+        hybrid_genus_options = [
+            f"{genus1[:min(5, len(genus1))]}{genus2[len(genus2)//2:].lower()}",
+            f"{genus2[:min(5, len(genus2))]}{genus1[len(genus1)//2:].lower()}",
+            f"Para{genus1.lower()[:min(6, len(genus1))]}",
+            f"Neo{genus1.lower()[:min(6, len(genus1))]}",
+        ]
+        hybrid_genus = random.choice(hybrid_genus_options)
+        # 确保首字母大写
+        hybrid_genus = hybrid_genus[0].upper() + hybrid_genus[1:] if hybrid_genus else "Hybridus"
+        
+        # 创建融合种加词
+        # 使用常见的拉丁语杂交后缀
+        hybrid_suffixes = ["mixtus", "hybridus", "compositus", "bifidus", "intermedius", "dualis"]
+        
+        # 从双亲种加词中提取特征
+        if len(epithet1) > 4 and len(epithet2) > 4:
+            # 取第一个种加词的前半部分 + 第二个的后半部分
+            hybrid_epithet = f"{epithet1[:len(epithet1)//2]}{epithet2[len(epithet2)//2:]}"
+        else:
+            # 短名称时使用杂交后缀
+            hybrid_epithet = f"{epithet1[:min(4, len(epithet1))]}{random.choice(hybrid_suffixes)}"
+        
+        # 确保种加词小写
+        hybrid_epithet = hybrid_epithet.lower()
+        
+        return f"{hybrid_genus} {hybrid_epithet}"
     
     def _generate_hybrid_common_name(self, p1: Species, p2: Species) -> str:
         """生成杂交种的中文俗名
         
-        格式: 简化的亲本名称组合
-        例如: 鞭毛亚种×鞭毛变种 -> 鞭毛杂交种
+        生成更自然的古生物风格中文名，避免简单的 AxB 格式。
+        使用描述性命名，体现杂交特征。
         """
+        import random
+        
         # 提取亲本俗名的核心部分（去掉后缀如亚种、变种等）
-        suffixes = ["亚种", "变种", "适应型", "进化型", "新型", "原始"]
+        suffixes = ["亚种", "变种", "适应型", "进化型", "新型", "原始", "杂交种", "嵌合体"]
         
         def extract_core_name(name: str) -> str:
+            result = name
             for suffix in suffixes:
-                if name.endswith(suffix):
-                    return name[:-len(suffix)]
-            # 如果没有后缀，取前4个字符
-            return name[:4] if len(name) > 4 else name
+                if result.endswith(suffix):
+                    result = result[:-len(suffix)]
+            # 去掉常见的修饰词
+            prefixes = ["原始", "新型", "古", "巨", "小", "大"]
+            for prefix in prefixes:
+                if result.startswith(prefix) and len(result) > len(prefix) + 1:
+                    result = result[len(prefix):]
+            return result.strip()
         
-        core1 = extract_core_name(p1.common_name or "物种1")
-        core2 = extract_core_name(p2.common_name or "物种2")
+        core1 = extract_core_name(p1.common_name or "生物")
+        core2 = extract_core_name(p2.common_name or "生物")
         
-        # 如果核心名称相同，只用一个
+        # 杂交种命名风格选项
+        hybrid_suffixes = ["兽", "虫", "形类", "型", "体", "生物"]
+        hybrid_prefixes = ["杂交", "混血", "复合", "融合", "双源"]
+        
+        # 如果核心名称相同，使用变体后缀
         if core1 == core2:
-            return f"{core1}杂交种"
+            suffix = random.choice(["变异型", "杂合体", "复合型", "融合种"])
+            return f"{core1}{suffix}"
+        
+        # 不同核心名称时，创建融合名
+        # 取两个名称的特征字符融合
+        if len(core1) >= 2 and len(core2) >= 2:
+            # 多种命名风格
+            naming_styles = [
+                # 风格1: 第一个名称的前部分 + 第二个名称的后部分 + 后缀
+                f"{core1[:min(2, len(core1))]}{core2[-min(2, len(core2)):]}{random.choice(hybrid_suffixes)}",
+                # 风格2: 描述性前缀 + 第一个名称核心
+                f"{random.choice(hybrid_prefixes)}{core1[:min(3, len(core1))]}{random.choice(hybrid_suffixes)}",
+                # 风格3: 双字融合
+                f"{core1[0]}{core2[0]}{random.choice(['兽', '虫', '体', '形'])}",
+                # 风格4: 新+核心名
+                f"新{core1[:min(2, len(core1))]}{core2[-1] if len(core2) > 0 else ''}{random.choice(['类', '型', '体'])}",
+            ]
+            return random.choice(naming_styles)
         else:
-            # 取较短的名称组合
-            return f"{core1[:3]}×{core2[:3]}杂交种"
+            # 短名称处理
+            return f"{core1}{core2}{random.choice(hybrid_suffixes)}"
     
     def _mix_traits(self, p1: Species, p2: Species) -> dict[str, float]:
         """混合属性：模拟杂交遗传特性

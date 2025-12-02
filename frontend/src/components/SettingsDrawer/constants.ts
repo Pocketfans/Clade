@@ -177,6 +177,10 @@ export const DEFAULT_SPECIATION_CONFIG: SpeciationConfig = {
   threshold_multiplier_no_isolation: 1.8,
   threshold_multiplier_high_overlap: 1.2,
   threshold_multiplier_high_saturation: 1.2,
+  // 杂交参数
+  auto_hybridization_chance: 0.08,
+  hybridization_success_rate: 0.35,
+  max_hybrids_per_turn: 2,
 };
 
 export const DEFAULT_REPRODUCTION_CONFIG: ReproductionConfig = {

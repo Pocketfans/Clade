@@ -1783,14 +1783,13 @@ class AutoHybridizationStage(BaseStage):
     - 两个物种分布在相同地块（同域）
     - 遗传距离在杂交阈值内（近缘）
     - 种群规模足够大
-    - 随机概率检查
+    - 随机概率检查（基础概率）
+    - 杂交成功率骰点（通过基础检查后还需骰点成功）
     """
     
-    # 【参数配置】可在此调整杂交行为
+    # 【参数配置】从 settings 读取，此处仅定义备用默认值
     MIN_POPULATION_FOR_HYBRIDIZATION = 500  # 最小种群才能参与杂交
-    BASE_HYBRIDIZATION_CHANCE = 0.05  # 基础杂交概率（每回合）
-    MAX_HYBRIDS_PER_TURN = 3  # 每回合最多产生的杂交种数量
-    SYMPATRIC_BONUS = 0.10  # 完全同域时的概率加成
+    SYMPATRIC_BONUS = 0.08  # 完全同域时的概率加成
     
     def __init__(self):
         super().__init__(StageOrder.AUTO_HYBRIDIZATION.value, "自动杂交")
@@ -1812,6 +1811,12 @@ class AutoHybridizationStage(BaseStage):
         ctx.emit_event("stage", "🧬 自动杂交检查", "进化")
         
         ctx.auto_hybrids = []
+        
+        # 从 SpeciationConfig 读取杂交参数（与分化配置统一管理）
+        spec_config = engine.speciation._config
+        base_chance = spec_config.auto_hybridization_chance  # 基础杂交概率
+        success_rate = spec_config.hybridization_success_rate  # 杂交成功率
+        max_hybrids = spec_config.max_hybrids_per_turn  # 每回合最多杂交数
         
         # 获取所有存活物种
         alive_species = [sp for sp in ctx.species_batch if sp.status == "alive"]
@@ -1857,11 +1862,11 @@ class AutoHybridizationStage(BaseStage):
         
         # 遍历所有物种对
         for i, sp1 in enumerate(candidate_species):
-            if hybrids_created >= self.MAX_HYBRIDS_PER_TURN:
+            if hybrids_created >= max_hybrids:
                 break
                 
             for sp2 in candidate_species[i+1:]:
-                if hybrids_created >= self.MAX_HYBRIDS_PER_TURN:
+                if hybrids_created >= max_hybrids:
                     break
                 
                 # 避免重复检查
@@ -1883,17 +1888,25 @@ class AutoHybridizationStage(BaseStage):
                 if not can_hybrid:
                     continue
                 
-                # 计算杂交概率
+                # 【步骤1】计算杂交检测概率
                 # 基础概率 + 同域程度加成 + 可育性加成
                 sympatry_ratio = len(shared_tiles) / max(1, min(len(tiles1), len(tiles2)))
                 hybrid_chance = (
-                    self.BASE_HYBRIDIZATION_CHANCE 
+                    base_chance 
                     + self.SYMPATRIC_BONUS * sympatry_ratio
-                    + 0.05 * fertility  # 可育性越高，概率越高
+                    + 0.03 * fertility  # 可育性越高，概率越高
                 )
                 
-                # 随机检查
+                # 检测概率骰点
                 if random.random() > hybrid_chance:
+                    continue
+                
+                # 【步骤2】杂交成功率骰点（类似分化的成功率机制）
+                if random.random() > success_rate:
+                    logger.debug(
+                        f"[自动杂交] 骰点失败: {sp1.common_name} × {sp2.common_name} "
+                        f"(成功率={success_rate:.0%})"
+                    )
                     continue
                 
                 # 创建杂交种

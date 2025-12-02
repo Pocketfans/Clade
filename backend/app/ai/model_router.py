@@ -1242,77 +1242,52 @@ class ModelRouter:
                 try:
                     async with httpx.AsyncClient(timeout=timeout + 30, http2=False) as client:
                         async with client.stream("POST", url, json=body, headers=headers) as response:
-                            response.raise_for_status()
                             yield self._stream_status_event(capability, "connected")
                             first_chunk = True
                             text_chunk_count = 0
                             total_text_len = 0
-                            
-                            # Gemini 流式响应是格式化的 JSON 数组，需要收集完整内容后解析
-                            # 使用 aiter_bytes 收集所有内容
-                            full_content = b""
-                            async for chunk in response.aiter_bytes():
-                                full_content += chunk
-                            
-                            # 解析完整的 JSON 数组
+                        
+                        async for line in response.aiter_lines():
+                            if not line:
+                                continue
                             try:
-                                response_text = full_content.decode('utf-8')
-                                data = json.loads(response_text)
-                                
-                                # Gemini 返回的是一个数组，每个元素包含 candidates
-                                if isinstance(data, list):
-                                    for item in data:
-                                        if "candidates" in item:
-                                            candidates = item["candidates"]
-                                            if candidates:
-                                                content = candidates[0].get("content", {})
-                                                parts = content.get("parts", [])
-                                                for part in parts:
-                                                    text = part.get("text", "")
-                                                    if text:
-                                                        text_chunk_count += 1
-                                                        total_text_len += len(text)
-                                                        if first_chunk:
-                                                            yield self._stream_status_event(capability, "receiving")
-                                                            first_chunk = False
-                                                        yield text
-                                        elif "error" in item:
-                                            logger.error(f"[astream_capability] Gemini 错误: {item['error']}")
-                                            yield self._stream_error_event(capability, str(item["error"]))
-                                elif isinstance(data, dict):
-                                    # 单个响应对象
-                                    if "candidates" in data:
-                                        candidates = data["candidates"]
-                                        if candidates:
-                                            content = candidates[0].get("content", {})
-                                            parts = content.get("parts", [])
-                                            for part in parts:
-                                                text = part.get("text", "")
-                                                if text:
-                                                    text_chunk_count += 1
-                                                    total_text_len += len(text)
-                                                    if first_chunk:
-                                                        yield self._stream_status_event(capability, "receiving")
-                                                        first_chunk = False
-                                                    yield text
-                                    elif "error" in data:
-                                        logger.error(f"[astream_capability] Gemini 错误: {data['error']}")
-                                        yield self._stream_error_event(capability, str(data["error"]))
-                                
-                            except json.JSONDecodeError as e:
-                                logger.error(f"[astream_capability] Gemini JSON解析失败: {e}")
-                                logger.error(f"[astream_capability] 原始响应前500字符: {response_text[:500]}")
-                                yield self._stream_error_event(capability, f"JSON解析失败: {e}")
+                                chunk = json.loads(line)
+                            except json.JSONDecodeError:
+                                logger.debug(f"[astream_capability] Gemini chunk解析失败: {line[:120]}")
+                                continue
                             
-                            # 完成日志
-                            logger.info(f"[astream_capability] Gemini 完成: {text_chunk_count} 文本chunks, {total_text_len} 字符")
+                            if "error" in chunk:
+                                logger.error(f"[astream_capability] Gemini 错误: {chunk['error']}")
+                                yield self._stream_error_event(capability, str(chunk["error"]))
+                                break
                             
-                            if text_chunk_count == 0:
-                                logger.warning(f"[astream_capability] ⚠️ 未提取到任何文本！响应长度: {len(full_content)} 字节")
+                            candidates = chunk.get("candidates", [])
+                            for candidate in candidates:
+                                content = candidate.get("content", {})
+                                parts = content.get("parts", [])
+                                for part in parts:
+                                    text = part.get("text", "")
+                                    if text:
+                                        text_chunk_count += 1
+                                        total_text_len += len(text)
+                                        if first_chunk:
+                                            yield self._stream_status_event(capability, "receiving")
+                                            first_chunk = False
+                                        yield text
                             
-                            yield self._stream_status_event(capability, "completed")
+                            if chunk.get("finishReason") == "STOP" or chunk.get("finish_reason") == "STOP":
+                                break
+                        
+                        logger.info(f"[astream_capability] Gemini 完成: {text_chunk_count} 文本chunks, {total_text_len} 字符")
+                        yield self._stream_status_event(capability, "completed")
                 except httpx.HTTPStatusError as e:
-                    logger.error(f"[astream_capability] Gemini HTTP错误: {e.response.status_code} - {e.response.text[:500]}")
+                    error_preview = ""
+                    try:
+                        body_bytes = await e.response.aread()
+                        error_preview = body_bytes.decode("utf-8", errors="ignore")[:500]
+                    except Exception as body_err:
+                        error_preview = f"<无法读取响应体: {body_err}>"
+                    logger.error(f"[astream_capability] Gemini HTTP错误: {e.response.status_code} - {error_preview}")
                     yield self._stream_error_event(capability, f"HTTP {e.response.status_code}")
                 except Exception as e:
                     logger.error(f"[astream_capability] Gemini 异常: {type(e).__name__}: {e}")

@@ -84,10 +84,14 @@ class Settings(BaseSettings):
     gene_flow_distance_threshold: float = Field(default=0.32, alias="GENE_FLOW_DISTANCE_THRESHOLD")
     # 基因交流地理重叠阈值（低于此值视为隔离）
     gene_flow_overlap_threshold: float = Field(default=0.10, alias="GENE_FLOW_OVERLAP_THRESHOLD")
-    # 自动杂交检测概率（每回合检测同属近缘物种杂交的概率）- 提高以增加杂交事件
-    auto_hybridization_chance: float = Field(default=0.18, alias="AUTO_HYBRIDIZATION_CHANCE")
-    # 杂交遗传距离上限（超过此值无法杂交）- 略微放宽允许更多杂交
+    # 自动杂交检测概率（每回合检测同属近缘物种杂交的概率）- 降低以减缓杂交速度
+    auto_hybridization_chance: float = Field(default=0.08, alias="AUTO_HYBRIDIZATION_CHANCE")
+    # 杂交遗传距离上限（超过此值无法杂交）
     hybridization_distance_max: float = Field(default=0.50, alias="HYBRIDIZATION_DISTANCE_MAX")
+    # 杂交成功率（通过can_hybridize检查后，还需要骰点成功才能杂交）
+    hybridization_success_rate: float = Field(default=0.35, alias="HYBRIDIZATION_SUCCESS_RATE")
+    # 每回合最多杂交数量
+    max_hybrids_per_turn: int = Field(default=2, alias="MAX_HYBRIDS_PER_TURN")
     
     # ========== AI 功能开关 ==========
     # 回合报告 LLM 叙事开关（与 AI 物种叙事分开控制）

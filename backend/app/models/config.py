@@ -115,6 +115,14 @@ class SpeciationConfig(BaseModel):
     # 高资源饱和时门槛乘数
     threshold_multiplier_high_saturation: float = 1.1
     
+    # ========== 杂交参数 ==========
+    # 自动杂交检测概率（每回合检测同域近缘物种杂交的概率）
+    auto_hybridization_chance: float = 0.08
+    # 杂交成功率（通过检测后，杂交实际成功的概率）
+    hybridization_success_rate: float = 0.35
+    # 每回合最多杂交数量
+    max_hybrids_per_turn: int = 2
+    
     # ========== 距离型隔离判定 ==========
     # 距离隔离阈值（六边形步数）：候选地块跨度超过此值视为隔离（降低以更容易触发）
     distance_threshold_hex: int = 6

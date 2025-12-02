@@ -359,6 +359,11 @@ export interface SpeciationConfig {
   threshold_multiplier_no_isolation?: number;      // 无隔离时门槛乘数
   threshold_multiplier_high_overlap?: number;      // 高生态位重叠时门槛乘数
   threshold_multiplier_high_saturation?: number;   // 高资源饱和时门槛乘数
+  
+  // ========== 杂交参数 ==========
+  auto_hybridization_chance?: number;   // 自动杂交检测概率
+  hybridization_success_rate?: number;  // 杂交成功率
+  max_hybrids_per_turn?: number;        // 每回合最多杂交数量
 }
 
 /**
