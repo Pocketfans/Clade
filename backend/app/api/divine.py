@@ -360,6 +360,7 @@ def preview_hybridization(
             "reason": reason,
             "fertility": 0,
             "energy_cost": energy_service.get_cost("hybridize"),
+            "can_afford": energy_service.can_afford("hybridize")[0],
         }
     
     hybrid_code = f"{sp_a.lineage_code}×{sp_b.lineage_code}"
@@ -394,11 +395,15 @@ def preview_forced_hybridization(
     species_b: str,
     container: 'ServiceContainer' = Depends(get_container),
 ) -> dict:
-    """预览强行杂交结果"""
+    """预览强行杂交结果
+    
+    返回格式兼容前端 ForceHybridPreview 接口
+    """
     from ..services.system.divine_energy import energy_service
     
     species_repo = container.species_repository
     genetic_calculator = container.genetic_distance_calculator
+    hybridization_service = container.hybridization_service
     
     sp_a = species_repo.get_by_lineage(species_a)
     sp_b = species_repo.get_by_lineage(species_b)
@@ -417,21 +422,50 @@ def preview_forced_hybridization(
     estimated_fertility = max(0.0, 0.3 - distance * 0.5)
     stability = max(0.1, 1.0 - distance)
     
+    # 检查是否可以普通杂交
+    can_normal, normal_fertility = hybridization_service.can_hybridize(sp_a, sp_b)
+    
+    current_energy = energy_service.get_state().current
+    
+    warnings = [
+        "强行杂交产物可能不育或基因不稳定",
+        "能量消耗是普通杂交的5倍",
+    ]
+    if distance > 0.7:
+        warnings.append("⚠️ 遗传距离过大，杂交成功率极低")
+    
+    # 返回兼容前端 ForceHybridPreview 接口的结构
     return {
-        "can_force": True,
+        "can_force_hybridize": True,  # 前端期望字段
+        "can_force": True,  # 兼容旧字段
+        "reason": "",  # 如果不能杂交会填充原因
+        "can_normal_hybridize": can_normal,
+        "normal_fertility": round(normal_fertility, 3) if can_normal else 0,
         "energy_cost": FORCED_HYBRIDIZATION_COST,
-        "can_afford": energy_service.get_state().current >= FORCED_HYBRIDIZATION_COST,
+        "can_afford": current_energy >= FORCED_HYBRIDIZATION_COST,
+        "current_energy": current_energy,
         "genetic_distance": round(distance, 3),
         "estimated_fertility": round(estimated_fertility, 3),
         "genetic_stability": round(stability, 3),
-        "warnings": [
-            "强行杂交产物可能不育或基因不稳定",
-            "能量消耗是普通杂交的5倍",
-        ],
         "preview": {
+            "type": "嵌合体",
             "chimera_name": f"{sp_a.common_name}×{sp_b.common_name}嵌合体",
             "is_chimera": True,
+            "estimated_fertility": round(estimated_fertility, 3),
+            "stability": "不稳定" if stability < 0.5 else "较稳定" if stability < 0.8 else "稳定",
+            "parent_a": {
+                "code": sp_a.lineage_code,
+                "name": sp_a.common_name,
+                "trophic": sp_a.trophic_level or 1.0,
+            },
+            "parent_b": {
+                "code": sp_b.lineage_code,
+                "name": sp_b.common_name,
+                "trophic": sp_b.trophic_level or 1.0,
+            },
+            "warnings": warnings,
         },
+        "warnings": warnings,
     }
 
 
@@ -928,4 +962,77 @@ def check_wager(
         "reward": reward,
         "wager_summary": divine_progression_service.get_wager_summary(),
     }
+
+
+# ========== 兼容路由（前端使用的旧路径）==========
+# 这些路由是为了兼容前端使用的旧路径格式
+
+@router.post("/divine/choose-path", tags=["divine"])
+def choose_divine_path_compat(
+    request: dict,
+    _: None = Depends(require_not_running),
+) -> dict:
+    """选择神格路线（兼容旧路径）"""
+    return choose_divine_path(request, _)
+
+
+@router.post("/divine/use-skill", tags=["divine"])
+async def use_divine_skill_compat(
+    request: dict,
+    container: 'ServiceContainer' = Depends(get_container),
+    _: None = Depends(require_not_running),
+) -> dict:
+    """使用神力技能（兼容旧路径）"""
+    # 转换字段名：前端发送 skill_id 和 target_species
+    if "skill_id" in request and "target_species" in request:
+        request["target"] = request.pop("target_species", None)
+    return await use_divine_skill(request, container, _)
+
+
+@router.post("/divine/bless", tags=["divine"])
+def bless_follower_compat(
+    request: dict,
+    container: 'ServiceContainer' = Depends(get_container),
+) -> dict:
+    """祝福信徒（兼容旧路径）"""
+    return bless_follower(request, container)
+
+
+@router.post("/divine/sanctify", tags=["divine"])
+def sanctify_species_compat(
+    request: dict,
+    container: 'ServiceContainer' = Depends(get_container),
+) -> dict:
+    """圣化物种（兼容旧路径）"""
+    return sanctify_species(request, container)
+
+
+@router.post("/divine/activate-miracle", tags=["divine"])
+async def activate_miracle_compat(
+    request: dict,
+    container: 'ServiceContainer' = Depends(get_container),
+    _: None = Depends(require_not_running),
+) -> dict:
+    """激活神迹（兼容旧路径）"""
+    return await execute_miracle(request, container, _)
+
+
+@router.post("/divine/place-wager", tags=["divine"])
+def place_wager_compat(
+    request: dict,
+    container: 'ServiceContainer' = Depends(get_container),
+    _: None = Depends(require_not_running),
+) -> dict:
+    """下注预言（兼容旧路径）
+    
+    前端发送格式：{wager_type, bet_amount, target_species, secondary_species}
+    后端期望格式：{type, amount, target}
+    """
+    # 转换字段名
+    converted_request = {
+        "type": request.get("wager_type", ""),
+        "target": request.get("target_species", ""),
+        "amount": request.get("bet_amount", 10),
+    }
+    return place_wager(converted_request, container, _)
 

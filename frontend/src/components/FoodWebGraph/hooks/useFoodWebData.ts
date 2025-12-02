@@ -49,20 +49,21 @@ export function useFoodWebData({ speciesList }: UseFoodWebDataOptions): UseFoodW
   // 构建图数据
   const graphData = useMemo((): GraphData => {
     const foodWebData = foodWebQuery.data;
-    if (!foodWebData) return { nodes: [], links: [] };
+    if (!foodWebData || !foodWebData.nodes) return { nodes: [], links: [] };
 
     const speciesMap = new Map(speciesList.map((s) => [s.lineage_code, s]));
+    const keystoneSet = new Set(foodWebData.keystone_species || []);
 
-    // 构建节点
-    const nodes: GraphNode[] = foodWebData.species.map((s) => {
-      const snapshot = speciesMap.get(s.lineage_code);
+    // 构建节点 - 使用正确的字段名 nodes
+    const nodes: GraphNode[] = foodWebData.nodes.map((s) => {
+      const snapshot = speciesMap.get(s.id);
       const trophicLevel = Math.min(4, Math.max(1, Math.ceil(s.trophic_level || 1)));
-      const isKeystone = s.is_keystone || false;
+      const isKeystone = keystoneSet.has(s.id);
 
       return {
-        id: s.lineage_code,
-        name: s.common_name || s.lineage_code,
-        val: Math.sqrt(snapshot?.population || 100),
+        id: s.id,
+        name: s.name || s.id,
+        val: Math.sqrt(snapshot?.population || s.population || 100),
         color: isKeystone ? KEYSTONE_COLOR.main : (TROPHIC_COLORS[trophicLevel]?.main || "#888"),
         group: trophicLevel,
         trophicLevel,
@@ -70,17 +71,17 @@ export function useFoodWebData({ speciesList }: UseFoodWebDataOptions): UseFoodW
         preyCount: s.prey_count || 0,
         predatorCount: s.predator_count || 0,
         isKeystone,
-        population: snapshot?.population || 0,
+        population: snapshot?.population || s.population || 0,
       };
     });
 
-    // 构建连接
-    const links: GraphLink[] = foodWebData.relationships.map((r) => ({
-      source: r.predator,
-      target: r.prey,
-      value: r.strength || 1,
-      predatorName: nodes.find((n) => n.id === r.predator)?.name || r.predator,
-      preyName: nodes.find((n) => n.id === r.prey)?.name || r.prey,
+    // 构建连接 - 使用正确的字段名 links
+    const links: GraphLink[] = (foodWebData.links || []).map((r) => ({
+      source: r.source,
+      target: r.target,
+      value: r.value || 1,
+      predatorName: r.predator_name || nodes.find((n) => n.id === r.target)?.name || r.target,
+      preyName: r.prey_name || nodes.find((n) => n.id === r.source)?.name || r.source,
     }));
 
     // 应用过滤

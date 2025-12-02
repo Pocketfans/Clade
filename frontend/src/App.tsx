@@ -116,12 +116,14 @@ function GameScene() {
     latestReport,
     previousPopulations,
     speciesRefreshTrigger,
+    currentTurnIndex,
     refreshMap,
     refreshSpeciesList,
     refreshQueue,
     addReports,
     setCurrentTurnIndex,
     setReports,
+    loadLineageTree,
     invalidateLineage,
     updateUIConfig,
     setLoading,
@@ -238,6 +240,51 @@ function GameScene() {
     [refreshQueue, closeModal]
   );
 
+  // 批量执行回合（自动演化）
+  const handleBatchExecute = useCallback(
+    async (rounds: number, pressures: PressureDraft[], _randomEnergy: number) => {
+      if (rounds <= 0) return;
+      
+      setLoading(true);
+      setError(null);
+      closeModal("pressure");
+      
+      try {
+        const allReports: TurnReport[] = [];
+        
+        for (let i = 0; i < rounds; i++) {
+          setBatchProgress({ current: i + 1, total: rounds, message: `正在演化第 ${i + 1}/${rounds} 回合...` });
+          
+          // 如果没有指定压力，使用空数组（自然演化）
+          const next = await runTurn(pressures.length > 0 ? pressures : []);
+          allReports.push(...next);
+          
+          if (next.length > 0) {
+            const latest = next[next.length - 1];
+            setCurrentTurnIndex(latest.turn_index + 1);
+          }
+        }
+        
+        // 批量完成后添加所有报告
+        if (allReports.length > 0) {
+          addReports(allReports);
+          openModal("turnSummary");
+          dispatchEnergyChanged();
+        }
+        
+        await Promise.all([refreshMap(), refreshSpeciesList(), refreshQueue()].map((p) => p.catch(console.warn)));
+        invalidateLineage();
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "未知错误";
+        setError(`批量演化失败: ${message}`);
+      } finally {
+        setLoading(false);
+        setBatchProgress(null);
+      }
+    },
+    [addReports, setCurrentTurnIndex, openModal, refreshMap, refreshSpeciesList, refreshQueue, invalidateLineage, closeModal, setLoading, setError, setBatchProgress]
+  );
+
   // 快捷键
   useEffect(() => {
     const handleShortcut = (e: KeyboardEvent) => {
@@ -253,6 +300,13 @@ function GameScene() {
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
   }, [setOverlay, openModal, closeAllModals]);
+
+  // 打开族谱视图时自动加载数据
+  useEffect(() => {
+    if (overlay === "genealogy" && !lineageTree && !lineageLoading) {
+      loadLineageTree();
+    }
+  }, [overlay, lineageTree, lineageLoading, loadLineageTree]);
 
   // 初始化加载
   useEffect(() => {
@@ -337,8 +391,8 @@ function GameScene() {
         }
         topBar={
           <TopBar
-            turnIndex={latestReport?.turn_index ?? 0}
-            speciesCount={latestReport?.species.length ?? 0}
+            turnIndex={currentTurnIndex}
+            speciesCount={latestReport?.species.length ?? speciesList.length}
             queueStatus={queueStatus}
             saveName={currentSaveName}
             scenarioInfo={sessionInfo?.scenario}
@@ -423,11 +477,13 @@ function GameScene() {
                 settingsInitialView={settingsInitialView}
                 pendingAchievement={pendingAchievement}
                 onCloseOverlay={() => setOverlay("none")}
+                onOpenModal={openModal}
                 onCloseModal={closeModal}
                 onClearError={() => setError(null)}
                 onRetryLineage={invalidateLineage}
                 onSelectSpecies={handleSpeciesSelect}
                 onExecuteTurn={executeTurn}
+                onBatchExecute={handleBatchExecute}
                 onQueueAdd={handleQueueAdd}
                 onSaveConfig={updateUIConfig}
                 onRefreshMap={refreshMap}

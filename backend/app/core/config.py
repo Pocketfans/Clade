@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     embedding_provider: str = Field(default="local", alias="EMBEDDING_PROVIDER")
     report_model: str = Field(default="gpt-large", alias="REPORT_MODEL")
     lineage_model: str = Field(default="gpt-medium", alias="LINEAGE_MODEL")
-    speciation_model: str = Field(default="gpt-4o-mini", alias="SPECIATION_MODEL")
-    species_gen_model: str = Field(default="gpt-4o-mini", alias="SPECIES_GEN_MODEL")
+    speciation_model: str = Field(default="", alias="SPECIATION_MODEL")  # 空表示使用 UI 配置的默认模型
+    species_gen_model: str = Field(default="", alias="SPECIES_GEN_MODEL")  # 空表示使用 UI 配置的默认模型
     batch_rule_limit: int = 50
     map_width: int = 128
     map_height: int = 40

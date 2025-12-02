@@ -138,7 +138,8 @@ export const CAPABILITY_DEFS: CapabilityDef[] = ALL_CAPABILITIES;
 
 // ============ Embedding 预设 ============
 export const EMBEDDING_PRESETS = [
-  { id: "qwen3", name: "Qwen/Qwen3-Embedding-4B", dimensions: 4096 },
+  { id: "qwen3-8b", name: "Qwen/Qwen3-Embedding-8B", dimensions: 4096 },
+  { id: "qwen3-4b", name: "Qwen/Qwen3-Embedding-4B", dimensions: 2560 },
   { id: "bge-m3", name: "BAAI/bge-m3", dimensions: 1024 },
   { id: "text-embedding-3-small", name: "text-embedding-3-small", dimensions: 1536 },
 ];
@@ -146,10 +147,12 @@ export const EMBEDDING_PRESETS = [
 // ============ 默认配置 ============
 
 export const DEFAULT_SPECIATION_CONFIG: SpeciationConfig = {
-  cooldown_turns: 0,
+  cooldown_turns: 3,
   species_soft_cap: 60,
-  base_speciation_rate: 0.5,
-  max_offspring_count: 6,
+  base_speciation_rate: 0.20,
+  max_offspring_count: 2,
+  max_direct_offspring: 3,
+  count_only_alive_offspring: true,
   early_game_turns: 10,
   early_threshold_min_factor: 0.3,
   early_threshold_decay_rate: 0.07,

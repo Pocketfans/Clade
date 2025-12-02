@@ -118,7 +118,9 @@ class ModelRouter:
         if providers:
             self._provider_pools[capability] = providers
             self._lb_counters[capability] = 0
-            logger.info(f"[ModelRouter] 设置 {capability} 服务商池: {len(providers)} 个服务商")
+            # 【诊断】打印每个服务商的详细配置
+            for p in providers:
+                logger.info(f"[ModelRouter] 设置 {capability} 服务商池: {p.provider_id}, model={p.model}, type={p.provider_type}")
         elif capability in self._provider_pools:
             del self._provider_pools[capability]
             if capability in self._lb_counters:
@@ -725,16 +727,31 @@ class ModelRouter:
         response_format: dict[str, Any] | None = None,
     ) -> str:
         """Sync direct call"""
-        # Simplified logic reusing parts of invoke would be better, but keeping specific call_capability logic
-        # similar to original for compatibility
         config = self.resolve(capability)
         override = self.overrides.get(capability, {})
-        base_url = override.get("base_url") or self.api_base_url
-        api_key = override.get("api_key") or self.api_key
+        
+        # 【负载均衡】如果启用且有服务商池，从池中选择服务商
+        lb_provider: ProviderPoolConfig | None = None
+        if self._lb_enabled and capability in self._provider_pools:
+            lb_provider = self._select_provider_from_pool(capability)
+            if lb_provider:
+                logger.debug(f"[call_capability] 负载均衡: {capability} -> {lb_provider.provider_id}")
+        
+        # 优先级: 负载均衡选择 > override配置 > 全局配置
+        if lb_provider:
+            base_url = lb_provider.base_url
+            api_key = lb_provider.api_key
+            provider_type = lb_provider.provider_type
+            model_name = lb_provider.model or override.get("model") or config.model
+            extra_body = override.get("extra_body") or config.extra_body
+        else:
+            base_url = override.get("base_url") or self.api_base_url
+            api_key = override.get("api_key") or self.api_key
+            model_name = override.get("model") or config.model
+            extra_body = override.get("extra_body") or config.extra_body
+            provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
+        
         timeout = override.get("timeout") or self.timeout
-        model_name = override.get("model") or config.model
-        extra_body = override.get("extra_body") or config.extra_body
-        provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
         
         if config.provider == "local" or not base_url or not api_key:
             raise RuntimeError(f"Cannot call AI for capability {capability}: missing configuration")
@@ -834,12 +851,44 @@ class ModelRouter:
         """Async direct call"""
         config = self.resolve(capability)
         override = self.overrides.get(capability, {})
-        base_url = override.get("base_url") or self.api_base_url
-        api_key = override.get("api_key") or self.api_key
+        
+        # 【负载均衡】如果启用且有服务商池，从池中选择服务商
+        lb_provider: ProviderPoolConfig | None = None
+        if self._lb_enabled and capability in self._provider_pools:
+            lb_provider = self._select_provider_from_pool(capability)
+            if lb_provider:
+                logger.debug(f"[acall_capability] 负载均衡: {capability} -> {lb_provider.provider_id}")
+        
+        # 优先级: 负载均衡选择 > override配置 > 全局配置
+        if lb_provider:
+            base_url = lb_provider.base_url
+            api_key = lb_provider.api_key
+            provider_type = lb_provider.provider_type
+            model_name = lb_provider.model
+            extra_body = override.get("extra_body") or config.extra_body
+            
+            # 【关键修复】如果 lb_provider.model 为空，回退到 override 或 config
+            if not model_name:
+                model_name = override.get("model")
+            if not model_name:
+                model_name = config.model
+            
+            logger.info(f"[acall_capability] 负载均衡选择: {capability} -> {lb_provider.provider_id}, model={model_name}")
+        else:
+            base_url = override.get("base_url") or self.api_base_url
+            api_key = override.get("api_key") or self.api_key
+            model_name = override.get("model") or config.model
+            extra_body = override.get("extra_body") or config.extra_body
+            provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
+        
         timeout_value = override.get("timeout") or self.timeout or 60  # 确保有默认值
-        model_name = override.get("model") or config.model
-        extra_body = override.get("extra_body") or config.extra_body
-        provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
+        
+        # 【关键修复】model 为空时直接报错，不要发送无效请求
+        if not model_name:
+            raise RuntimeError(
+                f"Cannot call AI for capability {capability}: model name is empty. "
+                f"请检查服务商配置的 selected_models 是否为空，或者 capability_routes 中的 model 配置。"
+            )
         
         if config.provider == "local" or not base_url or not api_key:
             raise RuntimeError(f"Cannot call AI for capability {capability}: missing configuration")
@@ -925,7 +974,9 @@ class ModelRouter:
         
         # 隐藏 API key 的调试 URL
         debug_url = url.split("?")[0] if "?" in url else url
-        logger.info(f"[acall_capability] {capability} -> {debug_url} (type={provider_type}, timeout={timeout_value}s)")
+        # 【诊断】打印实际发送的模型名
+        actual_model = body.get("model") if isinstance(body, dict) else "N/A"
+        logger.info(f"[acall_capability] {capability} -> {debug_url} (type={provider_type}, model={actual_model}, timeout={timeout_value}s)")
         
         async with self._semaphore:
             try:
@@ -943,7 +994,16 @@ class ModelRouter:
                     f"Async capability {capability} timed out after {timeout_value}s"
                 ) from None
             except httpx.HTTPStatusError as e:
-                logger.error(f"[acall_capability] {capability} HTTP错误: {e.response.status_code} - {e.response.text[:500]}")
+                # 【诊断】打印请求体帮助调试 400 错误
+                import json as json_module
+                body_preview = json_module.dumps(body, ensure_ascii=False, default=str)[:500] if body else "None"
+                logger.error(
+                    f"[acall_capability] {capability} HTTP错误: {e.response.status_code}\n"
+                    f"  URL: {debug_url}\n"
+                    f"  Model: {model_name}\n"
+                    f"  请求体预览: {body_preview}\n"
+                    f"  响应: {e.response.text[:500]}"
+                )
                 raise RuntimeError(
                     f"Async capability {capability} HTTP error: {e.response.status_code}"
                 ) from None
@@ -981,12 +1041,29 @@ class ModelRouter:
         """
         config = self.resolve(capability)
         override = self.overrides.get(capability, {})
-        base_url = override.get("base_url") or self.api_base_url
-        api_key = override.get("api_key") or self.api_key
+        
+        # 【负载均衡】如果启用且有服务商池，从池中选择服务商
+        lb_provider: ProviderPoolConfig | None = None
+        if self._lb_enabled and capability in self._provider_pools:
+            lb_provider = self._select_provider_from_pool(capability)
+            if lb_provider:
+                logger.debug(f"[chat] 负载均衡: {capability} -> {lb_provider.provider_id}")
+        
+        # 优先级: 负载均衡选择 > override配置 > 全局配置
+        if lb_provider:
+            base_url = lb_provider.base_url
+            api_key = lb_provider.api_key
+            provider_type = lb_provider.provider_type
+            model_name = lb_provider.model or override.get("model") or config.model
+            extra_body = override.get("extra_body") or config.extra_body
+        else:
+            base_url = override.get("base_url") or self.api_base_url
+            api_key = override.get("api_key") or self.api_key
+            model_name = override.get("model") or config.model
+            extra_body = override.get("extra_body") or config.extra_body
+            provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
+        
         timeout_value = override.get("timeout") or self.timeout or 60
-        model_name = override.get("model") or config.model
-        extra_body = override.get("extra_body") or config.extra_body
-        provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
         
         # 检查是否为本地模式（无 API 配置）
         if config.provider == "local" or not base_url or not api_key:
@@ -1088,12 +1165,29 @@ class ModelRouter:
         """Async direct stream call yielding status events and chunks."""
         config = self.resolve(capability)
         override = self.overrides.get(capability, {})
-        base_url = override.get("base_url") or self.api_base_url
-        api_key = override.get("api_key") or self.api_key
+        
+        # 【负载均衡】如果启用且有服务商池，从池中选择服务商
+        lb_provider: ProviderPoolConfig | None = None
+        if self._lb_enabled and capability in self._provider_pools:
+            lb_provider = self._select_provider_from_pool(capability)
+            if lb_provider:
+                logger.debug(f"[astream_capability] 负载均衡: {capability} -> {lb_provider.provider_id}")
+        
+        # 优先级: 负载均衡选择 > override配置 > 全局配置
+        if lb_provider:
+            base_url = lb_provider.base_url
+            api_key = lb_provider.api_key
+            provider_type = lb_provider.provider_type
+            model_name = lb_provider.model or override.get("model") or config.model
+            extra_body = override.get("extra_body") or config.extra_body
+        else:
+            base_url = override.get("base_url") or self.api_base_url
+            api_key = override.get("api_key") or self.api_key
+            model_name = override.get("model") or config.model
+            extra_body = override.get("extra_body") or config.extra_body
+            provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
+        
         timeout = override.get("timeout") or self.timeout
-        model_name = override.get("model") or config.model
-        extra_body = override.get("extra_body") or config.extra_body
-        provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
         
         if config.provider == "local" or not base_url or not api_key:
             yield self._stream_error_event(capability, "Missing configuration for streaming")

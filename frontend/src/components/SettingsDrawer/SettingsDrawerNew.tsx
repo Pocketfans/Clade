@@ -230,8 +230,8 @@ export function SettingsDrawer({ config, onClose, onSave }: Props) {
           <EmbeddingSection
             providers={state.form.providers || {}}
             embeddingProvider={state.form.embedding_provider}
+            embeddingProviderId={state.form.embedding_provider_id}
             embeddingModel={state.form.embedding_model}
-            embeddingDimensions={state.form.embedding_dimensions}
             dispatch={dispatch}
           />
         );

@@ -465,6 +465,10 @@ class SaveManager:
         
         save_data["progression_loaded"] = progression_loaded
         
+        # 设置成功标志
+        save_data["success"] = True
+        save_data["species_count"] = len(restored_species)
+        
         logger.info(f"[存档管理器] 游戏加载成功: {save_name}")
         return save_data
 

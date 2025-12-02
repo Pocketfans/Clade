@@ -53,6 +53,7 @@ class CoreServiceProvider:
     def model_router(self) -> 'ModelRouter':
         from ...ai.model_router import ModelConfig, ModelRouter
         from ...ai.prompts import PROMPT_TEMPLATES
+        from ..ai_router_config import configure_model_router
         
         def create_router():
             router = ModelRouter(
@@ -152,6 +153,13 @@ class CoreServiceProvider:
                     router.set_prompt(capability, prompt)
                 except KeyError:
                     pass
+            
+            try:
+                ui_config = self.config_service.get_ui_config()
+                configure_model_router(ui_config, router, self.embedding_service, self.settings)
+                logger.info("[核心服务] 已根据 UI 配置初始化 ModelRouter")
+            except Exception as e:
+                logger.warning(f"[核心服务] 初始化 ModelRouter 配置失败: {e}")
             
             return router
         

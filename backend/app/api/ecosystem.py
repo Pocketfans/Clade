@@ -73,8 +73,6 @@ def get_food_web(
     container: 'ServiceContainer' = Depends(get_container),
 ):
     """获取食物网数据"""
-    from ..services.species.food_web_manager import FoodWebManager
-    
     species_repo = container.species_repository
     all_species = species_repo.list_species()
     
@@ -89,10 +87,70 @@ def get_food_web(
             reverse=True
         )[:max_nodes]
     
-    food_web_manager = FoodWebManager(container.species_repository)
-    web_data = food_web_manager.build_food_web(all_species)
+    # 构建物种映射
+    species_map = {sp.lineage_code: sp for sp in all_species}
+    alive_codes = set(species_map.keys())
     
-    return web_data
+    # 构建节点列表
+    nodes = []
+    prey_counts = {}  # 统计每个物种被多少物种捕食
+    
+    for sp in all_species:
+        prey_codes = sp.prey_species or []
+        valid_prey = [c for c in prey_codes if c in alive_codes]
+        
+        # 统计捕食者数量
+        for prey_code in valid_prey:
+            prey_counts[prey_code] = prey_counts.get(prey_code, 0) + 1
+    
+    for sp in all_species:
+        nodes.append({
+            "id": sp.lineage_code,
+            "name": sp.common_name,
+            "trophic_level": sp.trophic_level or 1.0,
+            "population": int(sp.morphology_stats.get("population", 0) or 0),
+            "diet_type": getattr(sp, 'diet_type', '') or '',
+            "habitat_type": getattr(sp, 'habitat_type', '') or '',
+            "prey_count": len([c for c in (sp.prey_species or []) if c in alive_codes]),
+            "predator_count": prey_counts.get(sp.lineage_code, 0),
+        })
+    
+    # 构建链接列表
+    links = []
+    for sp in all_species:
+        prey_codes = sp.prey_species or []
+        prey_prefs = sp.prey_preferences or {}
+        
+        for prey_code in prey_codes:
+            if prey_code in alive_codes:
+                prey_sp = species_map[prey_code]
+                links.append({
+                    "source": prey_code,  # 猎物
+                    "target": sp.lineage_code,  # 捕食者
+                    "value": prey_prefs.get(prey_code, 1.0 / max(len(prey_codes), 1)),
+                    "predator_name": sp.common_name,
+                    "prey_name": prey_sp.common_name,
+                })
+    
+    # 识别关键物种（被3+物种依赖）
+    keystone_species = [code for code, count in prey_counts.items() if count >= 3]
+    
+    # 按营养级分组
+    trophic_levels = {}
+    for sp in all_species:
+        level = int(sp.trophic_level or 1)
+        if level not in trophic_levels:
+            trophic_levels[level] = []
+        trophic_levels[level].append(sp.lineage_code)
+    
+    return {
+        "nodes": nodes,
+        "links": links,
+        "keystone_species": keystone_species,
+        "trophic_levels": trophic_levels,
+        "total_species": len(nodes),
+        "total_links": len(links),
+    }
 
 
 @router.get("/ecosystem/food-web/summary", tags=["ecosystem"])
@@ -102,8 +160,19 @@ def get_food_web_summary(
     """获取食物网简版摘要（用于仪表盘）"""
     from ..services.species.food_web_manager import FoodWebManager
     
-    food_web_manager = FoodWebManager(container.species_repository)
-    return food_web_manager.get_summary()
+    species_repo = container.species_repository
+    all_species = [sp for sp in species_repo.list_species() if sp.status == "alive"]
+    
+    food_web_manager = FoodWebManager()
+    analysis = food_web_manager.analyze_food_web(all_species)
+    
+    return {
+        "total_species": analysis.total_species,
+        "total_links": analysis.total_links,
+        "health_score": analysis.health_score,
+        "keystone_count": len(analysis.keystone_species),
+        "warnings_count": len(analysis.bottleneck_warnings),
+    }
 
 
 @router.get("/ecosystem/food-web/cache-stats", tags=["ecosystem"])
@@ -111,13 +180,15 @@ def get_food_web_cache_stats(
     container: 'ServiceContainer' = Depends(get_container),
 ):
     """获取食物网缓存统计（调试用）"""
-    from ..services.species.food_web_cache import get_food_web_cache_stats
-    return get_food_web_cache_stats()
+    # 缓存模块已移除，返回占位数据
+    return {
+        "cache_enabled": False,
+        "message": "食物网缓存功能已禁用",
+    }
 
 
 @router.get("/ecosystem/food-web/analysis", tags=["ecosystem"])
 def get_food_web_analysis(
-    detail_level: str = Query("full", description="详细程度: simple, full"),
     container: 'ServiceContainer' = Depends(get_container),
 ):
     """获取食物网分析报告"""
@@ -126,10 +197,22 @@ def get_food_web_analysis(
     species_repo = container.species_repository
     all_species = [sp for sp in species_repo.list_species() if sp.status == "alive"]
     
-    food_web_manager = FoodWebManager(species_repo)
-    analysis = food_web_manager.analyze_structure(all_species, detail_level=detail_level)
+    food_web_manager = FoodWebManager()
+    analysis = food_web_manager.analyze_food_web(all_species)
     
-    return analysis
+    # 转换为字典格式返回
+    return {
+        "total_species": analysis.total_species,
+        "total_links": analysis.total_links,
+        "orphaned_consumers": analysis.orphaned_consumers,
+        "starving_species": analysis.starving_species,
+        "keystone_species": analysis.keystone_species,
+        "isolated_species": analysis.isolated_species,
+        "avg_prey_per_consumer": analysis.avg_prey_per_consumer,
+        "food_web_density": analysis.food_web_density,
+        "bottleneck_warnings": analysis.bottleneck_warnings,
+        "health_score": analysis.health_score,
+    }
 
 
 @router.post("/ecosystem/food-web/repair", tags=["ecosystem"])
@@ -140,16 +223,27 @@ def repair_food_web(
     from ..services.species.food_web_manager import FoodWebManager
     
     species_repo = container.species_repository
-    all_species = [sp for sp in species_repo.list_species() if sp.status == "alive"]
+    all_species = species_repo.list_species()
     
-    food_web_manager = FoodWebManager(species_repo)
-    repair_report = food_web_manager.repair_food_web(all_species)
+    food_web_manager = FoodWebManager()
     
-    # 保存修复后的物种
-    for species in all_species:
-        species_repo.upsert(species)
+    # 使用 rebuild_food_web 修复食物网
+    modified_count = food_web_manager.rebuild_food_web(
+        all_species, 
+        species_repo,
+        preserve_valid_links=True
+    )
     
-    return repair_report
+    # 重新分析修复后的状态
+    alive_species = [sp for sp in species_repo.list_species() if sp.status == "alive"]
+    analysis = food_web_manager.analyze_food_web(alive_species)
+    
+    return {
+        "modified_count": modified_count,
+        "health_score": analysis.health_score,
+        "remaining_issues": len(analysis.orphaned_consumers) + len(analysis.starving_species),
+        "warnings": analysis.bottleneck_warnings,
+    }
 
 
 @router.get("/ecosystem/food-web/{lineage_code}", tags=["ecosystem"])
@@ -194,8 +288,16 @@ def analyze_extinction_impact(
     lineage_code: str,
     container: 'ServiceContainer' = Depends(get_container),
 ):
-    """分析物种灭绝的影响"""
-    from ..services.species.food_web_manager import FoodWebManager
+    """分析物种灭绝的影响
+    
+    返回格式兼容前端 ExtinctionImpact 类型：
+    - extinct_species: 灭绝物种代码
+    - directly_affected: 直接受影响的物种列表
+    - indirectly_affected: 间接受影响的物种列表
+    - food_chain_collapse_risk: 食物链崩溃风险 (0-1)
+    - affected_biomass_percentage: 受影响生物量百分比
+    """
+    from ..services.species.predation import PredationService
     
     species_repo = container.species_repository
     species = species_repo.get_by_lineage(lineage_code)
@@ -203,13 +305,17 @@ def analyze_extinction_impact(
     if not species:
         raise HTTPException(status_code=404, detail=f"物种 {lineage_code} 不存在")
     
-    food_web_manager = FoodWebManager(species_repo)
-    impact = food_web_manager.analyze_extinction_impact(species)
+    predation_service = PredationService()
+    all_species = species_repo.list_species()
+    impact = predation_service.analyze_extinction_impact(species, all_species)
     
+    # 返回符合前端 ExtinctionImpact 接口的结构
     return {
-        "lineage_code": lineage_code,
-        "common_name": species.common_name,
-        "impact": impact,
+        "extinct_species": impact.extinct_species,
+        "directly_affected": impact.directly_affected,
+        "indirectly_affected": impact.indirectly_affected,
+        "food_chain_collapse_risk": impact.food_chain_collapse_risk,
+        "affected_biomass_percentage": impact.affected_biomass_percentage,
     }
 
 

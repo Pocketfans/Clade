@@ -203,9 +203,39 @@ class SpeciationService:
         # 1. 准备阶段：筛选候选并生成任务
         entries: list[dict[str, Any]] = []
         
+        # 【新增】构建物种后代索引，用于直接后代数量检查
+        all_species = species_repository.list_species()
+        direct_offspring_map: dict[str, list[Species]] = {}  # {parent_code: [child_species]}
+        for sp in all_species:
+            parent = sp.parent_code
+            if parent:
+                if parent not in direct_offspring_map:
+                    direct_offspring_map[parent] = []
+                direct_offspring_map[parent].append(sp)
+        
         for result in mortality_results:
             species = result.species
             lineage_code = species.lineage_code
+            
+            # ========== 【直接后代数量限制检查】==========
+            # 检查该物种是否已达到最大直接后代数量
+            max_direct_offspring = spec_config.max_direct_offspring
+            count_only_alive = spec_config.count_only_alive_offspring
+            
+            direct_children = direct_offspring_map.get(lineage_code, [])
+            if count_only_alive:
+                # 只计算存活的直接后代
+                alive_children_count = sum(1 for c in direct_children if c.status == "alive")
+            else:
+                # 计算所有历史直接后代
+                alive_children_count = len(direct_children)
+            
+            if alive_children_count >= max_direct_offspring:
+                logger.debug(
+                    f"[分化限制] {species.common_name}: "
+                    f"直接后代数量({alive_children_count})已达上限({max_direct_offspring})，跳过分化"
+                )
+                continue
             
             # ========== 【基于地块的分化检查】==========
             # 优先使用预筛选的分化候选数据

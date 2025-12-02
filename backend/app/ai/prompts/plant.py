@@ -172,10 +172,28 @@ PLANT_PROMPTS = {
 - 阶段5: 种子化程度 >= 5.0
 - 阶段6: 种子化程度 >= 8.0, 散布能力 >= 7.0
 
+=== 🏷️ 植物命名规则 ===
+名字要有依据、自然、像真实植物学名。以下为参考，可自由组合创造！
+
+【拉丁学名】种加词用拉丁/希腊词根（可自由组合）：
+- 环境：alpina(高山)、littoricola(沿岸)、paludosa(沼泽)、rupestris(岩生)、arenaria(沙生)、aquatica(水生)、sylvatica(林生)、deserticola(沙漠)
+- 形态：grandis(大)、nana(矮)、spinosa(多刺)、crassifolia(厚叶)、tenuifolia(细叶)、lata(宽)、erecta(直立)、prostrata(匍匐)、ramosa(多枝)
+- 颜色：viridis(绿)、rubra(红)、alba(白)、glauca(灰蓝)、purpurea(紫)、aurea(金)、argentea(银)、fusca(褐)
+- 质地：mollis(软)、dura(硬)、glabra(光滑)、pilosa(有毛)、viscosa(粘)、coriacea(革质)
+- 组合示例：Bryophytella argentoalpina(银高山苔)、Thalassophyta crassilittoralis(厚沿岸藻)
+
+【中文俗名】自然有画面感，体现植物生境与形态（4-8字）：
+- 可用环境：霜岭、赤崖、潮岩、暗渊、云巅、雾谷、泉畔、沙丘、密林、荒原、冰沼、热泉、深潭...
+- 可用形态：银毛、厚叶、细丝、宽瓣、刺茎、匍枝、高秆、矮丛、垂蔓、团状...
+- 可用类群：—苔、—藻、—蕨、—草、—木、—藤、—菌、—萍、—莲...
+- 示例：霜岭银毛苔、潮岩先锋藻、暗渊丝藻、云巅刺叶蕨、热泉厚垫苔、沙丘匍枝草
+- ✅ 目标：读起来像真实植物名，有生态画面感
+- ❌ 避免：搞笑化/无意义随机组合
+
 === 输出格式 ===
 {{
-    "latin_name": "新学名",
-    "common_name": "新俗名",
+    "latin_name": "新学名（用拉丁词根）",
+    "common_name": "新俗名（自然有画面感）",
     "description": "100-120字描述，强调你的创意结构",
     "life_form_stage": {parent_life_form_stage}或{parent_life_form_stage}+1,
     "growth_form": "aquatic/moss/herb/shrub/tree",
@@ -202,8 +220,8 @@ PLANT_PROMPTS = {
 === 创意示例1（高山环境的苔藓适应）===
 亲本: 阶段3苔藓，面临紫外线压力和干旱
 {{
-    "latin_name": "Bryophytella alpina",
-    "common_name": "高山银苔",
+    "latin_name": "Bryophytella argentoalpina",
+    "common_name": "霜岭银毛苔",
     "description": "高海拔适应的苔藓先驱。发展出银色反光表皮反射过量紫外线，深层色素体沉降到细胞底部避免辐射损伤。假根特化为锚定结构，紧抓岩缝抵御强风。夜间从雾气中收集水分的凝露毛刺是其独特创新。",
     "life_form_stage": 3,
     "growth_form": "moss",
@@ -223,8 +241,8 @@ PLANT_PROMPTS = {
 === 创意示例2（潮间带过渡 - 准备登陆）===
 亲本: 阶段2群体藻类，处于潮间带环境，保水能力=4.8，耐旱性=3.8
 {{
-    "latin_name": "Thalassophyta transitoria",
-    "common_name": "过渡丝藻",
+    "latin_name": "Thalassophyta littoricola",
+    "common_name": "潮岩先锋藻",
     "description": "潮间带的先驱物种，正在为登陆做准备。发展出原始角质层减缓水分散失，简单假根开始固着岩石。在潮汐周期中能短暂暴露于空气。这是从水生到陆生的关键过渡形态。",
     "life_form_stage": 3,
     "growth_form": "moss",
@@ -244,8 +262,8 @@ PLANT_PROMPTS = {
 === 创意示例3（种子革命 - 阶段4→5）===
 亲本: 阶段4蕨类，种子化程度=4.8，面临干旱季节
 {{
-    "latin_name": "Pteridosperma primordialis",
-    "common_name": "原始种子蕨",
+    "latin_name": "Pteridosperma xerophila",
+    "common_name": "旱原胚珠蕨",
     "description": "干旱压力促使孢子囊内部形成胚珠结构，将孢子保护在坚硬外壳内。这是种子的雏形，使繁殖不再完全依赖水环境。繁殖效率暂时降低，但后代存活率大幅提升。",
     "life_form_stage": 5,
     "growth_form": "shrub",
@@ -264,8 +282,8 @@ PLANT_PROMPTS = {
 === 创意示例4（食草压力下的防御演化）===
 亲本: 阶段4蕨类，面临食草动物高压力（50%）
 {{
-    "latin_name": "Pteridophyta toxica",
-    "common_name": "毒蕨",
+    "latin_name": "Pteridophyta amara",
+    "common_name": "苦叶毒蕨",
     "description": "面对日益增长的食草动物压力，这种蕨类演化出化学防御系统。叶片中积累苦味生物碱，使食草动物产生厌恶反应。新发展的毒腺持续分泌毒素，但代价是生长速度放缓。",
     "life_form_stage": 4,
     "growth_form": "herb",
@@ -421,13 +439,20 @@ PLANT_PROMPTS = {
 - 发展根系 → 降低散布能力
 - 增强防御 → 降低生长速度
 
+=== 🏷️ 植物命名规则 ===
+名字要有依据、自然、像真实植物。可自由组合词根创造！
+【拉丁学名】词根参考：alpina(高山)、littoricola(沿岸)、paludosa(沼泽)、arenaria(沙生)、crassifolia(厚叶)、spinosa(多刺)、argentea(银)、rubra(红)...
+【中文俗名】有画面感：[环境:霜岭/潮岩/暗渊]+[形态:银毛/厚叶/细丝]+[类群:苔/藻/蕨]
+- 示例：霜岭银毛苔、潮岩先锋藻、热泉厚垫苔
+- ❌ 避免搞笑/无意义组合
+
 === 输出格式 ===
 {{
     "results": [
         {{
             "request_id": "请求ID（与输入对应）",
-            "latin_name": "新拉丁学名",
-            "common_name": "新中文俗名",
+            "latin_name": "新拉丁学名（用词根组合）",
+            "common_name": "新中文俗名（有画面感）",
             "description": "100-120字描述，包含形态变化、适应性创新",
             "life_form_stage": 当前阶段或+1（不可跳级）,
             "growth_form": "aquatic/moss/herb/shrub/tree",
@@ -457,8 +482,8 @@ PLANT_PROMPTS = {
     "results": [
         {{
             "request_id": "req_001",
-            "latin_name": "Bryophytella primordialis",
-            "common_name": "原始苔藓体",
+            "latin_name": "Bryophytella littoricola",
+            "common_name": "潮岩先锋苔",
             "description": "首批登陆的植物先驱，从潮间带向内陆扩展。发展出原始角质层减少水分散失，假根固着于岩石缝隙。光合效率略降，但获得陆地生存的关键能力。",
             "life_form_stage": 3,
             "growth_form": "moss",

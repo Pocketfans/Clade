@@ -345,5 +345,10 @@ class InterventionResponse(BaseModel):
     """玩家干预操作响应"""
     success: bool
     message: str
-    species_code: str | None = None
-    effect_duration: int | None = None  # 效果持续回合数
+    # 兼容字段名
+    lineage_code: str | None = None  # 物种代码
+    species_code: str | None = None  # 物种代码（旧字段名，向后兼容）
+    intervention_type: str | None = None  # 干预类型：protect/suppress/cancel/introduce/symbiosis
+    duration: int | None = None  # 持续回合数
+    effect_duration: int | None = None  # 持续回合数（旧字段名，向后兼容）
+    energy_spent: int | None = None  # 消耗的能量

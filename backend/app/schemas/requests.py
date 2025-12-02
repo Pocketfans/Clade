@@ -140,8 +140,11 @@ class IntroduceSpeciesRequest(BaseModel):
 
 class SetSymbiosisRequest(BaseModel):
     """设置共生关系请求"""
-    species_code: str = Field(description="要设置的物种代码")
-    depends_on: list[str] = Field(default_factory=list, description="依赖的物种代码列表")
+    species_a: str = Field(description="第一个物种代码")
+    species_b: str = Field(description="第二个物种代码")
+    # 兼容旧字段名
+    species_code: str | None = Field(default=None, description="要设置的物种代码（旧字段名）")
+    depends_on: list[str] = Field(default_factory=list, description="依赖的物种代码列表（旧字段名）")
     strength: float = Field(ge=0.0, le=1.0, default=0.5, description="依赖强度")
     symbiosis_type: Literal["mutualism", "commensalism", "parasitism", "none"] = Field(
         default="mutualism", description="共生类型"

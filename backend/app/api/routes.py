@@ -70,6 +70,7 @@ warnings.warn(
 from sqlmodel import select
 
 from ..core.config import get_settings
+from ..core.ai_router_config import configure_model_router
 from ..ai.prompts import PROMPT_TEMPLATES
 from ..models.config import UIConfig, ProviderConfig, CapabilityRouteConfig
 from ..repositories.genus_repository import genus_repository
@@ -454,129 +455,7 @@ def apply_ui_config(config: UIConfig) -> UIConfig:
                             timeout=old_conf.get("timeout", 60)
                         )
     
-    # 2. 应用配置到 ModelRouter ---
-    model_router.overrides = {}
-    
-    # 设置并发限制
-    if config.ai_concurrency_limit > 0:
-        model_router.set_concurrency_limit(config.ai_concurrency_limit)
-    
-    # 2.1 设置默认值
-    default_provider = config.providers.get(config.default_provider_id) if config.default_provider_id else None
-    
-    if default_provider:
-        model_router.api_base_url = default_provider.base_url
-        model_router.api_key = default_provider.api_key
-    
-    # 2.2 配置负载均衡
-    from ..ai.model_router import ProviderPoolConfig
-    lb_enabled = getattr(config, 'load_balance_enabled', False)
-    lb_strategy = getattr(config, 'load_balance_strategy', 'round_robin')
-    model_router.configure_load_balance(lb_enabled, lb_strategy)
-    
-    # 2.3 应用 Capability Routes
-    for capability, route_config in config.capability_routes.items():
-        if capability not in model_router.routes:
-            continue
-            
-        provider = config.providers.get(route_config.provider_id)
-        active_provider = provider or default_provider
-        
-        # 【负载均衡】如果配置了多服务商池
-        provider_ids = getattr(route_config, 'provider_ids', None) or []
-        if lb_enabled and provider_ids and len(provider_ids) > 1:
-            pool_configs = []
-            for pid in provider_ids:
-                p = config.providers.get(pid)
-                if p and p.api_key and p.base_url:
-                    # 【修复】如果 route_config.model 为空，使用服务商的 selected_models
-                    pool_model = route_config.model
-                    if not pool_model and p.selected_models:
-                        pool_model = p.selected_models[0]
-                    pool_configs.append(ProviderPoolConfig(
-                        provider_id=pid,
-                        base_url=p.base_url,
-                        api_key=p.api_key,
-                        provider_type=p.provider_type or "openai",
-                        model=pool_model,
-                    ))
-            if pool_configs:
-                model_router.set_provider_pool(capability, pool_configs)
-                logger.info(f"[配置] {capability} 启用负载均衡: {len(pool_configs)} 个服务商")
-        
-        if active_provider:
-            # 【修复】保留原始的 extra_body（如 response_format），同时支持 enable_thinking
-            original_extra_body = model_router.routes.get(capability)
-            original_extra_body = original_extra_body.extra_body if original_extra_body else None
-            extra_body = dict(original_extra_body) if original_extra_body else {}
-            
-            if route_config.enable_thinking:
-                extra_body["enable_thinking"] = True
-                extra_body["thinking_budget"] = 4096
-
-            # 更新路由配置
-            model_router.routes[capability] = ModelConfig(
-                provider=active_provider.type,
-                model=route_config.model or config.default_model or "gpt-3.5-turbo",
-                endpoint=model_router.routes[capability].endpoint,
-                extra_body=extra_body
-            )
-            
-            # 设置 override
-            model_router.overrides[capability] = {
-                "base_url": active_provider.base_url,
-                "api_key": active_provider.api_key,
-                "timeout": route_config.timeout,
-                "model": route_config.model,
-                "extra_body": extra_body,
-                "provider_type": active_provider.provider_type or "openai",  # 关键：传递服务商API类型
-            }
-            logger.debug(f"[配置] 已设置 {capability} -> Provider: {active_provider.name}, Model: {route_config.model}, Type: {active_provider.provider_type}, Thinking: {route_config.enable_thinking}")
-
-    # 2.3 (New) 自动应用默认服务商到未配置的路由
-    if default_provider:
-        for cap_name, current_config in model_router.routes.items():
-            if cap_name not in config.capability_routes:
-                # 使用默认模型（如果配置了default_model，否则用服务商的第一个模型，否则GPT-3.5）
-                model_to_use = config.default_model or (default_provider.models[0] if default_provider.models else "gpt-3.5-turbo")
-                
-                model_router.routes[cap_name] = ModelConfig(
-                    provider=default_provider.type,
-                    model=model_to_use,
-                    endpoint=current_config.endpoint,
-                    extra_body=current_config.extra_body # 保留原始的 extra_body (如 response_format)
-                )
-                
-                model_router.overrides[cap_name] = {
-                    "base_url": default_provider.base_url,
-                    "api_key": default_provider.api_key,
-                    "timeout": 60,
-                    "model": model_to_use,
-                    "extra_body": current_config.extra_body,
-                    "provider_type": default_provider.provider_type or "openai",  # 关键：传递服务商API类型
-                }
-                logger.debug(f"[配置] 自动应用默认服务商到 {cap_name}: {default_provider.name} (Model: {model_to_use}, Type: {default_provider.provider_type})")
-
-    # --- 3. Embedding 配置 ---
-    emb_provider = config.providers.get(config.embedding_provider_id)
-    
-    if emb_provider:
-        embedding_service.provider = emb_provider.type
-        embedding_service.api_base_url = emb_provider.base_url
-        embedding_service.api_key = emb_provider.api_key
-        embedding_service.model = config.embedding_model
-        embedding_service.enabled = True
-    elif config.embedding_api_key and config.embedding_base_url:
-        # 旧配置回退
-        embedding_service.provider = settings.embedding_provider
-        embedding_service.api_base_url = config.embedding_base_url
-        embedding_service.api_key = config.embedding_api_key
-        embedding_service.model = config.embedding_model
-        embedding_service.enabled = True
-    else:
-        embedding_service.enabled = False
-
-    return config
+    return configure_model_router(config, model_router, embedding_service, settings)
 
 
 ui_config = apply_ui_config(environment_repository.load_ui_config(ui_config_path))
@@ -1573,10 +1452,9 @@ async def create_save(request: CreateSaveRequest) -> dict:
 async def save_game(request: SaveGameRequest) -> dict:
     """保存当前游戏状态"""
     try:
-        # 获取当前回合数
-        from ..repositories.history_repository import history_repository
-        logs = history_repository.list_turns(limit=1)
-        turn_index = logs[0].turn_index if logs else 0
+        # 使用 turn_counter（下一个要执行的回合）而非历史记录的 turn_index
+        # turn_counter 表示"已完成的回合数"，即下一个要执行的回合索引
+        turn_index = simulation_engine.turn_counter
         
         # 【新增】获取 Embedding 集成数据
         taxonomy_data = None
@@ -1858,9 +1736,15 @@ def test_api_connection(request: dict) -> dict:
     try:
         if api_type == "embedding":
             # 测试 embedding API (仅支持 OpenAI 兼容格式)
+            if not model:
+                return {
+                    "success": False,
+                    "message": "请指定要测试的向量模型名称",
+                    "details": "请在服务商设置中选择或输入一个向量模型名称"
+                }
             url = f"{base_url}/embeddings"
             body = {
-                "model": model or "Qwen/Qwen3-Embedding-4B",
+                "model": model,
                 "input": "test"
             }
             headers = {
@@ -1895,7 +1779,7 @@ def test_api_connection(request: dict) -> dict:
             # Claude 原生 API
             url = f"{base_url}/messages"
             body = {
-                "model": model or "claude-3-5-sonnet-20241022",
+                "model": model,  # 必须由前端传入
                 "max_tokens": 10,
                 "messages": [{"role": "user", "content": "hi"}]
             }
@@ -1926,7 +1810,13 @@ def test_api_connection(request: dict) -> dict:
                 
         elif provider_type == "google":
             # Gemini 原生 API
-            url = f"{base_url}/models/{model or 'gemini-2.0-flash'}:generateContent?key={api_key}"
+            if not model:
+                return {
+                    "success": False,
+                    "message": "请指定要测试的模型名称",
+                    "details": "请在服务商设置中选择或输入一个 Gemini 模型名称"
+                }
+            url = f"{base_url}/models/{model}:generateContent?key={api_key}"
             body = {
                 "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
             }
@@ -1943,7 +1833,7 @@ def test_api_connection(request: dict) -> dict:
                 return {
                     "success": True,
                     "message": f"✅ Gemini API 连接成功！",
-                    "details": f"模型：{model or 'gemini-2.0-flash'} | 响应时间：{response.elapsed.total_seconds():.2f}s"
+                    "details": f"模型：{model} | 响应时间：{response.elapsed.total_seconds():.2f}s"
                 }
             else:
                 return {
@@ -1969,18 +1859,13 @@ def test_api_connection(request: dict) -> dict:
             else:
                 url = f"{base_url}/v1/chat/completions"
 
-            # 根据 URL 自动选择默认测试模型
+            # 如果未指定模型，要求前端传入
             if not model:
-                if "openai.com" in base_url:
-                    model = "gpt-4o-mini"
-                elif "deepseek.com" in base_url:
-                    model = "deepseek-chat"
-                elif "siliconflow" in base_url:
-                    model = "deepseek-ai/DeepSeek-V3"
-                elif "openrouter" in base_url:
-                    model = "openai/gpt-4o-mini"
-                else:
-                    model = "gpt-3.5-turbo"
+                return {
+                    "success": False,
+                    "message": "请指定要测试的模型名称",
+                    "details": "请在服务商设置中选择或输入一个模型名称"
+                }
             
             logger.debug(f"[测试 Chat] URL: {url} | Model: {model}")
 
@@ -2492,42 +2377,7 @@ def reset_ai_diagnostics() -> dict:
 
 
 # ========== 生态系统健康指标 API ==========
-
-# 游戏状态 API
-@router.get("/game/state", tags=["game"])
-def get_game_state() -> dict:
-    """获取当前游戏状态，包含回合数等关键信息
-    
-    前端刷新页面时应调用此 API 获取正确的回合数。
-    
-    返回的 turn_index 是 0-based 索引：
-    - turn_index = 0 表示准备执行第 0 回合（前端显示"第 1 回合"）
-    - turn_index = 1 表示第 0 回合已完成，准备执行第 1 回合（前端显示"第 2 回合"）
-    
-    返回的 backend_session_id 是后端本次启动的唯一ID：
-    - 每次后端重启都会生成新的 session_id
-    - 前端可以对比存储的 session_id 来检测后端是否重启
-    - 如果 session_id 不匹配，说明后端重启了，前端应回到主菜单
-    """
-    map_state = environment_repository.get_state()
-    
-    # 直接使用 turn_counter（在 initialize_environment 中已经恢复过了）
-    # turn_counter 表示"下一个要执行的回合索引"
-    current_turn = simulation_engine.turn_counter
-    
-    species_list = species_repository.list_species()
-    alive_species = [sp for sp in species_list if sp.status == "alive"]
-    
-    return {
-        "turn_index": current_turn,
-        "species_count": len(alive_species),
-        "total_species_count": len(species_list),
-        "sea_level": map_state.sea_level if map_state else 0.0,
-        "global_temperature": map_state.global_avg_temperature if map_state else 15.0,
-        "tectonic_stage": map_state.stage_name if map_state else "稳定期",
-        "backend_session_id": get_backend_session_id(),  # 用于前端检测后端重启
-    }
-
+# 注: /game/state 端点已移至 analytics.py，使用依赖注入
 
 # 初始化生态健康服务
 ecosystem_health_service = EcosystemHealthService()
@@ -2675,6 +2525,51 @@ def get_food_web(
         "cache_hit": False,
         "cache_age_seconds": 0,
     }
+
+
+@router.get("/ecosystem/food-web/regional", tags=["ecosystem"])
+def get_regional_food_web(
+    tile_ids: str = Query(..., description="地块ID列表，逗号分隔，如 '1,2,3,4,5'"),
+):
+    """获取区域食物网数据
+    
+    【生物学原理】
+    不同区域的食物网结构可能不同：
+    - 同一物种在不同区域可能有不同的猎物（因为猎物分布不同）
+    - 区域内的捕食关系取决于哪些物种共存于该区域
+    
+    Args:
+        tile_ids: 要查询的地块ID，逗号分隔
+        
+    Returns:
+        区域食物网数据（只包含指定区域内的物种和关系）
+    """
+    # 解析地块ID
+    try:
+        tile_id_set = {int(x.strip()) for x in tile_ids.split(",") if x.strip()}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="tile_ids 格式错误，应为逗号分隔的整数")
+    
+    if not tile_id_set:
+        raise HTTPException(status_code=400, detail="至少需要指定一个地块ID")
+    
+    # 获取物种-地块映射
+    from ..services.species.matrix_cache import get_matrix_cache
+    matrix_cache = get_matrix_cache()
+    
+    # 确保缓存是最新的
+    all_species = species_repository.list_species()
+    if not matrix_cache.is_valid(len(all_species)):
+        matrix_cache.rebuild(all_species)
+    
+    species_tiles = matrix_cache.species_tiles
+    
+    # 构建区域食物网
+    return predation_service.build_regional_food_web(
+        all_species=all_species,
+        tile_ids=tile_id_set,
+        species_tiles=species_tiles,
+    )
 
 
 @router.get("/ecosystem/food-web/summary", tags=["ecosystem"])

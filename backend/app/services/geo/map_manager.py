@@ -71,6 +71,20 @@ class MapStateManager:
         else:
             logger.debug(f"[地图管理器] 地图状态已存在")
 
+    def load_state(self, map_state: MapState) -> None:
+        """从 MapState 对象恢复地图状态
+        
+        Args:
+            map_state: 要恢复的地图状态对象
+        """
+        logger.info(f"[地图管理器] 恢复地图状态: stage={map_state.stage_name}, "
+                   f"sea_level={map_state.sea_level}, temp={map_state.global_avg_temperature}")
+        
+        # 如果海平面变化较大，重新分类地形
+        current_state = self.repo.get_state()
+        if current_state and abs(current_state.sea_level - map_state.sea_level) > 10:
+            self.reclassify_terrain_by_sea_level(map_state.sea_level)
+
     def reclassify_terrain_by_sea_level(self, sea_level: float) -> None:
         """
         根据当前海平面重新分类所有地块的地形类型

@@ -302,8 +302,8 @@ export interface ProviderConfig {
   provider_type: ProviderType;  // API 类型：openai, anthropic, google
   base_url?: string | null;
   api_key?: string | null;
-  models: string[];
-  selected_models?: string[];  // 用户选择保存的模型列表
+  models: string[];  // 收藏的模型列表
+  disabled_models?: string[];  // 禁用的模型列表（收藏但不启用）
 }
 
 export interface CapabilityRouteConfig {
@@ -320,7 +320,11 @@ export interface SpeciationConfig {
   cooldown_turns?: number;              // 分化冷却期（回合数）
   species_soft_cap?: number;            // 物种密度软上限
   base_speciation_rate?: number;        // 基础分化概率（0-1）
-  max_offspring_count?: number;         // 最大子种数量
+  max_offspring_count?: number;         // 单次分化最大子种数量
+  
+  // ========== 直接后代数量限制 ==========
+  max_direct_offspring?: number;        // 一个物种最多能分化出多少个直接后代
+  count_only_alive_offspring?: boolean; // 是否只计算存活后代
   
   // ========== 早期分化优化 ==========
   early_game_turns?: number;            // 早期回合阈值

@@ -68,8 +68,8 @@ def get_watchlist() -> set[str]:
 
 
 def _invalidate_lineage_cache():
-    """清除系谱树缓存"""
-    _build_lineage_tree.cache_clear()
+    """清除系谱树缓存（保留接口兼容性）"""
+    pass  # 缓存已移除，此函数保留用于向后兼容
 
 
 # ========== 辅助函数 ==========
@@ -134,63 +134,102 @@ def _infer_ecological_role(species) -> str:
         return "carnivore"
 
 
-@lru_cache(maxsize=1)
-def _build_lineage_tree(cache_key: str, species_repo) -> LineageTree:
-    """构建系谱树（带缓存）"""
-    all_species = species_repo.list_species()
-    nodes = []
+def _build_lineage_tree(all_species: list) -> LineageTree:
+    """构建系谱树
     
+    返回的 LineageNode 需要包含前端期望的所有字段
+    """
+    
+    # 预计算每个物种的后代数量
+    descendant_counts = {}
+    for sp in all_species:
+        descendant_counts[sp.lineage_code] = 0
+    
+    for sp in all_species:
+        if sp.parent_code and sp.parent_code in descendant_counts:
+            # 递归计算所有祖先的后代数量
+            current = sp.parent_code
+            visited = set()
+            while current and current in descendant_counts and current not in visited:
+                visited.add(current)
+                descendant_counts[current] += 1
+                # 找父代
+                parent_sp = next((s for s in all_species if s.lineage_code == current), None)
+                current = parent_sp.parent_code if parent_sp else None
+    
+    # 计算总人口用于 population_share
+    total_population = sum(
+        sp.morphology_stats.get("population", 0) or 0
+        for sp in all_species if sp.status == "alive"
+    )
+    
+    nodes = []
     for sp in all_species:
         population = sp.morphology_stats.get("population", 0) or 0
         ecological_role = _infer_ecological_role(sp)
+        population_share = (population / total_population) if total_population > 0 else 0.0
         
+        # 构建符合前端期望的 LineageNode
         nodes.append(LineageNode(
             lineage_code=sp.lineage_code,
             latin_name=sp.latin_name,
             common_name=sp.common_name,
             parent_code=sp.parent_code,
-            status=sp.status,
-            population=population,
-            taxonomic_rank=sp.taxonomic_rank,
+            state=sp.status,  # 前端期望 state，不是 status
+            population_share=population_share,
+            major_events=[],  # 暂时为空
+            birth_turn=sp.created_turn or 0,  # 前端期望 birth_turn
+            extinction_turn=None,  # TODO: 从历史记录中获取
             ecological_role=ecological_role,
-            created_turn=sp.created_turn,
-            trophic_level=sp.trophic_level,
-            hybrid_parent_codes=sp.hybrid_parent_codes,
+            tier=f"T{sp.trophic_level:.1f}" if sp.trophic_level else None,
+            trophic_level=sp.trophic_level or 1.0,
+            speciation_type="normal",  # TODO: 从物种属性中获取
+            current_population=population,  # 前端期望 current_population
+            peak_population=population,  # TODO: 从历史记录中获取
+            descendant_count=descendant_counts.get(sp.lineage_code, 0),
+            taxonomic_rank=sp.taxonomic_rank or "species",
+            genus_code=sp.genus_code or "",
+            hybrid_parent_codes=sp.hybrid_parent_codes or [],
+            hybrid_fertility=sp.hybrid_fertility or 1.0,
+            genetic_distances={},  # 按需计算
         ))
     
     return LineageTree(
         nodes=nodes,
-        total_species=len(nodes),
-        alive_species=sum(1 for n in nodes if n.status == "alive"),
-        extinct_species=sum(1 for n in nodes if n.status == "extinct"),
+        total_count=len(nodes),
     )
 
 
 # ========== 路由端点 ==========
 
-@router.get("/species/list", response_model=SpeciesList)
+@router.get("/species/list")
 def list_all_species(
     species_repo = Depends(get_species_repository)
-) -> SpeciesList:
-    """获取所有物种的简要列表"""
+) -> dict:
+    """获取所有物种的简要列表
+    
+    返回格式兼容前端 {species: [...], total, alive}
+    """
     all_species = species_repo.list_species()
     items = [
-        SpeciesListItem(
-            lineage_code=sp.lineage_code,
-            latin_name=sp.latin_name,
-            common_name=sp.common_name,
-            status=sp.status,
-            population=sp.morphology_stats.get("population", 0) or 0,
-            genus_code=sp.genus_code,
-            trophic_level=sp.trophic_level,
-        )
+        {
+            "lineage_code": sp.lineage_code,
+            "latin_name": sp.latin_name,
+            "common_name": sp.common_name,
+            "status": sp.status,
+            "population": sp.morphology_stats.get("population", 0) or 0,
+            "genus_code": sp.genus_code,
+            "trophic_level": sp.trophic_level,
+            "ecological_role": _infer_ecological_role(sp),
+        }
         for sp in all_species
     ]
-    return SpeciesList(
-        items=items,
-        total=len(items),
-        alive=sum(1 for item in items if item.status == "alive"),
-    )
+    return {
+        "species": items,  # 前端期望的字段名
+        "items": items,    # 新字段名（向后兼容）
+        "total": len(items),
+        "alive": sum(1 for item in items if item["status"] == "alive"),
+    }
 
 
 @router.get("/species/{lineage_code}", response_model=SpeciesDetail)
@@ -218,8 +257,11 @@ def edit_species(
     
     if request.description is not None:
         species.description = request.description
-    if request.abstract_traits is not None:
-        species.abstract_traits.update(request.abstract_traits)
+    
+    # 支持两种字段名：abstract_overrides (新) 和 trait_overrides (旧)
+    abstract_updates = request.abstract_overrides or request.trait_overrides
+    if abstract_updates is not None:
+        species.abstract_traits.update(abstract_updates)
     
     species_repo.upsert(species)
     _invalidate_lineage_cache()
@@ -236,7 +278,8 @@ def get_watchlist_route() -> dict[str, list[str]]:
 @router.post("/watchlist")
 def update_watchlist(
     request: WatchlistRequest,
-    species_repo = Depends(get_species_repository)
+    species_repo = Depends(get_species_repository),
+    container: 'ServiceContainer' = Depends(get_container)
 ) -> dict[str, list[str]]:
     """更新玩家关注的物种列表"""
     global _watchlist
@@ -247,6 +290,10 @@ def update_watchlist(
             raise HTTPException(status_code=404, detail=f"Species {code} not found")
     
     _watchlist = set(request.lineage_codes)
+    
+    # 同步到 simulation engine
+    container.simulation_engine.update_watchlist(_watchlist)
+    
     return {"watchlist": list(_watchlist)}
 
 
@@ -257,17 +304,16 @@ def get_lineage_tree(
 ) -> LineageTree:
     """获取完整系谱树"""
     all_species = species_repo.list_species()
-    cache_key = f"{len(all_species)}_{sum(1 for s in all_species if s.status=='alive')}"
-    return _build_lineage_tree(cache_key, species_repo)
+    return _build_lineage_tree(all_species)
 
 
-@router.post("/species/generate")
+@router.post("/species/generate", response_model=SpeciesDetail)
 def generate_species(
     request: GenerateSpeciesRequest,
     species_repo = Depends(get_species_repository),
     generator = Depends(get_species_generator),
     _: None = Depends(require_not_running),
-) -> dict:
+) -> SpeciesDetail:
     """使用AI生成物种（模拟运行时禁止）"""
     try:
         existing = species_repo.list_species()
@@ -292,41 +338,58 @@ def generate_species(
         species_repo.upsert(species)
         _invalidate_lineage_cache()
         
-        return {
-            "success": True,
-            "species": _serialize_species_detail(species).model_dump(),
-        }
+        return _serialize_species_detail(species)
         
     except Exception as e:
         logger.error(f"[物种生成错误] {str(e)}")
         raise HTTPException(status_code=500, detail=f"生成物种失败: {str(e)}")
 
 
-@router.post("/species/generate/advanced")
+@router.post("/species/generate/advanced", response_model=SpeciesDetail)
 def generate_species_advanced(
     request: GenerateSpeciesAdvancedRequest,
     species_repo = Depends(get_species_repository),
     generator = Depends(get_species_generator),
     _: None = Depends(require_not_running),
-) -> dict:
+) -> SpeciesDetail:
     """增强版物种生成 - 支持完整参数"""
     try:
-        species = generator.generate_from_prompt_advanced(
+        # 自动生成谱系代码（如果未提供）
+        lineage_code = request.lineage_code
+        if not lineage_code:
+            existing = species_repo.list_species()
+            used_codes = {sp.lineage_code for sp in existing}
+            base_codes = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P"]
+            for base in base_codes:
+                for suffix in range(1, 100):
+                    candidate = f"{base}{suffix}"
+                    if candidate not in used_codes:
+                        lineage_code = candidate
+                        break
+                if lineage_code:
+                    break
+            
+            if not lineage_code:
+                raise HTTPException(status_code=400, detail="无法生成唯一的物种编码")
+        
+        species = generator.generate_advanced(
             prompt=request.prompt,
-            lineage_code=request.lineage_code,
-            trophic_level=request.trophic_level,
+            lineage_code=lineage_code,
+            existing_species=species_repo.list_species(),
+            habitat_type=request.habitat_type,
             diet_type=request.diet_type,
-            population=request.population,
+            prey_species=request.prey_species,
             parent_code=request.parent_code,
+            is_plant=request.is_plant,
+            plant_stage=request.plant_stage,
         )
         species_repo.upsert(species)
         _invalidate_lineage_cache()
         
-        return {
-            "success": True,
-            "species": _serialize_species_detail(species).model_dump(),
-        }
+        return _serialize_species_detail(species)
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[高级物种生成错误] {str(e)}")
         raise HTTPException(status_code=500, detail=f"生成物种失败: {str(e)}")
@@ -339,20 +402,57 @@ def compare_niche(
     embedding_service = Depends(get_embedding_service),
 ) -> NicheCompareResult:
     """对比两个物种的生态位"""
-    from ..services.species.niche_compare import NicheCompareService
+    import numpy as np
+    from ..services.species.niche_compare import compute_niche_metrics
     
-    species_a = species_repo.get_by_lineage(request.code_a)
-    species_b = species_repo.get_by_lineage(request.code_b)
+    species_a = species_repo.get_by_lineage(request.species_a)
+    species_b = species_repo.get_by_lineage(request.species_b)
     
     if not species_a:
-        raise HTTPException(status_code=404, detail=f"物种 {request.code_a} 不存在")
+        raise HTTPException(status_code=404, detail=f"物种 {request.species_a} 不存在")
     if not species_b:
-        raise HTTPException(status_code=404, detail=f"物种 {request.code_b} 不存在")
+        raise HTTPException(status_code=404, detail=f"物种 {request.species_b} 不存在")
     
-    compare_service = NicheCompareService(embedding_service)
-    result = compare_service.compare(species_a, species_b)
+    # 尝试获取 embedding 相似度
+    embedding_similarity = None
+    try:
+        vectors = embedding_service.embed(
+            [species_a.description, species_b.description],
+            require_real=False  # 不强制要求真实 embedding
+        )
+        vec_a = np.array(vectors[0], dtype=float)
+        vec_b = np.array(vectors[1], dtype=float)
+        
+        norm_a = np.linalg.norm(vec_a)
+        norm_b = np.linalg.norm(vec_b)
+        
+        if norm_a > 0 and norm_b > 0:
+            embedding_similarity = float(np.dot(vec_a, vec_b) / (norm_a * norm_b))
+            embedding_similarity = max(0.0, min(1.0, embedding_similarity))
+    except Exception:
+        pass  # 使用属性计算
     
-    return result
+    # 使用生态位计算模块
+    niche_result = compute_niche_metrics(
+        species_a, species_b,
+        embedding_similarity=embedding_similarity
+    )
+    
+    # 构建返回结果
+    pop_a = float(species_a.morphology_stats.get("population", 0) or 0)
+    pop_b = float(species_b.morphology_stats.get("population", 0) or 0)
+    
+    return NicheCompareResult(
+        species_a=_serialize_species_detail(species_a),
+        species_b=_serialize_species_detail(species_b),
+        similarity=niche_result.similarity,
+        overlap=niche_result.overlap,
+        competition_intensity=niche_result.competition,
+        niche_dimensions={
+            "种群数量": {"species_a": pop_a, "species_b": pop_b},
+            "营养级": {"species_a": species_a.trophic_level, "species_b": species_b.trophic_level},
+        },
+    )
 
 
 @router.get("/species/{code1}/can_hybridize/{code2}", tags=["species"])

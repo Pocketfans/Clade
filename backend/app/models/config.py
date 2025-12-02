@@ -42,13 +42,20 @@ class SpeciationConfig(BaseModel):
     
     # ========== 基础分化参数 ==========
     # 分化冷却期（回合数）：分化后多少回合内不能再次分化
-    cooldown_turns: int = 2
+    cooldown_turns: int = 3
     # 物种密度软上限：超过此数量后分化概率开始衰减
     species_soft_cap: int = 80
-    # 基础分化概率（0-1）
-    base_speciation_rate: float = 0.35
-    # 最大子种数量
-    max_offspring_count: int = 3
+    # 基础分化概率（0-1）- 降低以减缓分化速度
+    base_speciation_rate: float = 0.20
+    # 单次分化最大子种数量（每次分化产生的后代数）
+    max_offspring_count: int = 2
+    
+    # ========== 直接后代数量限制 ==========
+    # 一个物种最多能分化出多少个直接后代
+    # 只有当所有后代都灭绝后，才能再次分化
+    max_direct_offspring: int = 3
+    # 是否只计算存活后代（true=只计存活，false=计算所有历史后代）
+    count_only_alive_offspring: bool = True
     
     # ========== 早期分化优化 ==========
     # 早期回合阈值：低于此回合数时使用更宽松的条件

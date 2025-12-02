@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..schemas.responses import ExportRecord
 from .dependencies import get_container, get_history_repository, get_session
+from ..core.ai_router_config import configure_model_router
 
 if TYPE_CHECKING:
     from ..core.container import ServiceContainer
@@ -104,7 +105,10 @@ def get_game_state(
     container: 'ServiceContainer' = Depends(get_container),
     session: 'SimulationSessionManager' = Depends(get_session),
 ) -> dict:
-    """获取当前游戏状态"""
+    """获取当前游戏状态
+    
+    返回格式兼容前端期望的顶层字段结构
+    """
     engine = container.simulation_engine
     species_repo = container.species_repository
     env_repo = container.environment_repository
@@ -114,11 +118,20 @@ def get_game_state(
     
     map_state = env_repo.get_state()
     
+    # 前端期望的顶层字段
     return {
         "turn_index": engine.turn_counter,
+        "species_count": len(alive_species),  # 前端期望的：存活物种数
+        "total_species_count": len(all_species),  # 前端期望的：总物种数（含灭绝）
+        "sea_level": map_state.sea_level if map_state else 0.0,  # 前端期望的顶层字段
+        "global_temperature": map_state.global_avg_temperature if map_state else 15.0,  # 前端期望的顶层字段
+        "tectonic_stage": map_state.stage_name if map_state else "稳定期",  # 前端期望的顶层字段
+        # 额外字段（保持兼容）
         "running": session.is_running,
         "current_save": session.current_save_name,
-        "species_count": {
+        "backend_session_id": id(session),
+        # 嵌套格式也保留（向后兼容）
+        "species_count_detail": {
             "total": len(all_species),
             "alive": len(alive_species),
             "extinct": len(all_species) - len(alive_species),
@@ -258,6 +271,36 @@ def update_ui_config(
     # 使缓存失效
     config_service.invalidate_cache()
     
+    # 应用配置到容器级 ModelRouter
+    try:
+        configure_model_router(saved, container.model_router, container.embedding_service, container.settings)
+        logger.info("[配置] 容器 ModelRouter 已更新")
+    except Exception as e:
+        logger.warning(f"[配置] 更新容器 ModelRouter 失败: {e}")
+    
+    # 【修复】应用 AI 配置到 ModelRouter（负载均衡、服务商路由等）
+    try:
+        from . import routes
+        routes.apply_ui_config(saved)
+        logger.info("[配置] AI 服务商配置已应用")
+    except Exception as e:
+        logger.warning(f"[配置] 应用 AI 配置失败（不影响其他配置）: {e}")
+    
+    # 【修复】刷新 SimulationEngine 及子服务的配置（分化、死亡率、生态平衡等）
+    try:
+        from . import routes
+        # 获取最新配置
+        new_configs = {
+            "ecology": config_service.get_ecology_balance(),
+            "mortality": config_service.get_mortality(),
+            "speciation": config_service.get_speciation(),
+            "food_web": getattr(saved, 'food_web', None),
+        }
+        routes.simulation_engine.reload_configs(new_configs)
+        logger.info("[配置] 游戏参数配置已刷新到引擎")
+    except Exception as e:
+        logger.warning(f"[配置] 刷新引擎配置失败（将在下次推演时自动加载）: {e}")
+    
     return saved
 
 
@@ -371,28 +414,163 @@ def fetch_models(
 @router.get("/map")
 def get_map_overview(
     limit_tiles: int = 0,
+    limit_habitats: int = 0,
     view_mode: str = "terrain",
     species_id: int | None = None,
+    species_code: str | None = None,
     container: 'ServiceContainer' = Depends(get_container),
 ):
     """获取地图概览
     
     Args:
         limit_tiles: 限制返回的地块数量（0=不限制）
-        view_mode: 视图模式（terrain/terrain_type/elevation/biodiversity/climate）
-        species_id: 可选，聚焦特定物种的分布
+        limit_habitats: 限制返回的栖息地数量（0=不限制）
+        view_mode: 视图模式（terrain/terrain_type/elevation/biodiversity/climate/suitability）
+        species_id: 可选，聚焦特定物种的分布（通过ID）
+        species_code: 可选，聚焦特定物种的分布（通过lineage_code，兼容前端）
     """
     from ..services.geo.map_coloring import ViewMode
     
     map_manager = container.map_manager
+    species_repo = container.species_repository
     
     # 确保地图已初始化
     map_manager.ensure_initialized()
     
+    # 如果提供了 species_code，转换为 species_id
+    resolved_species_id = species_id
+    if species_code and not species_id:
+        species = species_repo.get_by_lineage(species_code)
+        if species:
+            resolved_species_id = species.id
+    
     # 直接使用 map_manager 的 get_overview，它包含完整的颜色计算逻辑
     return map_manager.get_overview(
         tile_limit=limit_tiles if limit_tiles > 0 else None,
+        habitat_limit=limit_habitats if limit_habitats > 0 else None,
         view_mode=view_mode,  # type: ignore
-        species_id=species_id,
+        species_id=resolved_species_id,
+    )
+
+
+# ========== 渲染数据 ==========
+
+@router.get("/render/heightmap")
+def get_heightmap(
+    container: 'ServiceContainer' = Depends(get_container),
+):
+    """获取高度图（二进制 Float32Array）
+    
+    返回所有地块的高度数据，按地块ID顺序排列
+    """
+    import struct
+    from starlette.responses import Response
+    
+    env_repo = container.environment_repository
+    tiles = env_repo.list_tiles()
+    
+    if not tiles:
+        return Response(content=b"", media_type="application/octet-stream")
+    
+    # 按 ID 排序
+    tiles.sort(key=lambda t: t.id)
+    
+    # 打包为 Float32Array
+    data = struct.pack(f"{len(tiles)}f", *[t.elevation for t in tiles])
+    
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Length": str(len(data))}
+    )
+
+
+@router.get("/render/watermask")
+def get_watermask(
+    container: 'ServiceContainer' = Depends(get_container),
+):
+    """获取水域遮罩（二进制 Float32Array）
+    
+    返回每个地块的水域深度，陆地为0，水域为正值
+    """
+    import struct
+    from starlette.responses import Response
+    
+    env_repo = container.environment_repository
+    tiles = env_repo.list_tiles()
+    map_state = env_repo.get_state()
+    sea_level = map_state.sea_level if map_state else 0.0
+    
+    if not tiles:
+        return Response(content=b"", media_type="application/octet-stream")
+    
+    # 按 ID 排序
+    tiles.sort(key=lambda t: t.id)
+    
+    # 计算水深：海平面以下为正值，以上为0
+    water_depths = []
+    for t in tiles:
+        depth = max(0.0, sea_level - t.elevation)
+        water_depths.append(depth)
+    
+    data = struct.pack(f"{len(tiles)}f", *water_depths)
+    
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Length": str(len(data))}
+    )
+
+
+@router.get("/render/erosionmap")
+def get_erosionmap(
+    container: 'ServiceContainer' = Depends(get_container),
+):
+    """获取侵蚀图（二进制 Float32Array）
+    
+    返回每个地块的侵蚀程度（基于相邻高度差计算）
+    """
+    import struct
+    from starlette.responses import Response
+    
+    env_repo = container.environment_repository
+    tiles = env_repo.list_tiles()
+    
+    if not tiles:
+        return Response(content=b"", media_type="application/octet-stream")
+    
+    # 按 ID 排序并建立索引
+    tiles.sort(key=lambda t: t.id)
+    tile_map = {t.id: t for t in tiles}
+    
+    # 计算侵蚀值（基于与邻居的高度差）
+    erosion_values = []
+    for t in tiles:
+        if not t.neighbors:
+            erosion_values.append(0.0)
+            continue
+        
+        # 计算与所有邻居的平均高度差
+        height_diffs = []
+        for neighbor_id in t.neighbors:
+            neighbor = tile_map.get(neighbor_id)
+            if neighbor:
+                height_diffs.append(abs(t.elevation - neighbor.elevation))
+        
+        if height_diffs:
+            avg_diff = sum(height_diffs) / len(height_diffs)
+            # 归一化到 0-1 范围（假设最大高度差为 2000m）
+            erosion = min(1.0, avg_diff / 2000.0)
+        else:
+            erosion = 0.0
+        
+        erosion_values.append(erosion)
+    
+    data = struct.pack(f"{len(tiles)}f", *erosion_values)
+    
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Length": str(len(data))}
     )
 

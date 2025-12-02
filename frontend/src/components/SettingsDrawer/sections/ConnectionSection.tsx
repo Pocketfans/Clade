@@ -1,19 +1,16 @@
 /**
- * ConnectionSection - 服务商连接配置
- * 
- * 左右分栏布局：
- * - 左侧：服务商列表 + 添加按钮
- * - 右侧：选中服务商的编辑表单
+ * ConnectionSection - 服务商连接配置 (全新设计)
  */
 
 import { memo, useCallback, useState, type Dispatch } from "react";
 import type { ProviderConfig, ProviderType } from "@/services/api.types";
 import type { SettingsAction, TestResult } from "../types";
 import { testApiConnection, fetchProviderModels, type ModelInfo } from "@/services/api";
-import { PROVIDER_PRESETS, PROVIDER_API_TYPES } from "../constants";
+import { PROVIDER_API_TYPES } from "../constants";
 import { getProviderLogo, getProviderTypeBadge, generateId } from "../reducer";
+import { SectionHeader, ActionButton } from "../common/Controls";
 
-interface ConnectionSectionProps {
+interface Props {
   providers: Record<string, ProviderConfig>;
   selectedProviderId: string | null;
   testResults: Record<string, TestResult>;
@@ -29,34 +26,15 @@ export const ConnectionSection = memo(function ConnectionSection({
   testingProviderId,
   showApiKeys,
   dispatch,
-}: ConnectionSectionProps) {
+}: Props) {
   const providerList = Object.values(providers);
   const selectedProvider = selectedProviderId ? providers[selectedProviderId] : null;
 
-  // 模型列表相关状态
   const [fetchingModels, setFetchingModels] = useState<string | null>(null);
   const [providerModels, setProviderModels] = useState<Record<string, ModelInfo[]>>({});
   const [modelFetchError, setModelFetchError] = useState<Record<string, string>>({});
 
-  // 添加预设服务商
-  const handleAddProvider = useCallback((preset: typeof PROVIDER_PRESETS[0]) => {
-    const newId = `${preset.id}_${generateId()}`;
-    dispatch({
-      type: "ADD_PROVIDER",
-      provider: {
-        id: newId,
-        name: `${preset.name}`,
-        type: preset.provider_type,
-        provider_type: preset.provider_type,
-        base_url: preset.base_url,
-        api_key: "",
-        models: [...preset.models],
-      },
-    });
-    dispatch({ type: "SELECT_PROVIDER", id: newId });
-  }, [dispatch]);
-
-  // 添加自定义服务商（指定 API 类型）
+  // 添加自定义服务商
   const handleAddCustom = useCallback((apiType: ProviderType, typeName: string) => {
     const newId = `custom_${apiType}_${generateId()}`;
     const baseUrls: Record<ProviderType, string> = {
@@ -131,7 +109,7 @@ export const ConnectionSection = memo(function ConnectionSection({
     });
   }, [dispatch, selectedProviderId]);
 
-  // 获取服务商的模型列表
+  // 获取模型列表
   const handleFetchModels = useCallback(async (provider: ProviderConfig) => {
     if (!provider.api_key || !provider.base_url) {
       setModelFetchError((prev) => ({
@@ -156,17 +134,11 @@ export const ConnectionSection = memo(function ConnectionSection({
       });
 
       if (result.success && result.models.length > 0) {
+        // 只存储到临时状态，不自动添加到收藏
         setProviderModels((prev) => ({
           ...prev,
           [provider.id]: result.models,
         }));
-        // 更新 provider 的模型列表
-        dispatch({
-          type: "UPDATE_PROVIDER",
-          id: provider.id,
-          field: "models",
-          value: result.models.map((m) => m.id),
-        });
       } else {
         setModelFetchError((prev) => ({
           ...prev,
@@ -184,153 +156,137 @@ export const ConnectionSection = memo(function ConnectionSection({
   }, [dispatch]);
 
   return (
-    <div className="settings-section connection-section">
-      <div className="section-header-bar">
-        <div>
-          <h2>🔌 服务商配置</h2>
-          <p className="section-subtitle">管理 AI API 服务商连接</p>
-        </div>
-      </div>
+    <div className="section-page">
+      <SectionHeader
+        icon="🔌"
+        title="服务商配置"
+        subtitle="管理 AI API 服务商连接，配置 API Key 和端点地址"
+      />
 
-      {/* 左右分栏布局 */}
       <div className="connection-layout">
         {/* 左侧：服务商列表 */}
-        <div className="provider-panel">
-          <div className="panel-header">
-            <h3>已配置服务商</h3>
-            <span className="provider-count">{providerList.length} 个</span>
+        <div className="provider-list-panel">
+          <div className="provider-list-header">
+            <span className="provider-list-title">已配置服务商</span>
+            <span className="provider-count-badge">{providerList.length} 个</span>
           </div>
 
-          <div className="provider-list">
+          <div className="provider-list-scroll">
             {providerList.length === 0 ? (
-              <div className="empty-state small">
-                <p>暂无服务商</p>
-                <p className="hint">点击下方按钮添加</p>
+              <div className="empty-state" style={{ padding: "24px 16px" }}>
+                <div className="empty-state-icon">🔌</div>
+                <div className="empty-state-title">暂无服务商</div>
+                <div className="empty-state-desc">点击下方按钮添加</div>
               </div>
             ) : (
               providerList.map((provider) => {
                 const isSelected = selectedProviderId === provider.id;
-                const isTesting = testingProviderId === provider.id;
                 const testResult = testResults[provider.id];
                 const badge = getProviderTypeBadge(provider.provider_type || "openai");
 
                 return (
                   <div
                     key={provider.id}
-                    className={`provider-item ${isSelected ? "selected" : ""}`}
+                    className={`provider-item ${isSelected ? "active" : ""}`}
                     onClick={() => dispatch({ type: "SELECT_PROVIDER", id: provider.id })}
                   >
+                    <div className="provider-logo">{getProviderLogo(provider)}</div>
                     <div className="provider-info">
-                      <span className="provider-logo">{getProviderLogo(provider)}</span>
-                      <div className="provider-details">
-                        <span className="provider-name">{provider.name}</span>
-                        <span className="provider-type" style={{ color: badge.color }}>
-                          {badge.text}
-                        </span>
+                      <div className="provider-name">{provider.name}</div>
+                      <div className="provider-type-badge" style={{ color: badge.color }}>
+                        {badge.text}
                       </div>
                     </div>
-                    <div className="provider-status">
-                      {isTesting && <span className="status testing">...</span>}
-                      {testResult && !isTesting && (
-                        <span className={`status-dot ${testResult.success ? "success" : "error"}`} />
-                      )}
-                    </div>
+                    {testResult && (
+                      <div className={`provider-status ${testResult.success ? "success" : "error"}`} />
+                    )}
                   </div>
                 );
               })
             )}
           </div>
 
-          {/* 添加预设服务商 */}
-          <div className="add-section">
-            <div className="add-label">快速添加</div>
-            <div className="preset-buttons">
-              {PROVIDER_PRESETS.map((preset) => (
-                <button
-                  key={preset.id}
-                  className="preset-btn-small"
-                  onClick={() => handleAddProvider(preset)}
-                  title={preset.description}
-                >
-                  <span>{preset.logo}</span>
-                  <span>{preset.name}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* 添加自定义服务商 */}
-          <div className="add-section">
-            <div className="add-label">自定义（选择 API 格式）</div>
-            <div className="custom-buttons">
-              <button
-                className="custom-btn openai"
-                onClick={() => handleAddCustom("openai", "OpenAI兼容")}
-              >
-                <span className="btn-icon">🤖</span>
+          {/* 添加服务商 */}
+          <div className="add-provider-section">
+            <div className="add-provider-label">添加服务商</div>
+            <div className="preset-btns">
+              <button className="preset-btn" onClick={() => handleAddCustom("openai", "OpenAI")}>
+                <span>🤖</span>
                 <span>OpenAI 兼容</span>
               </button>
-              <button
-                className="custom-btn anthropic"
-                onClick={() => handleAddCustom("anthropic", "Claude")}
-              >
-                <span className="btn-icon">🎭</span>
-                <span>Claude API</span>
+              <button className="preset-btn" onClick={() => handleAddCustom("anthropic", "Claude")}>
+                <span>🎭</span>
+                <span>Claude</span>
               </button>
-              <button
-                className="custom-btn google"
-                onClick={() => handleAddCustom("google", "Gemini")}
-              >
-                <span className="btn-icon">💎</span>
-                <span>Gemini API</span>
+              <button className="preset-btn" onClick={() => handleAddCustom("google", "Gemini")}>
+                <span>💎</span>
+                <span>Gemini</span>
               </button>
             </div>
           </div>
         </div>
 
         {/* 右侧：编辑面板 */}
-        <div className="edit-panel">
+        <div className="provider-edit-panel">
           {selectedProvider ? (
             <>
-              <div className="edit-header">
-                <div className="edit-title">
-                  <span className="edit-logo">{getProviderLogo(selectedProvider)}</span>
+              <div className="edit-panel-header">
+                <div className="edit-panel-title">
+                  <span className="edit-panel-logo">{getProviderLogo(selectedProvider)}</span>
                   <div>
-                    <h3>{selectedProvider.name}</h3>
-                    <span className="edit-type">
+                    <div className="edit-panel-name">{selectedProvider.name}</div>
+                    <div className="edit-panel-type">
                       {getProviderTypeBadge(selectedProvider.provider_type || "openai").text}
-                    </span>
+                    </div>
                   </div>
                 </div>
                 <button
-                  className="btn-delete"
+                  className="btn btn-ghost danger"
                   onClick={() => handleDelete(selectedProvider.id)}
                 >
                   🗑️ 删除
                 </button>
               </div>
 
-              <div className="edit-form">
-                <div className="form-group">
-                  <label>服务商名称</label>
-                  <input
-                    type="text"
-                    value={selectedProvider.name}
-                    onChange={(e) =>
-                      dispatch({
-                        type: "UPDATE_PROVIDER",
-                        id: selectedProvider.id,
-                        field: "name",
-                        value: e.target.value,
-                      })
-                    }
-                    placeholder="输入一个便于识别的名称"
-                  />
+              <div className="edit-panel-body">
+                {/* 服务商名称 */}
+                <div className="form-row">
+                  <div className="form-label">
+                    <div className="form-label-text">服务商名称</div>
+                  </div>
+                  <div className="form-control" style={{ flex: 1 }}>
+                    <input
+                      type="text"
+                      className="text-input"
+                      value={selectedProvider.name}
+                      onChange={(e) =>
+                        dispatch({
+                          type: "UPDATE_PROVIDER",
+                          id: selectedProvider.id,
+                          field: "name",
+                          value: e.target.value,
+                        })
+                      }
+                      placeholder="输入便于识别的名称"
+                      style={{
+                        width: "100%",
+                        padding: "10px 14px",
+                        background: "var(--s-bg-deep)",
+                        border: "1px solid var(--s-border)",
+                        borderRadius: "var(--s-radius-md)",
+                        color: "var(--s-text)",
+                        fontSize: "0.9rem",
+                      }}
+                    />
+                  </div>
                 </div>
 
-                <div className="form-group">
-                  <label>API 类型</label>
-                  <div className="api-type-selector">
+                {/* API 类型选择 */}
+                <div style={{ marginTop: "16px" }}>
+                  <div className="form-label-text" style={{ marginBottom: "10px" }}>
+                    API 类型
+                  </div>
+                  <div className="api-type-grid">
                     {PROVIDER_API_TYPES.map((t) => (
                       <button
                         key={t.value}
@@ -344,34 +300,52 @@ export const ConnectionSection = memo(function ConnectionSection({
                           })
                         }
                       >
-                        <span className="type-label">{t.label}</span>
-                        <span className="type-desc">{t.desc}</span>
+                        <span className="api-type-label">{t.label}</span>
+                        <span className="api-type-desc">{t.desc}</span>
                       </button>
                     ))}
                   </div>
                 </div>
 
-                <div className="form-group">
-                  <label>Base URL</label>
-                  <input
-                    type="text"
-                    value={selectedProvider.base_url || ""}
-                    onChange={(e) =>
-                      dispatch({
-                        type: "UPDATE_PROVIDER",
-                        id: selectedProvider.id,
-                        field: "base_url",
-                        value: e.target.value,
-                      })
-                    }
-                    placeholder="https://api.example.com/v1"
-                  />
-                  <p className="field-hint">API 端点地址，通常以 /v1 结尾</p>
+                {/* Base URL */}
+                <div className="form-row" style={{ marginTop: "16px" }}>
+                  <div className="form-label">
+                    <div className="form-label-text">Base URL</div>
+                    <div className="form-label-desc">API 端点地址，通常以 /v1 结尾</div>
+                  </div>
+                  <div className="form-control" style={{ flex: 1 }}>
+                    <input
+                      type="text"
+                      value={selectedProvider.base_url || ""}
+                      onChange={(e) =>
+                        dispatch({
+                          type: "UPDATE_PROVIDER",
+                          id: selectedProvider.id,
+                          field: "base_url",
+                          value: e.target.value,
+                        })
+                      }
+                      placeholder="https://api.example.com/v1"
+                      style={{
+                        width: "100%",
+                        padding: "10px 14px",
+                        background: "var(--s-bg-deep)",
+                        border: "1px solid var(--s-border)",
+                        borderRadius: "var(--s-radius-md)",
+                        color: "var(--s-text)",
+                        fontSize: "0.9rem",
+                        fontFamily: "var(--s-font-mono)",
+                      }}
+                    />
+                  </div>
                 </div>
 
-                <div className="form-group">
-                  <label>API Key</label>
-                  <div className="api-key-input">
+                {/* API Key */}
+                <div className="form-row" style={{ marginTop: "16px" }}>
+                  <div className="form-label">
+                    <div className="form-label-text">API Key</div>
+                  </div>
+                  <div className="form-control" style={{ flex: 1, position: "relative" }}>
                     <input
                       type={showApiKeys[selectedProvider.id] ? "text" : "password"}
                       value={selectedProvider.api_key || ""}
@@ -384,134 +358,374 @@ export const ConnectionSection = memo(function ConnectionSection({
                         })
                       }
                       placeholder="sk-..."
+                      style={{
+                        width: "100%",
+                        padding: "10px 48px 10px 14px",
+                        background: "var(--s-bg-deep)",
+                        border: "1px solid var(--s-border)",
+                        borderRadius: "var(--s-radius-md)",
+                        color: "var(--s-text)",
+                        fontSize: "0.9rem",
+                        fontFamily: "var(--s-font-mono)",
+                      }}
                     />
                     <button
                       type="button"
-                      className="toggle-visibility"
                       onClick={() =>
                         dispatch({ type: "TOGGLE_API_KEY_VISIBILITY", providerId: selectedProvider.id })
                       }
+                      style={{
+                        position: "absolute",
+                        right: "8px",
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        background: "transparent",
+                        border: "none",
+                        color: "var(--s-text-muted)",
+                        cursor: "pointer",
+                        fontSize: "1.1rem",
+                        padding: "4px",
+                      }}
                     >
                       {showApiKeys[selectedProvider.id] ? "🙈" : "👁️"}
                     </button>
                   </div>
                 </div>
 
-                <div className="form-group">
-                  <label>可用模型（每行一个）</label>
-                  <textarea
-                    value={(selectedProvider.models || []).join("\n")}
-                    onChange={(e) =>
-                      dispatch({
-                        type: "UPDATE_PROVIDER",
-                        id: selectedProvider.id,
-                        field: "models",
-                        value: e.target.value.split("\n").filter(Boolean),
-                      })
-                    }
-                    placeholder="gpt-4o&#10;gpt-4o-mini&#10;claude-3-5-sonnet-20241022"
-                    rows={4}
-                  />
-                  <p className="field-hint">手动填写或通过测试连接自动获取</p>
+                {/* 收藏的模型 */}
+                <div style={{ marginTop: "16px" }}>
+                  <div className="form-label-text" style={{ marginBottom: "10px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span>收藏模型</span>
+                    <span style={{ fontSize: "0.72rem", color: "var(--s-text-muted)", fontWeight: 400 }}>
+                      {(selectedProvider.models || []).length} 个收藏，
+                      {(selectedProvider.models || []).filter(m => !(selectedProvider.disabled_models || []).includes(m)).length} 个启用
+                    </span>
+                  </div>
+                  
+                  {(selectedProvider.models || []).length === 0 ? (
+                    <div style={{
+                      padding: "16px",
+                      background: "var(--s-bg-deep)",
+                      border: "1px dashed var(--s-border)",
+                      borderRadius: "var(--s-radius-md)",
+                      textAlign: "center",
+                      color: "var(--s-text-muted)",
+                      fontSize: "0.82rem",
+                    }}>
+                      暂无收藏模型，点击下方"获取模型列表"添加
+                    </div>
+                  ) : (
+                    <div style={{
+                      background: "var(--s-bg-deep)",
+                      border: "1px solid var(--s-border)",
+                      borderRadius: "var(--s-radius-md)",
+                      maxHeight: "200px",
+                      overflowY: "auto",
+                    }}>
+                      {(selectedProvider.models || []).map((modelId) => {
+                        const isEnabled = !(selectedProvider.disabled_models || []).includes(modelId);
+                        return (
+                          <div
+                            key={modelId}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              padding: "8px 12px",
+                              borderBottom: "1px solid var(--s-border)",
+                              opacity: isEnabled ? 1 : 0.5,
+                            }}
+                          >
+                            {/* 启用/禁用开关 */}
+                            <button
+                              onClick={() => {
+                                const disabledModels = selectedProvider.disabled_models || [];
+                                if (isEnabled) {
+                                  dispatch({
+                                    type: "UPDATE_PROVIDER",
+                                    id: selectedProvider.id,
+                                    field: "disabled_models",
+                                    value: [...disabledModels, modelId],
+                                  });
+                                } else {
+                                  dispatch({
+                                    type: "UPDATE_PROVIDER",
+                                    id: selectedProvider.id,
+                                    field: "disabled_models",
+                                    value: disabledModels.filter(m => m !== modelId),
+                                  });
+                                }
+                              }}
+                              style={{
+                                width: "36px",
+                                height: "20px",
+                                borderRadius: "10px",
+                                border: "none",
+                                background: isEnabled ? "var(--s-success)" : "var(--s-bg-glass)",
+                                cursor: "pointer",
+                                position: "relative",
+                                marginRight: "10px",
+                                flexShrink: 0,
+                                transition: "all 0.2s",
+                              }}
+                              title={isEnabled ? "点击禁用" : "点击启用"}
+                            >
+                              <div style={{
+                                width: "16px",
+                                height: "16px",
+                                borderRadius: "50%",
+                                background: "#fff",
+                                position: "absolute",
+                                top: "2px",
+                                left: isEnabled ? "18px" : "2px",
+                                transition: "left 0.2s",
+                              }} />
+                            </button>
+                            
+                            {/* 模型名称 */}
+                            <span style={{
+                              flex: 1,
+                              fontSize: "0.82rem",
+                              color: isEnabled ? "var(--s-text)" : "var(--s-text-muted)",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}>
+                              {modelId}
+                            </span>
+                            
+                            {/* 删除按钮 */}
+                            <button
+                              onClick={() => {
+                                dispatch({
+                                  type: "UPDATE_PROVIDER",
+                                  id: selectedProvider.id,
+                                  field: "models",
+                                  value: (selectedProvider.models || []).filter(m => m !== modelId),
+                                });
+                                // 同时从禁用列表中移除
+                                if ((selectedProvider.disabled_models || []).includes(modelId)) {
+                                  dispatch({
+                                    type: "UPDATE_PROVIDER",
+                                    id: selectedProvider.id,
+                                    field: "disabled_models",
+                                    value: (selectedProvider.disabled_models || []).filter(m => m !== modelId),
+                                  });
+                                }
+                              }}
+                              style={{
+                                width: "24px",
+                                height: "24px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                background: "transparent",
+                                border: "none",
+                                color: "var(--s-text-muted)",
+                                cursor: "pointer",
+                                fontSize: "0.9rem",
+                                opacity: 0.6,
+                                transition: "opacity 0.15s",
+                              }}
+                              onMouseEnter={(e) => e.currentTarget.style.opacity = "1"}
+                              onMouseLeave={(e) => e.currentTarget.style.opacity = "0.6"}
+                              title="移除收藏"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  
+                  {/* 手动添加模型 */}
+                  <div style={{ marginTop: "10px", display: "flex", gap: "8px" }}>
+                    <input
+                      type="text"
+                      placeholder="输入模型名称手动添加..."
+                      id={`manual-model-${selectedProvider.id}`}
+                      style={{
+                        flex: 1,
+                        padding: "8px 12px",
+                        background: "var(--s-bg-deep)",
+                        border: "1px solid var(--s-border)",
+                        borderRadius: "var(--s-radius-sm)",
+                        color: "var(--s-text)",
+                        fontSize: "0.82rem",
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          const input = e.currentTarget;
+                          const value = input.value.trim();
+                          if (value && !(selectedProvider.models || []).includes(value)) {
+                            dispatch({
+                              type: "UPDATE_PROVIDER",
+                              id: selectedProvider.id,
+                              field: "models",
+                              value: [...(selectedProvider.models || []), value],
+                            });
+                            input.value = "";
+                          }
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={() => {
+                        const input = document.getElementById(`manual-model-${selectedProvider.id}`) as HTMLInputElement;
+                        const value = input?.value.trim();
+                        if (value && !(selectedProvider.models || []).includes(value)) {
+                          dispatch({
+                            type: "UPDATE_PROVIDER",
+                            id: selectedProvider.id,
+                            field: "models",
+                            value: [...(selectedProvider.models || []), value],
+                          });
+                          if (input) input.value = "";
+                        }
+                      }}
+                      style={{
+                        padding: "8px 14px",
+                        background: "var(--s-primary)",
+                        border: "none",
+                        borderRadius: "var(--s-radius-sm)",
+                        color: "#fff",
+                        fontSize: "0.82rem",
+                        cursor: "pointer",
+                      }}
+                    >
+                      添加
+                    </button>
+                  </div>
                 </div>
 
-                <div className="form-actions">
+                {/* 操作按钮 */}
+                <div style={{ display: "flex", gap: "12px", marginTop: "20px", paddingTop: "16px", borderTop: "1px solid var(--s-border)" }}>
                   <button
-                    className="btn primary"
+                    className="btn btn-primary"
                     onClick={() => handleTest(selectedProvider)}
                     disabled={testingProviderId !== null}
                   >
-                    {testingProviderId === selectedProvider.id ? "测试中..." : "🔍 测试连接"}
+                    {testingProviderId === selectedProvider.id ? (
+                      <>
+                        <span className="spinner" /> 测试中...
+                      </>
+                    ) : (
+                      "🔍 测试连接"
+                    )}
                   </button>
                   <button
-                    className="btn secondary"
+                    className="btn btn-outline"
                     onClick={() => handleFetchModels(selectedProvider)}
                     disabled={fetchingModels !== null || !selectedProvider.api_key || !selectedProvider.base_url}
-                    title="从服务商API自动获取可用模型列表"
                   >
-                    {fetchingModels === selectedProvider.id ? "获取中..." : "📋 获取模型列表"}
+                    {fetchingModels === selectedProvider.id ? (
+                      <>
+                        <span className="spinner" /> 获取中...
+                      </>
+                    ) : (
+                      "📋 获取模型列表"
+                    )}
                   </button>
                 </div>
 
+                {/* 测试结果 */}
                 {testResults[selectedProvider.id] && (
-                  <div
-                    className={`test-result ${testResults[selectedProvider.id].success ? "success" : "error"}`}
-                  >
-                    <span className="result-icon">
-                      {testResults[selectedProvider.id].success ? "✓" : "✗"}
-                    </span>
+                  <div className={`test-result ${testResults[selectedProvider.id].success ? "success" : "error"}`}>
+                    <span>{testResults[selectedProvider.id].success ? "✓" : "✗"}</span>
                     <span>{testResults[selectedProvider.id].message}</span>
                   </div>
                 )}
 
                 {modelFetchError[selectedProvider.id] && (
                   <div className="test-result error">
-                    <span className="result-icon">✗</span>
+                    <span>✗</span>
                     <span>{modelFetchError[selectedProvider.id]}</span>
                   </div>
                 )}
 
                 {/* 已获取的模型列表 */}
                 {providerModels[selectedProvider.id] && providerModels[selectedProvider.id].length > 0 && (
-                  <div className="fetched-models-section">
-                    <div className="fetched-models-header">
-                      <span className="result-icon">✓</span>
+                  <div style={{ marginTop: "16px", padding: "12px", background: "var(--s-info-bg)", border: "1px solid rgba(96, 165, 250, 0.3)", borderRadius: "var(--s-radius-md)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px", fontSize: "0.85rem", color: "var(--s-info)" }}>
+                      <span>✓</span>
                       <span>已获取 {providerModels[selectedProvider.id].length} 个模型</span>
-                      <button
-                        className="btn text-btn"
-                        onClick={() => {
-                          // 将所有获取的模型添加到可用模型列表
-                          const allModelIds = providerModels[selectedProvider.id].map(m => m.id);
-                          dispatch({
-                            type: "UPDATE_PROVIDER",
-                            id: selectedProvider.id,
-                            field: "models",
-                            value: allModelIds,
-                          });
-                        }}
-                        title="将所有获取的模型添加到可用模型列表"
-                      >
-                        全部添加
-                      </button>
+                      <span style={{ marginLeft: "auto", fontSize: "0.75rem", color: "var(--s-text-muted)" }}>
+                        点击 + 添加到收藏
+                      </span>
                     </div>
-                    <div className="fetched-models-list">
-                      {providerModels[selectedProvider.id].slice(0, 20).map((model) => {
+                    <div style={{ maxHeight: "200px", overflowY: "auto" }}>
+                      {providerModels[selectedProvider.id].map((model) => {
                         const isAdded = (selectedProvider.models || []).includes(model.id);
                         return (
                           <div
                             key={model.id}
-                            className={`model-item ${isAdded ? "added" : ""}`}
-                            onClick={() => {
-                              if (!isAdded) {
-                                dispatch({
-                                  type: "UPDATE_PROVIDER",
-                                  id: selectedProvider.id,
-                                  field: "models",
-                                  value: [...(selectedProvider.models || []), model.id],
-                                });
-                              }
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              padding: "6px 8px",
+                              fontSize: "0.78rem",
+                              color: isAdded ? "var(--s-success)" : "var(--s-text-secondary)",
+                              background: isAdded ? "rgba(16, 185, 129, 0.08)" : "transparent",
+                              borderRadius: "var(--s-radius-sm)",
+                              marginBottom: "4px",
+                              transition: "all 0.15s",
                             }}
-                            title={model.description || model.id}
                           >
-                            <span className="model-name">{model.name || model.id}</span>
+                            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {isAdded && <span style={{ marginRight: "6px" }}>✓</span>}
+                              {model.name || model.id}
+                            </span>
                             {model.context_window && (
-                              <span className="model-context">
+                              <span style={{ fontSize: "0.68rem", color: "var(--s-text-muted)", marginLeft: "8px", marginRight: "8px" }}>
                                 {model.context_window >= 1000000
                                   ? `${(model.context_window / 1000000).toFixed(1)}M`
                                   : `${Math.round(model.context_window / 1000)}K`}
                               </span>
                             )}
-                            <span className="model-action">
-                              {isAdded ? "✓" : "+"}
-                            </span>
+                            <button
+                              onClick={() => {
+                                const currentModels = selectedProvider.models || [];
+                                if (isAdded) {
+                                  // 移除模型
+                                  dispatch({
+                                    type: "UPDATE_PROVIDER",
+                                    id: selectedProvider.id,
+                                    field: "models",
+                                    value: currentModels.filter((m) => m !== model.id),
+                                  });
+                                } else {
+                                  // 添加模型
+                                  dispatch({
+                                    type: "UPDATE_PROVIDER",
+                                    id: selectedProvider.id,
+                                    field: "models",
+                                    value: [...currentModels, model.id],
+                                  });
+                                }
+                              }}
+                              style={{
+                                width: "24px",
+                                height: "24px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                background: isAdded ? "rgba(239, 68, 68, 0.15)" : "rgba(16, 185, 129, 0.15)",
+                                border: `1px solid ${isAdded ? "rgba(239, 68, 68, 0.3)" : "rgba(16, 185, 129, 0.3)"}`,
+                                borderRadius: "50%",
+                                color: isAdded ? "var(--s-danger)" : "var(--s-success)",
+                                cursor: "pointer",
+                                fontSize: "0.9rem",
+                                fontWeight: 700,
+                                flexShrink: 0,
+                                transition: "all 0.15s",
+                              }}
+                              title={isAdded ? "移除模型" : "添加模型"}
+                            >
+                              {isAdded ? "−" : "+"}
+                            </button>
                           </div>
                         );
                       })}
-                      {providerModels[selectedProvider.id].length > 20 && (
-                        <div className="models-more">
-                          还有 {providerModels[selectedProvider.id].length - 20} 个模型...
-                        </div>
-                      )}
                     </div>
                   </div>
                 )}
@@ -519,9 +733,9 @@ export const ConnectionSection = memo(function ConnectionSection({
             </>
           ) : (
             <div className="empty-state">
-              <div className="empty-icon">👈</div>
-              <p>选择左侧服务商进行编辑</p>
-              <p className="hint">或点击添加按钮创建新的服务商配置</p>
+              <div className="empty-state-icon">👈</div>
+              <div className="empty-state-title">选择左侧服务商进行编辑</div>
+              <div className="empty-state-desc">或点击添加按钮创建新的服务商配置</div>
             </div>
           )}
         </div>

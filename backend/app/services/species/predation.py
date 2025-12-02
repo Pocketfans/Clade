@@ -737,6 +737,132 @@ class PredationService:
             "total_links": len(links),
         }
     
+    def build_regional_food_web(
+        self,
+        all_species: Sequence[Species],
+        tile_ids: set[int] | list[int] | None = None,
+        species_tiles: dict[str, set[int]] | None = None,
+    ) -> dict:
+        """构建区域食物网数据（只包含指定区域内的物种和关系）
+        
+        【生物学原理】
+        不同区域的食物网结构可能不同：
+        - 同一物种在不同区域可能有不同的猎物（因为猎物分布不同）
+        - 区域内的捕食关系取决于哪些物种共存于该区域
+        
+        Args:
+            all_species: 所有物种列表
+            tile_ids: 要查询的地块ID集合（None表示全局）
+            species_tiles: {species_code: set(tile_ids)} 物种→地块映射
+            
+        Returns:
+            区域食物网数据（结构同 build_food_web，但只包含区域内的物种）
+        """
+        alive_species = [s for s in all_species if s.status == "alive"]
+        
+        # 如果没有指定区域，返回全局食物网
+        if tile_ids is None or species_tiles is None:
+            return self.build_food_web(all_species)
+        
+        tile_ids_set = set(tile_ids) if isinstance(tile_ids, list) else tile_ids
+        
+        # 筛选出在指定区域内有分布的物种
+        regional_species = []
+        for sp in alive_species:
+            sp_tiles = species_tiles.get(sp.lineage_code, set())
+            # 物种在目标区域内有分布
+            if sp_tiles & tile_ids_set:
+                regional_species.append(sp)
+        
+        if not regional_species:
+            return {
+                "nodes": [],
+                "links": [],
+                "keystone_species": [],
+                "trophic_levels": {},
+                "total_species": 0,
+                "total_links": 0,
+                "region_tile_count": len(tile_ids_set),
+            }
+        
+        species_map = {s.lineage_code: s for s in regional_species}
+        
+        nodes = []
+        links = []
+        predator_counts = defaultdict(int)
+        
+        # 构建节点
+        for sp in regional_species:
+            # 统计该物种在**区域内**被多少捕食者依赖
+            for other in regional_species:
+                if sp.lineage_code in (other.prey_species or []):
+                    predator_counts[sp.lineage_code] += 1
+            
+            # 计算物种在该区域的种群（而非全球种群）
+            sp_tiles = species_tiles.get(sp.lineage_code, set())
+            regional_tiles = sp_tiles & tile_ids_set
+            # 简化：按地块比例估算区域种群
+            total_tiles = len(sp_tiles) if sp_tiles else 1
+            regional_ratio = len(regional_tiles) / total_tiles
+            regional_pop = int(sp.morphology_stats.get("population", 0) * regional_ratio)
+            
+            node = {
+                "id": sp.lineage_code,
+                "name": sp.common_name,
+                "trophic_level": sp.trophic_level,
+                "population": regional_pop,  # 区域种群，不是全球种群
+                "global_population": sp.morphology_stats.get("population", 0),
+                "diet_type": sp.diet_type,
+                "habitat_type": sp.habitat_type,
+                "prey_count": len(sp.prey_species or []),
+                "predator_count": 0,
+                "tile_count": len(regional_tiles),  # 该物种在区域内占据的地块数
+            }
+            nodes.append(node)
+        
+        # 更新被捕食数量
+        for node in nodes:
+            node["predator_count"] = predator_counts[node["id"]]
+        
+        # 构建链接（只包含区域内双方都存在的捕食关系）
+        for sp in regional_species:
+            for prey_code in (sp.prey_species or []):
+                # 只有当猎物也在区域内时，才建立链接
+                if prey_code in species_map:
+                    prey = species_map[prey_code]
+                    preference = (sp.prey_preferences or {}).get(prey_code, 0.5)
+                    
+                    links.append({
+                        "source": prey_code,
+                        "target": sp.lineage_code,
+                        "value": preference,
+                        "predator_name": sp.common_name,
+                        "prey_name": prey.common_name,
+                    })
+        
+        # 识别区域内的关键物种
+        keystone_species = [
+            code for code, count in predator_counts.items()
+            if count >= 2  # 区域内标准可以低一点
+        ]
+        
+        # 营养级统计
+        trophic_levels = defaultdict(list)
+        for sp in regional_species:
+            level = int(sp.trophic_level)
+            trophic_levels[level].append(sp.lineage_code)
+        
+        return {
+            "nodes": nodes,
+            "links": links,
+            "keystone_species": keystone_species,
+            "trophic_levels": dict(trophic_levels),
+            "total_species": len(regional_species),
+            "total_links": len(links),
+            "region_tile_count": len(tile_ids_set),
+            "is_regional": True,
+        }
+    
     def get_species_food_chain(
         self,
         species: Species,

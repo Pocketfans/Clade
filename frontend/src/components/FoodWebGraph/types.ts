@@ -59,14 +59,14 @@ export interface TrophicColor {
 }
 
 export const TROPHIC_COLORS: Record<number, TrophicColor> = {
-  1: { main: "#22c55e", glow: "rgba(34, 197, 94, 0.5)", name: "生产者" },
-  2: { main: "#eab308", glow: "rgba(234, 179, 8, 0.5)", name: "初级消费者" },
-  3: { main: "#f97316", glow: "rgba(249, 115, 22, 0.5)", name: "次级消费者" },
-  4: { main: "#ef4444", glow: "rgba(239, 68, 68, 0.5)", name: "顶级捕食者" },
+  1: { main: "#10b981", glow: "rgba(16, 185, 129, 0.6)", name: "生产者" },
+  2: { main: "#f59e0b", glow: "rgba(245, 158, 11, 0.6)", name: "初级消费者" },
+  3: { main: "#f97316", glow: "rgba(249, 115, 22, 0.6)", name: "次级消费者" },
+  4: { main: "#ef4444", glow: "rgba(239, 68, 68, 0.6)", name: "顶级捕食者" },
 };
 
 export const KEYSTONE_COLOR = {
   main: "#ec4899",
-  glow: "rgba(236, 72, 153, 0.6)",
+  glow: "rgba(236, 72, 153, 0.7)",
 };
 

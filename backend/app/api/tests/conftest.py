@@ -38,7 +38,6 @@ def mock_container():
     container.species_repository = MagicMock()
     container.species_repository.list_species = MagicMock(return_value=[])
     container.species_repository.get_by_lineage = MagicMock(return_value=None)
-    container.species_repository.get_watchlist = MagicMock(return_value=[])
     
     container.environment_repository = MagicMock()
     container.history_repository = MagicMock()
@@ -79,5 +78,6 @@ def mock_session():
     session.set_running = MagicMock()
     session.pop_pressure = MagicMock(return_value=None)
     return session
+
 
 

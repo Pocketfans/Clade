@@ -1,17 +1,10 @@
 /**
- * SettingsDrawer 通用组件导出
+ * 通用组件导出
  */
 
+// 旧版组件 (兼容)
+export * from "./FormControls";
 export { NavButton } from "./NavButton";
-export {
-  ToggleRow,
-  SliderRow,
-  NumberInput,
-  SelectRow,
-  TextInput,
-  SectionCard,
-  ConfigGroup,
-  ActionButton,
-} from "./FormControls";
 
-
+// 新版组件
+export * from "./Controls";

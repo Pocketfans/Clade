@@ -1,12 +1,12 @@
 /**
- * AutosaveSection - 自动存档配置
+ * AutosaveSection - 自动存档配置 (全新设计)
  */
 
 import { memo, type Dispatch } from "react";
 import type { SettingsAction } from "../types";
-import { SectionCard, ToggleRow, NumberInput } from "../common";
+import { SectionHeader, Card, ToggleRow, NumberInput, InfoBox } from "../common/Controls";
 
-interface AutosaveSectionProps {
+interface Props {
   autosaveEnabled: boolean;
   autosaveInterval: number;
   autosaveMaxSlots: number;
@@ -18,21 +18,21 @@ export const AutosaveSection = memo(function AutosaveSection({
   autosaveInterval,
   autosaveMaxSlots,
   dispatch,
-}: AutosaveSectionProps) {
+}: Props) {
   const handleUpdate = (field: string, value: unknown) => {
     dispatch({ type: "UPDATE_GLOBAL", field, value });
   };
 
   return (
-    <div className="settings-section">
-      <div className="section-header-bar">
-        <div>
-          <h2>💾 自动存档</h2>
-          <p className="section-subtitle">配置游戏进度的自动保存策略</p>
-        </div>
-      </div>
+    <div className="section-page">
+      <SectionHeader
+        icon="💾"
+        title="自动存档"
+        subtitle="配置游戏进度的自动保存策略"
+      />
 
-      <SectionCard title="自动存档设置" icon="⚙️" desc="控制自动保存的行为">
+      {/* 自动存档设置 */}
+      <Card title="自动存档设置" icon="⚙️" desc="控制自动保存的行为">
         <ToggleRow
           label="启用自动存档"
           desc="每隔一定回合数自动保存游戏进度"
@@ -63,25 +63,46 @@ export const AutosaveSection = memo(function AutosaveSection({
           suffix="个"
           disabled={!autosaveEnabled}
         />
-      </SectionCard>
+      </Card>
 
-      <SectionCard title="存档说明" icon="📋">
-        <div className="info-box">
-          <p>
-            🔹 自动存档会在每次回合结束后检查是否需要保存
-          </p>
-          <p>
-            🔹 自动存档文件命名格式：<code>autosave_N_日期时间</code>
-          </p>
-          <p>
-            🔹 自动存档不会覆盖手动存档，两者独立管理
-          </p>
-          <p>
-            🔹 建议保留至少 2 个自动存档槽位以防数据损坏
-          </p>
+      {/* 存档说明 */}
+      <Card title="存档说明" icon="📋">
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          {[
+            { icon: "🔹", text: "自动存档会在每次回合结束后检查是否需要保存" },
+            { icon: "🔹", text: "自动存档文件命名格式：autosave_N_日期时间" },
+            { icon: "🔹", text: "自动存档不会覆盖手动存档，两者独立管理" },
+            { icon: "🔹", text: "建议保留至少 2 个自动存档槽位以防数据损坏" },
+          ].map((item, idx) => (
+            <div
+              key={idx}
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "10px",
+                fontSize: "0.88rem",
+                color: "var(--s-text-secondary)",
+                lineHeight: 1.6,
+              }}
+            >
+              <span style={{ color: "var(--s-accent)", flexShrink: 0 }}>{item.icon}</span>
+              <span>{item.text}</span>
+            </div>
+          ))}
         </div>
-      </SectionCard>
+      </Card>
+
+      {/* 存档位置提示 */}
+      <InfoBox variant="info" title="存档位置">
+        存档文件保存在 <code style={{
+          background: "rgba(0, 0, 0, 0.3)",
+          padding: "2px 6px",
+          borderRadius: "4px",
+          fontFamily: "var(--s-font-mono)",
+          fontSize: "0.85rem",
+          color: "var(--s-accent)",
+        }}>data/saves/</code> 目录下，可以手动备份或复制到其他设备。
+      </InfoBox>
     </div>
   );
 });
-

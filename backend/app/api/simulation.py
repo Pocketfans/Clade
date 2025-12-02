@@ -48,6 +48,7 @@ from .dependencies import (
     require_not_running,
 )
 from .pressure_templates import PRESSURE_TEMPLATES
+from .species import get_watchlist
 
 if TYPE_CHECKING:
     from ..core.container import ServiceContainer
@@ -122,7 +123,7 @@ def _perform_autosave(
         logger.info(f"[自动保存] 成功保存: {autosave_name}")
         
         # 清理旧的自动保存
-        _cleanup_old_autosaves(save_name, config.autosave_slots, container)
+        _cleanup_old_autosaves(save_name, config.autosave_max_slots, container)
         return True
     except Exception as e:
         logger.error(f"[自动保存] 保存失败: {e}")
@@ -166,7 +167,7 @@ def get_queue_status(
     return ActionQueueStatus(
         queued_rounds=len(queue),
         running=session.is_running,
-        preview=preview,
+        queue_preview=preview,
     )
 
 
@@ -185,7 +186,7 @@ def add_to_queue(
     return ActionQueueStatus(
         queued_rounds=len(queue),
         running=session.is_running,
-        preview=preview,
+        queue_preview=preview,
     )
 
 
@@ -199,7 +200,7 @@ def clear_queue(
     return ActionQueueStatus(
         queued_rounds=0,
         running=session.is_running,
-        preview=[],
+        queue_preview=[],
     )
 
 
@@ -231,7 +232,7 @@ async def run_turns(
         
         # 处理压力队列
         engine = container.simulation_engine
-        engine.update_watchlist(container.species_repository.get_watchlist())
+        engine.update_watchlist(get_watchlist())
         
         pressures = list(command.pressures)
         if not pressures:
@@ -586,9 +587,10 @@ async def save_game(
 ) -> dict:
     """保存当前游戏状态"""
     try:
-        history_repo = container.history_repository
-        logs = history_repo.list_turns(limit=1)
-        turn_index = logs[0].turn_index if logs else 0
+        # 使用 turn_counter（下一个要执行的回合）而非历史记录的 turn_index
+        # turn_counter 表示"已完成的回合数"，即下一个要执行的回合索引
+        engine = container.simulation_engine
+        turn_index = engine.turn_counter
         
         container.save_manager.save_game(request.save_name, turn_index=turn_index)
         

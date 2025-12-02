@@ -198,6 +198,23 @@ class SimulationSessionManager:
         """获取事件队列"""
         return self._events
     
+    # 事件类型映射：后端类型 -> 前端期望类型
+    _EVENT_TYPE_MAP = {
+        "start": "turn_started",
+        "complete": "turn_completed",
+        "turn_complete": "turn_completed",
+        "speciation": "species_created",
+        "extinction": "species_extinct",
+        "energy": "energy_changed",
+        "achievement": "achievement_unlocked",
+        "error": "error",
+        # 保留原始类型的映射
+        "pressure": "pressure",
+        "info": "info",
+        "warn": "warn",
+        "success": "success",
+    }
+    
     def push_event(
         self, 
         event_type: str, 
@@ -214,6 +231,15 @@ class SimulationSessionManager:
             category: 事件分类
             force: 是否强制推送（绕过队列满检查）
             **extra: 额外数据
+            
+        Note:
+            事件类型会自动映射为前端期望的格式：
+            - start -> turn_started
+            - complete/turn_complete -> turn_completed
+            - speciation -> species_created
+            - extinction -> species_extinct
+            - energy -> energy_changed
+            - achievement -> achievement_unlocked
         """
         import time
         
@@ -221,11 +247,16 @@ class SimulationSessionManager:
         if not force and self._events.qsize() > 1000:
             return
         
+        # 映射事件类型为前端期望的格式
+        mapped_type = self._EVENT_TYPE_MAP.get(event_type, event_type)
+        
         event = {
-            "type": event_type,
+            "type": mapped_type,
+            "original_type": event_type,  # 保留原始类型供调试
             "message": message,
             "category": category,
             "timestamp": time.time(),
+            "data": extra.get("data", {}),  # 前端期望的 data 字段
             **extra
         }
         

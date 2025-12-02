@@ -630,6 +630,17 @@ class HybridizationService:
                 mixed[key] = val1
                 continue
             
+            # 【修复】跳过非数字类型的字段
+            if not isinstance(val1, (int, float)) or not isinstance(val2, (int, float)):
+                # 如果有一个是数字，使用数字；否则使用 val1
+                if isinstance(val1, (int, float)):
+                    mixed[key] = val1
+                elif isinstance(val2, (int, float)):
+                    mixed[key] = val2
+                else:
+                    mixed[key] = val1  # 都是字符串，保留 p1 的值
+                continue
+            
             if key == "population":
                 # 杂交种初始种群较小（建群困难）
                 mixed[key] = int(min(val1, val2) * 0.3)

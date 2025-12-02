@@ -8,7 +8,7 @@
  * - 覆盖层（族谱、年鉴、生态位、食物网）
  */
 
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState, useCallback } from "react";
 import type {
   TurnReport,
   LineageTree,
@@ -102,11 +102,13 @@ interface ModalsLayerProps {
   
   // 回调
   onCloseOverlay: () => void;
+  onOpenModal: (modal: keyof ModalState) => void;
   onCloseModal: (modal: keyof ModalState) => void;
   onClearError: () => void;
   onRetryLineage: () => void;
   onSelectSpecies: (id: string) => void;
   onExecuteTurn: (drafts: PressureDraft[]) => void;
+  onBatchExecute: (rounds: number, pressures: PressureDraft[], randomEnergy: number) => void;
   onQueueAdd: (drafts: PressureDraft[], rounds: number) => void;
   onSaveConfig: (config: UIConfig) => Promise<void>;
   onRefreshMap: () => void;
@@ -136,11 +138,13 @@ export function ModalsLayer({
   settingsInitialView,
   pendingAchievement,
   onCloseOverlay,
+  onOpenModal,
   onCloseModal,
   onClearError,
   onRetryLineage,
   onSelectSpecies,
   onExecuteTurn,
+  onBatchExecute,
   onQueueAdd,
   onSaveConfig,
   onRefreshMap,
@@ -151,6 +155,20 @@ export function ModalsLayer({
   onDismissAchievement,
 }: ModalsLayerProps) {
   const previousReport = reports.length > 1 ? reports[reports.length - 2] : null;
+
+  // 压力列表状态管理
+  const [pendingPressures, setPendingPressures] = useState<PressureDraft[]>([]);
+
+  // 处理压力变更
+  const handlePressureChange = useCallback((next: PressureDraft[]) => {
+    setPendingPressures(next);
+  }, []);
+
+  // 处理压力模态窗关闭时清空列表
+  const handlePressureModalClose = useCallback(() => {
+    setPendingPressures([]);
+    onCloseModal("pressure");
+  }, [onCloseModal]);
 
   return (
     <Suspense fallback={<ModalFallback />}>
@@ -276,13 +294,13 @@ export function ModalsLayer({
       {/* 压力模态窗 */}
       {modals.pressure && (
         <PressureModal
-          pressures={[]}
+          pressures={pendingPressures}
           templates={pressureTemplates}
-          onChange={() => {}}
+          onChange={handlePressureChange}
           onQueue={onQueueAdd}
           onExecute={onExecuteTurn}
-          onBatchExecute={() => {}}
-          onClose={() => onCloseModal("pressure")}
+          onBatchExecute={onBatchExecute}
+          onClose={handlePressureModalClose}
         />
       )}
 
@@ -308,6 +326,7 @@ export function ModalsLayer({
           onLoadGame={onLoadGame}
           onOpenAISettings={() => {
             onCloseModal("gameSettings");
+            onOpenModal("settings");
           }}
         />
       )}

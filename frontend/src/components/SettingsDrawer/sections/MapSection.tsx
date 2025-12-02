@@ -1,14 +1,14 @@
 /**
- * MapSection - 地图环境配置
+ * MapSection - 地图环境配置 (全新设计)
  */
 
 import { memo, type Dispatch } from "react";
 import type { MapEnvironmentConfig } from "@/services/api.types";
 import type { SettingsAction } from "../types";
-import { SectionCard, ConfigGroup, SliderRow, NumberInput, ToggleRow, ActionButton } from "../common";
+import { SectionHeader, Card, ConfigGroup, SliderRow, NumberInput, ToggleRow, ActionButton } from "../common/Controls";
 import { DEFAULT_MAP_ENVIRONMENT_CONFIG } from "../constants";
 
-interface MapSectionProps {
+interface Props {
   config: MapEnvironmentConfig;
   dispatch: Dispatch<SettingsAction>;
 }
@@ -16,7 +16,7 @@ interface MapSectionProps {
 export const MapSection = memo(function MapSection({
   config,
   dispatch,
-}: MapSectionProps) {
+}: Props) {
   const handleUpdate = (updates: Partial<MapEnvironmentConfig>) => {
     dispatch({ type: "UPDATE_MAP_ENV", updates });
   };
@@ -28,85 +28,91 @@ export const MapSection = memo(function MapSection({
   const c = { ...DEFAULT_MAP_ENVIRONMENT_CONFIG, ...config };
 
   return (
-    <div className="settings-section">
-      <div className="section-header-bar">
-        <div>
-          <h2>🗺️ 地图环境配置</h2>
-          <p className="section-subtitle">控制地图气候、地形和灾害事件</p>
+    <div className="section-page">
+      <SectionHeader
+        icon="🗺️"
+        title="地图环境配置"
+        subtitle="控制地图气候、地形和灾害事件的参数"
+        actions={<ActionButton label="恢复默认" onClick={handleReset} variant="ghost" icon="↻" />}
+      />
+
+      {/* 气候偏移 */}
+      <Card title="气候偏移" icon="🌡️" desc="全局气候参数调整">
+        <div className="card-grid">
+          <SliderRow
+            label="全局温度偏移"
+            value={c.global_temperature_offset ?? 0}
+            min={-10}
+            max={10}
+            step={0.5}
+            onChange={(v) => handleUpdate({ global_temperature_offset: v })}
+            formatValue={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}°C`}
+          />
+          <SliderRow
+            label="全局湿度偏移"
+            value={c.global_humidity_offset ?? 0}
+            min={-0.3}
+            max={0.3}
+            step={0.05}
+            onChange={(v) => handleUpdate({ global_humidity_offset: v })}
+            formatValue={(v) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(0)}%`}
+          />
+          <SliderRow
+            label="极端气候频率"
+            value={c.extreme_climate_frequency ?? 0.05}
+            min={0}
+            max={0.2}
+            step={0.01}
+            onChange={(v) => handleUpdate({ extreme_climate_frequency: v })}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+          <SliderRow
+            label="极端气候幅度"
+            value={c.extreme_climate_amplitude ?? 0.3}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={(v) => handleUpdate({ extreme_climate_amplitude: v })}
+          />
         </div>
-        <ActionButton label="恢复默认" onClick={handleReset} variant="secondary" icon="↻" />
-      </div>
+      </Card>
 
-      <SectionCard title="气候偏移" icon="🌡️" desc="全局气候参数调整">
-        <SliderRow
-          label="全局温度偏移"
-          value={c.global_temperature_offset ?? 0}
-          min={-10}
-          max={10}
-          step={0.5}
-          onChange={(v) => handleUpdate({ global_temperature_offset: v })}
-          formatValue={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}°C`}
-        />
-        <SliderRow
-          label="全局湿度偏移"
-          value={c.global_humidity_offset ?? 0}
-          min={-0.3}
-          max={0.3}
-          step={0.05}
-          onChange={(v) => handleUpdate({ global_humidity_offset: v })}
-          formatValue={(v) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(0)}%`}
-        />
-        <SliderRow
-          label="极端气候频率"
-          value={c.extreme_climate_frequency ?? 0.05}
-          min={0}
-          max={0.2}
-          step={0.01}
-          onChange={(v) => handleUpdate({ extreme_climate_frequency: v })}
-          formatValue={(v) => `${(v * 100).toFixed(0)}%`}
-        />
-        <SliderRow
-          label="极端气候幅度"
-          value={c.extreme_climate_amplitude ?? 0.3}
-          min={0}
-          max={1}
-          step={0.05}
-          onChange={(v) => handleUpdate({ extreme_climate_amplitude: v })}
-        />
-      </SectionCard>
+      {/* 海平面与地形 */}
+      <Card title="海平面与地形" icon="🌊" desc="海洋和地形变化">
+        <div className="card-grid">
+          <SliderRow
+            label="海平面偏移"
+            value={c.sea_level_offset ?? 0}
+            min={-50}
+            max={50}
+            step={5}
+            onChange={(v) => handleUpdate({ sea_level_offset: v })}
+            formatValue={(v) => `${v >= 0 ? "+" : ""}${v}m`}
+          />
+          <SliderRow
+            label="海平面变化率"
+            desc="每回合海平面变化"
+            value={c.sea_level_change_rate ?? 0}
+            min={-1}
+            max={1}
+            step={0.1}
+            onChange={(v) => handleUpdate({ sea_level_change_rate: v })}
+            formatValue={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}m/回合`}
+          />
+          <SliderRow
+            label="地形侵蚀率"
+            value={c.terrain_erosion_rate ?? 0.01}
+            min={0}
+            max={0.1}
+            step={0.005}
+            onChange={(v) => handleUpdate({ terrain_erosion_rate: v })}
+            formatValue={(v) => `${(v * 100).toFixed(1)}%`}
+          />
+        </div>
+      </Card>
 
-      <SectionCard title="海平面与地形" icon="🌊" desc="海洋和地形变化">
-        <SliderRow
-          label="海平面偏移"
-          value={c.sea_level_offset ?? 0}
-          min={-50}
-          max={50}
-          step={5}
-          onChange={(v) => handleUpdate({ sea_level_offset: v })}
-          formatValue={(v) => `${v >= 0 ? "+" : ""}${v}m`}
-        />
-        <SliderRow
-          label="海平面变化率"
-          desc="每回合海平面变化"
-          value={c.sea_level_change_rate ?? 0}
-          min={-1}
-          max={1}
-          step={0.1}
-          onChange={(v) => handleUpdate({ sea_level_change_rate: v })}
-          formatValue={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}m/回合`}
-        />
-        <SliderRow
-          label="地形侵蚀率"
-          value={c.terrain_erosion_rate ?? 0.01}
-          min={0}
-          max={0.1}
-          step={0.005}
-          onChange={(v) => handleUpdate({ terrain_erosion_rate: v })}
-          formatValue={(v) => `${(v * 100).toFixed(1)}%`}
-        />
-      </SectionCard>
-
-      <SectionCard title="生物群系承载力" icon="🏞️" desc="不同生物群系的承载力倍数">
+      {/* 生物群系承载力 */}
+      <Card title="生物群系承载力" icon="🏞️" desc="不同生物群系的承载力倍数">
         <ConfigGroup title="陆地生物群系">
           <SliderRow
             label="热带雨林"
@@ -175,9 +181,10 @@ export const MapSection = memo(function MapSection({
             formatValue={(v) => `×${v.toFixed(1)}`}
           />
         </ConfigGroup>
-      </SectionCard>
+      </Card>
 
-      <SectionCard title="地质灾害" icon="🌋" desc="自然灾害的频率和强度">
+      {/* 地质灾害 */}
+      <Card title="地质灾害" icon="🌋" desc="自然灾害的频率和强度">
         <ConfigGroup title="火山">
           <SliderRow
             label="频率"
@@ -261,68 +268,73 @@ export const MapSection = memo(function MapSection({
             formatValue={(v) => `${(v * 100).toFixed(1)}%`}
           />
         </ConfigGroup>
-      </SectionCard>
+      </Card>
 
-      <SectionCard title="密度惩罚" icon="👥" desc="地块过度拥挤的惩罚">
-        <SliderRow
-          label="同地块密度惩罚"
-          value={c.same_tile_density_penalty ?? 0.15}
-          min={0}
-          max={0.5}
-          step={0.01}
-          onChange={(v) => handleUpdate({ same_tile_density_penalty: v })}
-        />
-        <SliderRow
-          label="过度拥挤阈值"
-          value={c.overcrowding_threshold ?? 0.7}
-          min={0.3}
-          max={1}
-          step={0.05}
-          onChange={(v) => handleUpdate({ overcrowding_threshold: v })}
-        />
-        <SliderRow
-          label="拥挤惩罚上限"
-          value={c.overcrowding_max_penalty ?? 0.4}
-          min={0}
-          max={1}
-          step={0.05}
-          onChange={(v) => handleUpdate({ overcrowding_max_penalty: v })}
-        />
-      </SectionCard>
+      {/* 密度惩罚 */}
+      <Card title="密度惩罚" icon="👥" desc="地块过度拥挤的惩罚">
+        <div className="card-grid">
+          <SliderRow
+            label="同地块密度惩罚"
+            value={c.same_tile_density_penalty ?? 0.15}
+            min={0}
+            max={0.5}
+            step={0.01}
+            onChange={(v) => handleUpdate({ same_tile_density_penalty: v })}
+          />
+          <SliderRow
+            label="过度拥挤阈值"
+            value={c.overcrowding_threshold ?? 0.7}
+            min={0.3}
+            max={1}
+            step={0.05}
+            onChange={(v) => handleUpdate({ overcrowding_threshold: v })}
+          />
+          <SliderRow
+            label="拥挤惩罚上限"
+            value={c.overcrowding_max_penalty ?? 0.4}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={(v) => handleUpdate({ overcrowding_max_penalty: v })}
+          />
+        </div>
+      </Card>
 
-      <SectionCard title="地图叠加层" icon="🗺️" desc="可视化热力图开关">
-        <ToggleRow
-          label="资源热力图"
-          checked={c.show_resource_overlay ?? false}
-          onChange={(v) => handleUpdate({ show_resource_overlay: v })}
-        />
-        <ToggleRow
-          label="猎物丰度图"
-          checked={c.show_prey_overlay ?? false}
-          onChange={(v) => handleUpdate({ show_prey_overlay: v })}
-        />
-        <ToggleRow
-          label="宜居度热力图"
-          checked={c.show_suitability_overlay ?? false}
-          onChange={(v) => handleUpdate({ show_suitability_overlay: v })}
-        />
-        <ToggleRow
-          label="竞争压力图"
-          checked={c.show_competition_overlay ?? false}
-          onChange={(v) => handleUpdate({ show_competition_overlay: v })}
-        />
-        <ToggleRow
-          label="温度分布图"
-          checked={c.show_temperature_overlay ?? false}
-          onChange={(v) => handleUpdate({ show_temperature_overlay: v })}
-        />
-        <ToggleRow
-          label="湿度分布图"
-          checked={c.show_humidity_overlay ?? false}
-          onChange={(v) => handleUpdate({ show_humidity_overlay: v })}
-        />
-      </SectionCard>
+      {/* 地图叠加层 */}
+      <Card title="地图叠加层" icon="🗺️" desc="可视化热力图开关">
+        <div className="card-grid">
+          <ToggleRow
+            label="资源热力图"
+            checked={c.show_resource_overlay ?? false}
+            onChange={(v) => handleUpdate({ show_resource_overlay: v })}
+          />
+          <ToggleRow
+            label="猎物丰度图"
+            checked={c.show_prey_overlay ?? false}
+            onChange={(v) => handleUpdate({ show_prey_overlay: v })}
+          />
+          <ToggleRow
+            label="宜居度热力图"
+            checked={c.show_suitability_overlay ?? false}
+            onChange={(v) => handleUpdate({ show_suitability_overlay: v })}
+          />
+          <ToggleRow
+            label="竞争压力图"
+            checked={c.show_competition_overlay ?? false}
+            onChange={(v) => handleUpdate({ show_competition_overlay: v })}
+          />
+          <ToggleRow
+            label="温度分布图"
+            checked={c.show_temperature_overlay ?? false}
+            onChange={(v) => handleUpdate({ show_temperature_overlay: v })}
+          />
+          <ToggleRow
+            label="湿度分布图"
+            checked={c.show_humidity_overlay ?? false}
+            onChange={(v) => handleUpdate({ show_humidity_overlay: v })}
+          />
+        </div>
+      </Card>
     </div>
   );
 });
-

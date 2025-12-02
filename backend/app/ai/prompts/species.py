@@ -333,10 +333,30 @@ SPECIES_PROMPTS = {
 - 增加木质化 → 降低繁殖速度
 - 发展根系 → 降低散布能力
 
+=== 命名规则（重要！）===
+名字应像真实生物那样"有依据"，给人"可能真实存在"的感觉。以下为参考，可自由组合创造！
+
+【拉丁学名】保留属名，种加词用拉丁/希腊词根体现特征（可自由组合词根）：
+- 地理：borealis(北)、australis(南)、montanus(山)、fluvialis(河)、oceanicus(洋)、lacustris(湖)、insularis(岛)、orientalis(东)
+- 形态：longus(长)、brevis(短)、crassus(厚)、gracilis(细长)、spinosus(多刺)、pinnatus(鳍状)、cornuta(有角)、squamosus(鳞片)、barbatus(有须)
+- 颜色：ruber/rubra(红)、niger(黑)、albus/alba(白)、viridis(绿)、aureus(金)、caeruleus(蓝)、griseus(灰)、maculatus(斑点)
+- 生态：noctis(夜)、abyssalis(深渊)、thermalis(热泉)、glacialis(冰川)、fossoria(穴居)、pelagicus(远洋)、littoralis(沿岸)
+- 行为：velox(快速)、vorax(贪食)、raptor(掠食)、errans(漫游)、natans(游泳)、volans(飞行)
+- 组合示例：Aurecosteus(金肋)、Cryopinna(冰鳍)、Talpaptera(掘翼)、Abyssognathus(深渊颌)、Nivalisaurus(雪蜥)
+
+【中文俗名】自然、有画面感、有叙述性（4-8字）：
+- 可用环境意象：风崖、暮林、霜岭、赤湾、玄渊、碧潭、烟谷、云脊、寒泽、焰原、幽谷、晨滩、雾沼、断崖、深壑、荒漠、冰原...
+- 可用形态特征：长鳍、厚甲、弯棘、尖吻、阔口、细足、羽鳍、裂唇、环纹、刺背、扁躯、盘尾...
+- 可用行为习性：潜沙、逐雾、碎岩、钻泥、追波、伏底、漂游、穴居、攀岩、滑翔...
+- 可用类群后缀：—鱼、—虫、—兽、—螈、—蜥、—蟹、—贝、—龙、—鳗、—鸟、—蛾...
+- 示例：风崖长鳍鱼、暮林攀枝兽、霜岭游鹿、玄渊盲螈、碧潭钻泥蟹、焰原厚甲蜥、云脊滑翔蛾
+- 避免：搞笑/卡通化/纯音译/无意义随机组合
+- 目标：读起来自然、有生态画面感、像真实物种名
+
 === 任务 ===
 生成新物种的**创意性内容**：
-1. 拉丁学名（保留属名，种加词用拉丁词根体现特征）
-2. 中文俗名（特征词+类群名）
+1. 拉丁学名（按上述规则）
+2. 中文俗名（自然有画面感）
 3. 120-180字生物学描述（必须包含食性和栖息环境！）
 4. 关键演化创新点
 5. 分化事件摘要和原因
@@ -380,9 +400,9 @@ SPECIES_PROMPTS = {
 
 === 示例1：动物分化（父系器官sensory当前阶段=1，草食性，猎物为A1）===
 {{
-    "latin_name": "Protoflagella ocularis",
-    "common_name": "眼点鞭毛虫",
-    "description": "浅海环境促使感光点内陷形成眼凹结构，提高光线方向感知能力。繁殖速度下降以维持复杂感觉结构。主要滤食蓝藻A1，栖息于阳光充足的浅海。",
+    "latin_name": "Protoflagella oculocava",
+    "common_name": "碧潭凹眼虫",
+    "description": "浅海环境促使感光点内陷形成眼凹结构，提高光线方向感知能力。繁殖速度下降以维持复杂感觉结构。主要滤食蓝藻A1，栖息于阳光充足的浅海礁区。",
     "habitat_type": "marine",
     "trophic_level": 2.0,
     "diet_type": "herbivore",
@@ -401,8 +421,8 @@ SPECIES_PROMPTS = {
 
 === 示例2：🌱植物分化（阶段2群体藻类，保水能力=5.2，耐旱性=4.5，准备登陆）===
 {{
-    "latin_name": "Bryophytella primordialis",
-    "common_name": "原始苔藓体",
+    "latin_name": "Bryophytella littoricola",
+    "common_name": "潮岩先锋苔",
     "description": "首批登陆的植物先驱，从潮间带向内陆扩展。发展出原始角质层减少水分散失，假根固着于岩石缝隙。作为自养生产者，光合效率略降，但获得了陆地生存的关键能力。",
     "habitat_type": "coastal",
     "trophic_level": 1.0,
@@ -555,13 +575,19 @@ SPECIES_PROMPTS = {
     ]
 }}
 
+=== 🏷️ 命名规则 ===
+名字要有依据、自然、像真实物种。可自由组合创造！
+【拉丁学名】用词根组合：地理(borealis/montanus/abyssalis)、形态(longus/spinosus/pinnatus)、颜色(ruber/aureus/niger)、生态(thermalis/glacialis/noctis)、行为(velox/vorax/natans)
+【中文俗名】有画面感：[环境意象]+[形态/行为]+[类群]，如"风崖长鳍鱼"、"玄渊盲螈"、"霜岭游鹿"
+- ❌ 避免搞笑/卡通化/无意义组合
+
 === 示例（父系sensory=1, locomotion=0）===
 {{
     "results": [
         {{
             "request_id": "0",
-            "latin_name": "Protoflagella ocularis",
-            "common_name": "眼点鞭毛虫",
+            "latin_name": "Protoflagella oculocava",
+            "common_name": "碧潭凹眼虫",
             "description": "浅海光照促使感光点内陷形成眼凹结构，繁殖速度下降以维持感觉器官。",
             "habitat_type": "marine",
             "trophic_level": 2.0,
@@ -684,13 +710,15 @@ SPECIES_PROMPTS = {
 === 杂交物种命名规则 ===
 1. **拉丁学名**：使用 "Genus × epithet" 格式
    - 属名继承自亲本A
-   - 种加词应反映杂交特征，可组合双亲种加词的词根
-   - 例如：亲本 "Protoflagella marina" × "Protoflagella thermalis" → "Protoflagella × maritherm"
+   - 种加词融合双亲特征，可组合词根或创造新词
+   - 组合方式：marina+thermalis→marithermis、glacialis+tropicus→cryotropicus
+   - 示例：Protoflagella × halothermis（盐热）、× cryofervens（冷热）、× pelagoabyssalis（远洋深渊）
    
-2. **中文俗名**：简洁明了，体现杂交特征
-   - 格式：[核心特征]杂交种 或 [亲本简称]杂种
-   - 例如："海热杂交鞭毛虫" 或 "鞭毛杂交种"
-   - 不要太长，最多8个字
+2. **中文俗名**：自然有画面感，体现双亲特征融合（4-8字）
+   - 可用格式：[融合特征]+[类群]、[环境]+中间型/杂合[类群]
+   - 示例："盐热间型虫"、"冰火杂合螈"、"浅深过渡鱼"、"岩沙混栖蟹"
+   - ✅ 目标：让人一眼看出是两种生态型的杂交
+   - ❌ 避免：搞笑化、纯音译、无意义组合
 
 === 杂交遗传规则 ===
 1. **杂交优势**：某些特质可能超过双亲（但需权衡）
@@ -719,8 +747,8 @@ SPECIES_PROMPTS = {
 亲本A：海洋鞭毛虫（耐盐性高）
 亲本B：热泉鞭毛虫（耐热性高）
 {{
-    "latin_name": "Protoflagella × halotherm",
-    "common_name": "海热杂交虫",
+    "latin_name": "Protoflagella × halothermis",
+    "common_name": "盐热间型虫",
     "description": "海洋鞭毛虫与热泉鞭毛虫的杂交后代，继承了双亲的环境耐受特征。具有较高的耐盐性和耐热性，能够在热泉口附近的高盐度热水中生存。但繁殖速度较双亲均有所下降，杂交优势主要体现在环境适应范围的扩大上。",
     "habitat_type": "marine",
     "trophic_level": 2.0,
@@ -769,10 +797,15 @@ SPECIES_PROMPTS = {
 === 设计指南 ===
 
 1. **命名创意**：
-   - 拉丁学名：× Chimera [组合词] 或 创造性的嵌合名称
-   - 中文俗名：有趣、形象、可能带有玩梗性质
-   - 例如：猫 × 人 → "× Chimera felinohomo" / "猫娘" 或 "喵人"
-   - 例如：鱼 × 鸟 → "× Chimera aquavolans" / "飞鱼精" 或 "鱼翼兽"
+   - 拉丁学名：× Chimera [组合拉丁词根]，保持科学感
+   - 词根组合：felis(猫)+anthropus(人)、ichthys(鱼)+pteron(翼)、serpens(蛇)+pes(足)
+   - 中文俗名：形象、有画面感，可带诗意或神话感（4-8字）
+   - 命名灵感：环境+融合特征、神话意象、形态描写
+   - 例如：猫科×灵长 → "× Chimera felinanthropus" / "月影猫人"、"暮林灵猫"
+   - 例如：鱼×鸟 → "× Chimera ichthyoptera" / "翔鳍兽"、"破浪飞鱼"
+   - 例如：蛇×蜥蜴 → "× Chimera serpentilacerta" / "游沙鳞蛇"
+   - ✅ 目标：独特但不荒诞，像神话/科幻中可能存在的生物
+   - ❌ 避免：纯搞笑/网络梗/过度卡通化
 
 2. **外形设计**：
    - 融合双亲最具特色的外形特征
@@ -812,15 +845,15 @@ SPECIES_PROMPTS = {
 
 === 创意示例 ===
 
-【示例1：猫 × 人类智慧生物】
+【示例1：猫科 × 灵长类】
 {{
     "latin_name": "× Chimera felinanthropus",
-    "common_name": "猫娘",
-    "description": "基因工程的奇迹产物，融合了猫科动物的敏捷优雅与人类的智慧。拥有人形身体、猫耳和猫尾，瞳孔在光线变化时会收缩成猫眼形态。继承了猫的夜视能力、敏锐听觉和惊人的反射神经，同时保留了人类的语言能力和社交智慧。性格傲娇，喜欢被抚摸但绝不会主动承认。然而基因不稳定导致其寿命较短，且对某些疾病抵抗力弱。",
-    "appearance": "人形身躯覆有细软绒毛，头顶一对三角猫耳会随情绪转动，身后长尾巴表达心情。竖瞳在暗处发出微光。",
-    "abilities": ["暗视能力", "超敏捷反应", "听觉增强", "语言沟通", "萌系魅惑"],
-    "weaknesses": ["基因不稳定", "寿命缩短", "疾病易感"],
-    "personality": "表面高冷傲娇，实则渴望关注和抚摸，会假装不在意地蹭过来。",
+    "common_name": "月影猫人",
+    "description": "基因工程的奇迹产物，融合了猫科动物的敏捷优雅与灵长类的智慧。拥有人形身体、尖锐猫耳和长尾，瞳孔在光线变化时会收缩成猫眼形态。继承了猫的夜视能力、敏锐听觉和惊人的反射神经，同时保留了灵长类的抓握能力和社交智慧。然而基因不稳定导致其寿命较短，且对某些环境因素敏感。",
+    "appearance": "人形身躯覆有细软绒毛，头顶一对三角猫耳会随情绪转动，身后长尾巴保持平衡。竖瞳在暗处发出微光。",
+    "abilities": ["暗视能力", "超敏捷反应", "听觉增强", "精细操作", "攀爬"],
+    "weaknesses": ["基因不稳定", "寿命缩短", "环境敏感"],
+    "personality": "警觉而好奇，独居倾向但能形成小型社群。",
     "habitat_type": "terrestrial",
     "trophic_level": 3.0,
     "stability": "unstable",
@@ -834,13 +867,13 @@ SPECIES_PROMPTS = {
         "繁殖速度": "-4.0",
         "环境敏感度": "+2.0"
     }},
-    "chimera_event": "疯狂基因工程师的禁忌实验，将猫科基因与智慧生物融合，创造出这一传说中的生物。"
+    "chimera_event": "疯狂基因工程师的禁忌实验，将猫科与灵长类基因融合，创造出这一传说中的生物。"
 }}
 
 【示例2：鲨鱼 × 章鱼】
 {{
     "latin_name": "× Chimera selachocephalopoda",
-    "common_name": "鲨章兽",
+    "common_name": "玄渊触鲨",
     "description": "深海噩梦般的捕食者，拥有鲨鱼的流线型身躯和锋利牙齿，却长着章鱼的八条触腕和变色能力。能在追逐猎物时展现鲨鱼的速度，也能用触腕缠绕并释放墨汁逃脱。双重呼吸系统让它能在不同水深活动，但神经系统的冲突导致它行为有时混乱不可预测。",
     "appearance": "鲨鱼般的头部和躯干，体侧长出八条粗壮触腕替代了普通鳍。皮肤能像章鱼一样变色伪装。",
     "abilities": ["极速游泳", "触腕缠绕", "墨汁喷射", "变色伪装", "双重呼吸"],
