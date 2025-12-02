@@ -12,8 +12,8 @@ import {
   AreaChart, Area, XAxis, YAxis
 } from "recharts";
 
-import type { SpeciesDetail, SpeciesSnapshot } from "../services/api.types";
-import { fetchSpeciesDetail, editSpecies } from "../services/api";
+import type { SpeciesDetail, SpeciesSnapshot } from "@/services/api.types";
+import { fetchSpeciesDetail, editSpecies } from "@/services/api";
 import { OrganismBlueprint } from "./OrganismBlueprint";
 import { SpeciesAITab } from "./SpeciesAITab";
 
@@ -173,8 +173,8 @@ export function SpeciesPanel({
     try {
       const detail = await fetchSpeciesDetail(speciesId);
       setSpeciesDetail(detail);
-    } catch (err: any) {
-      setDetailError(err.message || "加载失败");
+    } catch (err: unknown) {
+      setDetailError(err instanceof Error ? err.message : "加载失败");
     } finally {
       setDetailLoading(false);
     }

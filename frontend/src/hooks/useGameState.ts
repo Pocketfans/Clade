@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
-import type { MapOverview, TurnReport, LineageTree, SpeciesDetail } from "../services/api.types";
-import { fetchMapOverview, fetchLineageTree, fetchSpeciesDetail } from "../services/api";
-import type { ViewMode } from "../components/MapViewSelector";
+import type { MapOverview, TurnReport, LineageTree, SpeciesDetail } from "@/services/api.types";
+import { fetchMapOverview, fetchLineageTree, fetchSpeciesDetail } from "@/services/api";
+import type { ViewMode } from "@/components/MapViewSelector";
 
 export function useGameState() {
   const [mapData, setMapData] = useState<MapOverview | null>(null);
@@ -22,9 +22,9 @@ export function useGameState() {
         console.warn("[前端] 地图没有地块数据");
         setError("地图数据为空，请检查后端是否正确初始化");
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("[前端] 地图加载失败:", error);
-      setError(`地图加载失败: ${error.message || "未知错误"}`);
+      setError(`地图加载失败: ${error instanceof Error ? error.message : "未知错误"}`);
     }
   }, [viewMode]);
 

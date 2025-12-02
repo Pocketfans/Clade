@@ -1,4 +1,4 @@
-import type { TurnReport } from "../services/api.types";
+import type { TurnReport } from "@/services/api.types";
 import { X } from "lucide-react";
 import { useState } from "react";
 import { MarkdownRenderer } from "./MarkdownRenderer";

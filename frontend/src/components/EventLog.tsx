@@ -1,4 +1,4 @@
-import type { TurnReport } from "../services/api.types";
+import type { TurnReport } from "@/services/api.types";
 
 interface Props {
   report?: TurnReport | null;

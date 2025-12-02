@@ -208,8 +208,8 @@ export function HybridizationPanel({ onClose, onSuccess }: Props) {
       fetchAllSpecies();
       onSuccess?.();
       
-    } catch (e: any) {
-      setError(e.message || "强行杂交失败");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "强行杂交失败");
     } finally {
       setExecuting(false);
     }
@@ -243,8 +243,8 @@ export function HybridizationPanel({ onClose, onSuccess }: Props) {
       fetchCandidates();
       onSuccess?.();
       
-    } catch (e: any) {
-      setError(e.message || "杂交失败");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "杂交失败");
     } finally {
       setExecuting(false);
     }

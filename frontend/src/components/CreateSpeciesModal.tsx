@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { Sparkles, Dna, Leaf, Bug, Bird, Fish, Zap, RefreshCw, Check, AlertCircle } from "lucide-react";
 import { AnalysisPanel, AnalysisSection, ActionButton, EmptyState } from "./common/AnalysisPanel";
-import { fetchSpeciesList, generateSpecies } from "../services/api";
+import { fetchSpeciesList, generateSpecies } from "@/services/api";
 
 interface Props {
   onClose: () => void;
@@ -95,9 +95,9 @@ export function CreateSpeciesModal({ onClose, onSuccess }: Props) {
       await generateSpecies(prompt, suggestedCode);
       onSuccess();
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      setError(err.message || "生成失败，请稍后重试");
+      setError(err instanceof Error ? err.message : "生成失败，请稍后重试");
     } finally {
       setLoading(false);
     }

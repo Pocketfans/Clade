@@ -11,8 +11,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+
+from .dependencies import get_container
 
 logger = logging.getLogger(__name__)
 
@@ -137,32 +139,28 @@ class EmbeddingStatsResponse(BaseModel):
 
 # ==================== 服务实例（延迟初始化）====================
 
-_taxonomy_service = None
-_evolution_predictor = None
-_narrative_engine = None
-_encyclopedia_service = None
-_services_initialized = False
+# 服务实例缓存（按 container 实例缓存，避免重复创建）
+_services_cache: dict[int, dict] = {}
 
 
-def _get_services():
-    """获取服务实例（延迟初始化）"""
-    global _taxonomy_service, _evolution_predictor, _narrative_engine
-    global _encyclopedia_service, _services_initialized
+def _get_services_from_container(container):
+    """从容器获取服务实例（延迟初始化并缓存）
     
-    if _services_initialized:
-        return {
-            "taxonomy": _taxonomy_service,
-            "evolution": _evolution_predictor,
-            "narrative": _narrative_engine,
-            "encyclopedia": _encyclopedia_service
-        }
-    
-    # 尝试从主路由获取依赖
-    try:
-        from . import routes
+    Args:
+        container: ServiceContainer 实例
         
-        embedding_service = getattr(routes, 'embedding_service', None)
-        model_router = getattr(routes, 'model_router', None)  # 使用正确的变量名
+    Returns:
+        服务字典
+    """
+    # 使用 container id 作为缓存键
+    cache_key = id(container)
+    
+    if cache_key in _services_cache:
+        return _services_cache[cache_key]
+    
+    try:
+        embedding_service = container.embedding_service
+        model_router = container.model_router
         
         if embedding_service is None:
             logger.warning("Embedding 服务未初始化")
@@ -173,29 +171,30 @@ def _get_services():
         from ..services.analytics.narrative_engine import NarrativeEngine
         from ..services.analytics.encyclopedia import EncyclopediaService
         
-        _taxonomy_service = TaxonomyService(embedding_service, model_router)
+        taxonomy_service = TaxonomyService(embedding_service, model_router)
         
         pressure_library = PressureVectorLibrary(embedding_service)
-        _evolution_predictor = EvolutionPredictor(embedding_service, pressure_library, model_router)
+        evolution_predictor = EvolutionPredictor(embedding_service, pressure_library, model_router)
         
-        _narrative_engine = NarrativeEngine(embedding_service, model_router)
-        _encyclopedia_service = EncyclopediaService(embedding_service, model_router)
+        narrative_engine = NarrativeEngine(embedding_service, model_router)
+        encyclopedia_service = EncyclopediaService(embedding_service, model_router)
         
-        _services_initialized = True
+        services = {
+            "taxonomy": taxonomy_service,
+            "evolution": evolution_predictor,
+            "narrative": narrative_engine,
+            "encyclopedia": encyclopedia_service
+        }
+        
+        _services_cache[cache_key] = services
         logger.info("Embedding 扩展服务初始化完成")
+        return services
         
     except Exception as e:
         logger.error(f"初始化 Embedding 服务失败: {e}")
         import traceback
         traceback.print_exc()
         return {}
-    
-    return {
-        "taxonomy": _taxonomy_service,
-        "evolution": _evolution_predictor,
-        "narrative": _narrative_engine,
-        "encyclopedia": _encyclopedia_service
-    }
 
 
 def _get_species_list():
@@ -213,9 +212,9 @@ def _get_species_by_code(code: str):
 # ==================== 分类学 API ====================
 
 @router.post("/taxonomy/build", response_model=TaxonomyResponse)
-async def build_taxonomy(request: TaxonomyRequest) -> TaxonomyResponse:
+async def build_taxonomy(request: TaxonomyRequest, container = Depends(get_container)) -> TaxonomyResponse:
     """构建/重建分类树"""
-    services = _get_services()
+    services = _get_services_from_container(container)
     taxonomy = services.get("taxonomy")
     
     if not taxonomy:
@@ -243,9 +242,9 @@ async def build_taxonomy(request: TaxonomyRequest) -> TaxonomyResponse:
 
 
 @router.get("/taxonomy/species/{species_code}")
-async def get_species_taxonomy(species_code: str) -> dict[str, Any]:
+async def get_species_taxonomy(species_code: str, container = Depends(get_container)) -> dict[str, Any]:
     """获取物种的分类信息"""
-    services = _get_services()
+    services = _get_services_from_container(container)
     taxonomy = services.get("taxonomy")
     
     if not taxonomy:
@@ -268,9 +267,9 @@ async def get_species_taxonomy(species_code: str) -> dict[str, Any]:
 # ==================== 演化预测 API ====================
 
 @router.get("/evolution/pressures", response_model=PressureListResponse)
-async def list_evolution_pressures() -> PressureListResponse:
+async def list_evolution_pressures(container = Depends(get_container)) -> PressureListResponse:
     """列出所有可用的演化压力类型"""
-    services = _get_services()
+    services = _get_services_from_container(container)
     predictor = services.get("evolution")
     
     if not predictor:
@@ -281,9 +280,9 @@ async def list_evolution_pressures() -> PressureListResponse:
 
 
 @router.post("/evolution/predict", response_model=EvolutionPredictionResponse)
-async def predict_evolution(request: EvolutionPredictionRequest) -> EvolutionPredictionResponse:
+async def predict_evolution(request: EvolutionPredictionRequest, container = Depends(get_container)) -> EvolutionPredictionResponse:
     """预测物种的演化方向"""
-    services = _get_services()
+    services = _get_services_from_container(container)
     predictor = services.get("evolution")
     
     if not predictor:
@@ -331,9 +330,9 @@ async def predict_evolution(request: EvolutionPredictionRequest) -> EvolutionPre
 # ==================== 搜索 API ====================
 
 @router.post("/search", response_model=SearchResponse)
-async def semantic_search(request: SearchRequest) -> SearchResponse:
+async def semantic_search(request: SearchRequest, container = Depends(get_container)) -> SearchResponse:
     """语义搜索"""
-    services = _get_services()
+    services = _get_services_from_container(container)
     encyclopedia = services.get("encyclopedia")
     
     if not encyclopedia:
@@ -384,9 +383,9 @@ async def quick_search(
 # ==================== 问答 API ====================
 
 @router.post("/qa", response_model=QAResponse)
-async def ask_question(request: QARequest) -> QAResponse:
+async def ask_question(request: QARequest, container = Depends(get_container)) -> QAResponse:
     """智能问答"""
-    services = _get_services()
+    services = _get_services_from_container(container)
     encyclopedia = services.get("encyclopedia")
     
     if not encyclopedia:
@@ -422,9 +421,9 @@ async def ask_question(request: QARequest) -> QAResponse:
 # ==================== 物种解释 API ====================
 
 @router.post("/explain/species", response_model=SpeciesExplanationResponse)
-async def explain_species(request: SpeciesExplanationRequest) -> SpeciesExplanationResponse:
+async def explain_species(request: SpeciesExplanationRequest, container = Depends(get_container)) -> SpeciesExplanationResponse:
     """解释物种的演化原因"""
-    services = _get_services()
+    services = _get_services_from_container(container)
     encyclopedia = services.get("encyclopedia")
     
     if not encyclopedia:
@@ -451,9 +450,9 @@ async def explain_species(request: SpeciesExplanationRequest) -> SpeciesExplanat
 
 
 @router.post("/compare/species", response_model=SpeciesCompareResponse)
-async def compare_species(request: SpeciesCompareRequest) -> SpeciesCompareResponse:
+async def compare_species(request: SpeciesCompareRequest, container = Depends(get_container)) -> SpeciesCompareResponse:
     """对比两个物种"""
-    services = _get_services()
+    services = _get_services_from_container(container)
     encyclopedia = services.get("encyclopedia")
     
     if not encyclopedia:
@@ -488,9 +487,9 @@ async def compare_species(request: SpeciesCompareRequest) -> SpeciesCompareRespo
 # ==================== 提示 API ====================
 
 @router.post("/hints", response_model=HintsResponse)
-async def get_species_hints(request: HintsRequest) -> HintsResponse:
+async def get_species_hints(request: HintsRequest, container = Depends(get_container)) -> HintsResponse:
     """获取物种的游戏提示"""
-    services = _get_services()
+    services = _get_services_from_container(container)
     encyclopedia = services.get("encyclopedia")
     
     if not encyclopedia:
@@ -523,17 +522,16 @@ async def get_species_hints(request: HintsRequest) -> HintsResponse:
 # ==================== 统计 API ====================
 
 @router.get("/stats", response_model=EmbeddingStatsResponse)
-async def get_embedding_stats() -> EmbeddingStatsResponse:
+async def get_embedding_stats(container = Depends(get_container)) -> EmbeddingStatsResponse:
     """获取 Embedding 系统统计信息"""
     try:
-        from . import routes
-        embedding_service = getattr(routes, 'embedding_service', None)
+        embedding_service = container.embedding_service
         
         cache_stats = {}
         if embedding_service:
             cache_stats = embedding_service.get_cache_stats()
         
-        services = _get_services()
+        services = _get_services_from_container(container)
         encyclopedia = services.get("encyclopedia")
         
         index_stats = {}
@@ -552,9 +550,9 @@ async def get_embedding_stats() -> EmbeddingStatsResponse:
 # ==================== 叙事 API ====================
 
 @router.get("/narrative/turn/{turn_index}")
-async def get_turn_narrative(turn_index: int) -> dict[str, Any]:
+async def get_turn_narrative(turn_index: int, container = Depends(get_container)) -> dict[str, Any]:
     """获取指定回合的叙事"""
-    services = _get_services()
+    services = _get_services_from_container(container)
     narrative = services.get("narrative")
     
     if not narrative:
@@ -582,10 +580,11 @@ async def get_turn_narrative(turn_index: int) -> dict[str, Any]:
 @router.get("/narrative/eras")
 async def get_evolution_eras(
     start_turn: int = Query(0, description="开始回合"),
-    end_turn: int | None = Query(None, description="结束回合")
+    end_turn: int | None = Query(None, description="结束回合"),
+    container = Depends(get_container)
 ) -> dict[str, Any]:
     """获取演化时代划分"""
-    services = _get_services()
+    services = _get_services_from_container(container)
     narrative = services.get("narrative")
     
     if not narrative:
@@ -613,9 +612,9 @@ async def get_evolution_eras(
 
 
 @router.get("/narrative/species/{species_code}/biography")
-async def get_species_biography(species_code: str) -> dict[str, Any]:
+async def get_species_biography(species_code: str, container = Depends(get_container)) -> dict[str, Any]:
     """获取物种传记"""
-    services = _get_services()
+    services = _get_services_from_container(container)
     narrative = services.get("narrative")
     
     if not narrative:

@@ -1,5 +1,5 @@
 import React from "react";
-import { SpeciesDetail } from "../services/api.types";
+import { SpeciesDetail } from "@/services/api.types";
 
 interface Props {
   species: SpeciesDetail;

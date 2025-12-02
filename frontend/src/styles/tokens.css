@@ -1,0 +1,184 @@
+/**
+ * Design Tokens - 设计令牌
+ * 
+ * 统一的颜色、间距、字体等设计变量
+ * 所有组件应从这里引用设计值，避免硬编码
+ */
+
+:root {
+  /* ============ 颜色系统 ============ */
+  
+  /* 主色调 */
+  --color-primary: #4a90d9;
+  --color-primary-light: #6ba3e0;
+  --color-primary-dark: #3578c0;
+  --color-primary-alpha: rgba(74, 144, 217, 0.2);
+  
+  /* 语义色 */
+  --color-success: #22c55e;
+  --color-success-light: #4ade80;
+  --color-success-dark: #16a34a;
+  
+  --color-warning: #f59e0b;
+  --color-warning-light: #fbbf24;
+  --color-warning-dark: #d97706;
+  
+  --color-danger: #ef4444;
+  --color-danger-light: #f87171;
+  --color-danger-dark: #dc2626;
+  
+  --color-info: #3b82f6;
+  --color-info-light: #60a5fa;
+  --color-info-dark: #2563eb;
+
+  /* 中性色 */
+  --color-bg-primary: #0a0f14;
+  --color-bg-secondary: #111820;
+  --color-bg-tertiary: #1a2332;
+  --color-bg-elevated: #232d3f;
+  
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-light: rgba(255, 255, 255, 0.15);
+  --color-border-strong: rgba(255, 255, 255, 0.25);
+  
+  --color-text-primary: #e5e7eb;
+  --color-text-secondary: #9ca3af;
+  --color-text-tertiary: #6b7280;
+  --color-text-muted: #4b5563;
+
+  /* ============ 生态角色颜色 ============ */
+  
+  /* 营养级 */
+  --color-trophic-producer: #22c55e;      /* 生产者 - 绿 */
+  --color-trophic-herbivore: #84cc16;     /* 初级消费者 - 黄绿 */
+  --color-trophic-omnivore: #eab308;      /* 杂食动物 - 黄 */
+  --color-trophic-carnivore: #f97316;     /* 次级消费者 - 橙 */
+  --color-trophic-apex: #ef4444;          /* 顶级捕食者 - 红 */
+  --color-trophic-decomposer: #8b5cf6;    /* 分解者 - 紫 */
+  
+  /* 物种状态 */
+  --color-status-alive: #22c55e;
+  --color-status-extinct: #6b7280;
+  --color-status-endangered: #f59e0b;
+  --color-status-thriving: #3b82f6;
+
+  /* ============ 间距系统 ============ */
+  
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 24px;
+  --spacing-2xl: 32px;
+  --spacing-3xl: 48px;
+
+  /* ============ 字体系统 ============ */
+  
+  --font-family-base: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-family-mono: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  
+  --font-size-xs: 0.75rem;   /* 12px */
+  --font-size-sm: 0.8125rem; /* 13px */
+  --font-size-md: 0.875rem;  /* 14px */
+  --font-size-lg: 1rem;      /* 16px */
+  --font-size-xl: 1.125rem;  /* 18px */
+  --font-size-2xl: 1.25rem;  /* 20px */
+  --font-size-3xl: 1.5rem;   /* 24px */
+  
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.75;
+
+  /* ============ 圆角 ============ */
+  
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  /* ============ 阴影 ============ */
+  
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.6);
+  
+  --shadow-glow-primary: 0 0 20px rgba(74, 144, 217, 0.3);
+  --shadow-glow-success: 0 0 20px rgba(34, 197, 94, 0.3);
+  --shadow-glow-danger: 0 0 20px rgba(239, 68, 68, 0.3);
+
+  /* ============ 动画 ============ */
+  
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  --transition-slow: 350ms ease;
+  
+  --animation-duration-fast: 150ms;
+  --animation-duration-normal: 300ms;
+  --animation-duration-slow: 500ms;
+
+  /* ============ z-index 层级 ============ */
+  
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-overlay: 300;
+  --z-modal: 400;
+  --z-popover: 500;
+  --z-tooltip: 600;
+  --z-toast: 700;
+}
+
+/* ============ 工具类 ============ */
+
+/* 文本截断 */
+.text-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 多行截断 */
+.text-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.text-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 滚动容器 */
+.scrollable {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+.scrollable::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scrollable::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollable::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: var(--radius-full);
+}
+
+.scrollable::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-light);
+}

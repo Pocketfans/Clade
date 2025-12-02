@@ -4,7 +4,7 @@ $Host.UI.RawUI.WindowTitle = "Clade - Stop"
 # ==================== 读取端口配置 ====================
 # 默认端口
 $BACKEND_PORT = 8022
-$FRONTEND_PORT = 5173
+$FRONTEND_PORT = 5188
 
 # 从 .env 文件读取端口配置
 $envFile = Join-Path $PSScriptRoot ".env"

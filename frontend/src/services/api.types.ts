@@ -279,6 +279,16 @@ export interface LineageNode {
 
 export interface LineageTree {
   nodes: LineageNode[];
+  total_count?: number;  // 总数（用于分页）
+}
+
+// 族谱查询参数
+export interface LineageQueryParams {
+  status?: "alive" | "extinct";  // 筛选状态
+  prefix?: string;               // 按lineage_code前缀筛选
+  include_genetic_distances?: boolean;  // 是否包含遗传距离
+  limit?: number;                // 分页限制
+  offset?: number;               // 分页偏移
 }
 
 // --- AI 服务商类型常量 ---

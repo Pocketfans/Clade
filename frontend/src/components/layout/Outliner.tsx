@@ -1,5 +1,5 @@
 import { TrendingUp, TrendingDown, Minus, Skull } from "lucide-react";
-import { SpeciesSnapshot } from "../../services/api.types";
+import type { SpeciesSnapshot } from "@/services/api.types";
 
 interface Props {
   speciesList: SpeciesSnapshot[];

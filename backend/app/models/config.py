@@ -380,6 +380,243 @@ class EcologyBalanceConfig(BaseModel):
     base_escape_rate: float = 0.3
     # 体型差异对捕食成功率的影响
     size_advantage_factor: float = 0.1
+    
+    # ========== 频率依赖选择 ==========
+    # 【新增】频率依赖选择：常见型受惩罚，稀有型获优势
+    # 是否启用频率依赖选择
+    enable_frequency_dependence: bool = True
+    # 频率依赖效应强度（0-1）：0=无效应，1=强效应
+    frequency_dependence_strength: float = 0.25
+    # 常见型阈值：种群占比超过此值被视为"常见型"，受惩罚
+    common_type_threshold: float = 0.15
+    # 稀有型阈值：种群占比低于此值被视为"稀有型"，获优势
+    rare_type_threshold: float = 0.03
+    # 常见型最大惩罚（额外死亡率）
+    common_type_max_penalty: float = 0.12
+    # 稀有型最大优势（死亡率减免）
+    rare_type_max_advantage: float = 0.08
+    
+    # ========== 新物种适应性优势 ==========
+    # 【新增】新分化物种在前几回合获得适应性优势
+    # 是否启用新物种优势
+    enable_new_species_advantage: bool = True
+    # 新物种第1回合死亡率减免
+    new_species_advantage_turn0: float = 0.10
+    # 新物种第2回合死亡率减免
+    new_species_advantage_turn1: float = 0.06
+    # 新物种第3回合死亡率减免
+    new_species_advantage_turn2: float = 0.03
+    # 新物种繁殖率加成（第1回合）
+    new_species_reproduction_boost: float = 1.15
+    
+    # ========== 增强版子代压制 ==========
+    # 【新增】子代对亲代的压制效果增强
+    # 子代压制系数（原0.20，现提高）
+    offspring_suppression_coefficient: float = 0.28
+    # 亲代演化滞后惩罚第1回合
+    parent_lag_penalty_turn0: float = 0.18
+    # 亲代演化滞后惩罚第2回合
+    parent_lag_penalty_turn1: float = 0.12
+    # 亲代演化滞后惩罚第3回合
+    parent_lag_penalty_turn2: float = 0.06
+    
+    # ========== 生态位重叠直接竞争 ==========
+    # 【新增】高生态位重叠时的直接竞争效应
+    # 高重叠阈值：重叠度超过此值触发直接竞争
+    high_overlap_threshold: float = 0.6
+    # 高重叠时每0.1重叠度增加的死亡率
+    overlap_competition_per_01: float = 0.04
+    # 最大重叠竞争惩罚
+    overlap_competition_max: float = 0.20
+
+
+class ResourceSystemConfig(BaseModel):
+    """资源系统配置 - 控制 NPP、承载力和能量流动
+    
+    【设计理念】
+    基于净初级生产力 (NPP) 的资源模型，统一能量单位，
+    支持资源再生、过采惩罚和事件脉冲。
+    
+    【单位说明】
+    - NPP: kg 生物量 / 地块 / 回合
+    - 承载力: 个体数
+    - 能量效率: 无量纲 (0-1)
+    """
+    model_config = ConfigDict(extra="ignore")
+    
+    # ========== NPP 基准与转换 ==========
+    # NPP 到 T1 承载力转换系数（每 kg NPP 支持的 T1 生物量 kg）
+    npp_to_capacity_factor: float = 50.0
+    # 地块资源基值 → NPP 转换系数
+    # tile.resources (1-1000) × 此系数 = NPP (kg/turn)
+    resource_to_npp_factor: float = 100.0
+    # NPP 上限 (kg/地块/回合)
+    max_npp_per_tile: float = 100000.0
+    
+    # ========== 气候-NPP 耦合 ==========
+    # 是否启用气候驱动 NPP
+    enable_climate_npp: bool = True
+    # 温度最优范围 (℃)
+    optimal_temp_min: float = 15.0
+    optimal_temp_max: float = 28.0
+    # 温度偏离最优时的 NPP 衰减速率 (每℃)
+    temp_deviation_penalty: float = 0.03
+    # 湿度对 NPP 的影响系数
+    humidity_npp_factor: float = 0.5
+    # 最低湿度阈值（低于此值 NPP 大幅下降）
+    humidity_min_threshold: float = 0.2
+    
+    # ========== 资源再生与过采 ==========
+    # 是否启用资源再生动态
+    enable_resource_dynamics: bool = True
+    # 资源恢复速率 (Logistic r)
+    resource_recovery_rate: float = 0.3
+    # 过度采食惩罚阈值（需求/供给比）
+    overgrazing_threshold: float = 1.0
+    # 过度采食时下回合 NPP 折减系数
+    overgrazing_penalty: float = 0.15
+    # 资源恢复上限倍数（相对于基准）
+    resource_capacity_multiplier: float = 1.2
+    # 季节/年际波动幅度 (0-1)
+    resource_fluctuation_amplitude: float = 0.1
+    
+    # ========== 能量传递效率 ==========
+    # T1→T2 生态效率（草食）
+    efficiency_t1_to_t2: float = 0.12
+    # T2→T3 生态效率（初级肉食）
+    efficiency_t2_to_t3: float = 0.10
+    # T3→T4 生态效率（次级肉食）
+    efficiency_t3_to_t4: float = 0.10
+    # T4→T5 生态效率（顶级）
+    efficiency_t4_to_t5: float = 0.08
+    # 默认生态效率（用于未指定的营养级）
+    default_ecological_efficiency: float = 0.10
+    
+    # ========== 资源压力计算 ==========
+    # 代谢率系数（体重 kg → 每回合代谢需求 kg）
+    metabolic_rate_coefficient: float = 0.1
+    # 代谢率体重指数（异速生长：需求 ∝ 体重^指数）
+    metabolic_weight_exponent: float = 0.75
+    # 可采份额（避免完全消耗资源）
+    harvestable_fraction: float = 0.7
+    # 资源压力上限
+    resource_pressure_cap: float = 0.65
+    # 资源压力下限（保底）
+    resource_pressure_floor: float = 0.0
+    
+    # ========== 空间异质性 ==========
+    # 水体 NPP 倍率（相对于陆地）
+    aquatic_npp_multiplier: float = 0.6
+    # 深海 NPP 倍率
+    deep_sea_npp_multiplier: float = 0.1
+    # 浅海 NPP 倍率
+    shallow_sea_npp_multiplier: float = 0.8
+    # 沙漠 NPP 倍率
+    desert_npp_multiplier: float = 0.1
+    # 苔原 NPP 倍率
+    tundra_npp_multiplier: float = 0.2
+    # 温带森林 NPP 倍率
+    temperate_forest_npp_multiplier: float = 1.0
+    # 热带雨林 NPP 倍率
+    tropical_forest_npp_multiplier: float = 1.5
+    
+    # ========== 事件脉冲 ==========
+    # 火山灰短期资源提升倍率
+    volcanic_ash_boost: float = 1.3
+    # 火山灰衰减速率（每回合）
+    volcanic_ash_decay: float = 0.2
+    # 洪水后肥力提升倍率
+    flood_fertility_boost: float = 1.2
+    # 洪水初期资源损失
+    flood_initial_loss: float = 0.3
+    # 干旱资源下降倍率
+    drought_resource_penalty: float = 0.5
+    
+    # ========== 缓存与性能 ==========
+    # 资源压力计算缓存 TTL（回合内）
+    pressure_cache_ttl_turns: int = 1
+    # 是否启用向量化计算
+    use_vectorized_calculation: bool = True
+
+
+class FoodWebConfig(BaseModel):
+    """食物网配置 - 控制食物链关系维护和猎物分配
+    
+    【设计理念】
+    提供食物网自动维护的参数调整，确保生态系统食物链的完整性和动态平衡。
+    """
+    model_config = ConfigDict(extra="ignore")
+    
+    # ========== 猎物多样性阈值 ==========
+    # 按营养级设定的最低猎物数量目标
+    # T2 初级消费者（吃生产者）
+    min_prey_count_t2: int = 2
+    # T3 次级消费者
+    min_prey_count_t3: int = 3
+    # T4 三级消费者
+    min_prey_count_t4: int = 3
+    # T5 顶级捕食者
+    min_prey_count_t5: int = 2
+    
+    # ========== 猎物补充触发条件 ==========
+    # 猎物过少时触发补充的阈值比例（相对于目标的百分比）
+    prey_shortage_threshold: float = 0.5
+    # 是否在猎物仍存活但过少时也触发补充
+    enable_prey_diversity_补充: bool = True
+    # 每回合最大补充猎物数量（每个物种）
+    max_prey_additions_per_turn: int = 2
+    
+    # ========== 新物种集成 ==========
+    # 是否自动将新 T1/T2 物种加入现有消费者的候选猎物
+    auto_integrate_new_producers: bool = True
+    # 新物种集成时的栖息地重叠阈值
+    new_species_habitat_overlap_threshold: float = 0.3
+    # 新物种集成时的 embedding 相似度阈值
+    new_species_embedding_threshold: float = 0.5
+    # 对猎物不足的消费者优先集成（≤此数量）
+    integrate_priority_when_prey_below: int = 3
+    
+    # ========== 区域权重 ==========
+    # 是否启用区域（瓦片）权重偏好
+    enable_tile_weight: bool = True
+    # 同瓦片猎物权重加成
+    same_tile_prey_weight_boost: float = 0.4
+    # 饥饿区域（高死亡率）的区域权重额外加成
+    hungry_region_weight_boost: float = 0.3
+    # 孤立区域（低连通性）的区域权重额外加成
+    isolated_region_weight_boost: float = 0.2
+    
+    # ========== 生物量约束 ==========
+    # 是否启用生物量约束（避免高营养级依赖微小生产者）
+    enable_biomass_constraint: bool = True
+    # 猎物最小群体生物量（人口×体重 克）
+    min_prey_biomass_g: float = 100.0
+    # 每高一个营养级，最小生物量乘以此系数
+    biomass_trophic_multiplier: float = 10.0
+    # 能量转换效率（每级约10%）
+    energy_transfer_efficiency: float = 0.1
+    
+    # ========== 反馈与压力耦合 ==========
+    # 饥饿物种的额外死亡率惩罚系数
+    starving_mortality_coefficient: float = 0.25
+    # 孤立消费者的额外死亡率惩罚系数
+    orphaned_mortality_coefficient: float = 0.15
+    # 无猎物时触发迁徙的概率加成
+    no_prey_migration_boost: float = 0.4
+    # 猎物丰富区域的死亡率减免
+    prey_rich_mortality_reduction: float = 0.05
+    
+    # ========== 快照恢复 ==========
+    # 加载存档时是否重建食物网
+    rebuild_food_web_on_load: bool = True
+    # 重建食物网时保留现有有效链接
+    preserve_valid_links_on_rebuild: bool = True
+    
+    # ========== 审计与日志 ==========
+    # 是否记录详细的食物网变更
+    log_food_web_changes: bool = True
+    # 保留变更历史的回合数
+    change_history_turns: int = 10
 
 
 class MapEnvironmentConfig(BaseModel):
@@ -571,6 +808,12 @@ class UIConfig(BaseModel):
     
     # 15. 地图环境配置
     map_environment: MapEnvironmentConfig = Field(default_factory=MapEnvironmentConfig)
+    
+    # 16. 食物网配置
+    food_web: FoodWebConfig = Field(default_factory=FoodWebConfig)
+    
+    # 17. 资源系统配置
+    resource_system: ResourceSystemConfig = Field(default_factory=ResourceSystemConfig)
     
     # --- Legacy Fields (Keep for migration) ---
     ai_provider: str | None = None

@@ -30,5 +30,7 @@ class HistoryRepository:
 
 
 
-
+# DEPRECATED: Module-level singleton
+# Use container.history_repository instead for proper isolation.
+# This global instance will be removed in a future version.
 history_repository = HistoryRepository()

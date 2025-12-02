@@ -251,4 +251,7 @@ class EnvironmentRepository:
 
 
 
+# DEPRECATED: Module-level singleton
+# Use container.environment_repository instead for proper isolation.
+# This global instance will be removed in a future version.
 environment_repository = EnvironmentRepository()

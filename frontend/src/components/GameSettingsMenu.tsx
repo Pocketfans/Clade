@@ -18,9 +18,9 @@ import {
   Globe,
   Archive
 } from "lucide-react";
-import type { SaveMetadata } from "../services/api.types";
-import { formatSaveName, formatRelativeTime } from "../services/api.types";
-import { listSaves, loadGame, deleteSave } from "../services/api";
+import type { SaveMetadata } from "@/services/api.types";
+import { formatSaveName, formatRelativeTime } from "@/services/api.types";
+import { listSaves, loadGame, deleteSave } from "@/services/api";
 import { AdminPanel } from "./AdminPanel";
 
 interface Props {

@@ -47,8 +47,8 @@ export function SpeciesAITab({ speciesCode, speciesName }: Props) {
     try {
       const result = await embeddingApi.explainSpecies(speciesCode);
       setExplanation(result);
-    } catch (err: any) {
-      setError(err.message || "加载解释失败");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "加载解释失败");
     } finally {
       setExplainLoading(false);
     }
@@ -61,8 +61,8 @@ export function SpeciesAITab({ speciesCode, speciesName }: Props) {
     try {
       const result = await embeddingApi.getHints(speciesCode);
       setHints(result.hints);
-    } catch (err: any) {
-      setError(err.message || "加载提示失败");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "加载提示失败");
     } finally {
       setHintsLoading(false);
     }
@@ -75,8 +75,8 @@ export function SpeciesAITab({ speciesCode, speciesName }: Props) {
     try {
       const result = await embeddingApi.getSpeciesBiography(speciesCode);
       setBiography(result);
-    } catch (err: any) {
-      setError(err.message || "加载传记失败");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "加载传记失败");
     } finally {
       setBiographyLoading(false);
     }

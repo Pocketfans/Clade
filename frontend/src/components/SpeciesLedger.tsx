@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from "react";
-import { SpeciesSnapshot } from "../services/api.types";
+import { SpeciesSnapshot } from "@/services/api.types";
 import { GamePanel } from "./common/GamePanel";
 
 interface Props {
@@ -65,8 +65,8 @@ export function SpeciesLedger({ speciesList, onClose, onSelectSpecies, selectedS
     }
 
     list.sort((a, b) => {
-      let valA: any = a[sortField];
-      let valB: any = b[sortField];
+      const valA = a[sortField as keyof typeof a];
+      const valB = b[sortField as keyof typeof b];
 
       if (valA < valB) return sortOrder === "asc" ? -1 : 1;
       if (valA > valB) return sortOrder === "asc" ? 1 : -1;

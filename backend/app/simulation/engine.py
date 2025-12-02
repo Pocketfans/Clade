@@ -45,9 +45,10 @@ from ..services.species.food_web_manager import FoodWebManager
 
 if TYPE_CHECKING:
     from ..services.species.background import BackgroundSpeciesManager
+    from ..services.analytics.report_builder import ReportBuilder
+    from ..services.analytics.exporter import ExportService
 
 from ..services.analytics.critical_analyzer import CriticalAnalyzer
-from ..services.analytics.exporter import ExportService
 from ..services.system.embedding import EmbeddingService
 from ..services.analytics.focus_processor import FocusBatchProcessor
 from ..services.geo.map_evolution import MapEvolutionService
@@ -57,7 +58,6 @@ from ..services.species.reproduction import ReproductionService
 from ..ai.model_router import ModelRouter
 from ..services.species.niche import NicheAnalyzer
 from ..services.system.pressure import PressureEscalationService
-from ..services.analytics.report_builder import ReportBuilder
 from ..services.species.speciation import SpeciationService
 from ..services.species.tiering import SpeciesTieringService
 from .environment import EnvironmentSystem
@@ -112,8 +112,21 @@ class SimulationEngine:
         adaptation_service: AdaptationService,
         gene_flow_service: GeneFlowService,
         embedding_integration: EmbeddingIntegrationService | None = None,
+        resource_manager = None,  # Resource/NPP management
+        # Config injection (must be provided by caller, no internal container access)
+        configs: dict | None = None,
     ) -> None:
-        # === 注入的服务 ===
+        """Initialize simulation engine
+        
+        All dependencies are injected via constructor parameters.
+        No internal container access - configs must be provided by caller.
+        """
+        from ..models.config import (
+            EcologyBalanceConfig, MortalityConfig, 
+            FoodWebConfig, SpeciationConfig
+        )
+        
+        # === Injected services ===
         self.environment = environment
         self.mortality = mortality
         self.embeddings = embeddings
@@ -133,13 +146,30 @@ class SimulationEngine:
         self.reproduction_service = reproduction_service
         self.adaptation_service = adaptation_service
         self.gene_flow_service = gene_flow_service
+        self.resource_manager = resource_manager
         
-        # === 内部创建的服务 ===
+        # === 配置注入 ===
+        # 配置必须由调用方提供，不再内部从容器获取
+        if configs is None:
+            logger.warning("[引擎] configs 未注入，使用默认值。生产环境应由容器提供配置。")
+            configs = {
+                "ecology": EcologyBalanceConfig(),
+                "mortality": MortalityConfig(),
+                "speciation": SpeciationConfig(),
+                "food_web": FoodWebConfig(),
+            }
+        self._configs = configs
+        
+        # === 内部创建的服务（使用注入的配置）===
         self.gene_activation_service = GeneActivationService()
-        self.tile_mortality = TileBasedMortalityEngine()
+        self.tile_mortality = TileBasedMortalityEngine(
+            ecology_config=configs["ecology"],
+            mortality_config=configs["mortality"],
+            speciation_config=configs["speciation"],
+        )
         self.tile_mortality.set_embedding_service(embeddings)
         self.ai_pressure_service = create_ai_pressure_service(router)
-        self.food_web_manager = FoodWebManager()
+        self.food_web_manager = FoodWebManager(config=configs["food_web"])
         self.trophic_service = TrophicInteractionService()
         
         # Embedding 集成服务
@@ -159,6 +189,37 @@ class SimulationEngine:
         # === 板块构造系统 ===
         self.tectonic: TectonicIntegration | None = None
         self._init_tectonic_system()
+    
+    def reload_configs(self, configs: dict | None = None) -> None:
+        """热更新所有服务的配置
+        
+        Args:
+            configs: 配置字典 {ecology, mortality, speciation, food_web}
+                    必须由调用方提供，内部不再从容器获取
+        
+        注意: 配置应由调用方从 ConfigService 获取后传入，
+              确保配置来源一致性，消除内部容器依赖。
+        """
+        if configs is None:
+            logger.warning("[引擎] reload_configs 未提供 configs 参数，跳过更新")
+            return
+        
+        self._configs = configs
+        
+        if hasattr(self.tile_mortality, 'reload_config'):
+            self.tile_mortality.reload_config(
+                ecology_config=configs.get("ecology"),
+                mortality_config=configs.get("mortality"),
+                speciation_config=configs.get("speciation"),
+            )
+        
+        if hasattr(self.food_web_manager, 'reload_config'):
+            self.food_web_manager.reload_config(config=configs.get("food_web"))
+        
+        if hasattr(self.speciation, 'reload_config'):
+            self.speciation.reload_config(config=configs.get("speciation"))
+        
+        logger.info("[引擎] 配置已重新加载")
     
     def _init_tectonic_system(self) -> None:
         """初始化板块构造系统"""

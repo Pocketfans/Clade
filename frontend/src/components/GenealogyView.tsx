@@ -1,10 +1,10 @@
 import { useState, useMemo, useEffect } from "react";
 import { List, GitBranch, Sparkles, TreeDeciduous, Layers, X } from "lucide-react";
-import type { LineageNode, LineageTree } from "../services/api.types";
+import type { LineageNode, LineageTree } from "@/services/api.types";
 import { GenealogySkeletonLoader } from "./SkeletonLoader";
 import { GenealogyGraphView } from "./GenealogyGraphView";
 import { GenealogyFilters, type FilterOptions } from "./GenealogyFilters";
-import { fetchSpeciesDetail } from "../services/api";
+import { fetchSpeciesDetail } from "@/services/api";
 
 interface Props {
   tree: LineageTree | null;
@@ -37,8 +37,9 @@ type ViewMode = "list" | "graph";
 export function GenealogyView({ tree, loading, error, onRetry, onClose }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [selectedNode, setSelectedNode] = useState<LineageNode | null>(null);
-  const [spacingX, setSpacingX] = useState(200);
-  const [spacingY, setSpacingY] = useState(60);
+  // CK3风格：垂直布局，spacingX是节点水平间距，spacingY是层级垂直间距
+  const [spacingX, setSpacingX] = useState(160);
+  const [spacingY, setSpacingY] = useState(120);
   const [filters, setFilters] = useState<FilterOptions>({
     states: [],
     ecologicalRoles: [],
@@ -171,25 +172,25 @@ export function GenealogyView({ tree, loading, error, onRetry, onClose }: Props)
           </div>
           
           <div className="toolbar-right">
-            {/* 间距控制 */}
+            {/* 间距控制 - CK3风格垂直布局 */}
             <div className="spacing-controls">
               <div className="spacing-item">
-                <label>水平</label>
+                <label>节点间距</label>
                 <input 
                   type="range" 
                   min="100" 
-                  max="400" 
+                  max="300" 
                   value={spacingX} 
                   onChange={(e) => setSpacingX(Number(e.target.value))}
                 />
                 <span className="spacing-value">{spacingX}</span>
               </div>
               <div className="spacing-item">
-                <label>垂直</label>
+                <label>层级间距</label>
                 <input 
                   type="range" 
-                  min="30" 
-                  max="150" 
+                  min="80" 
+                  max="200" 
                   value={spacingY} 
                   onChange={(e) => setSpacingY(Number(e.target.value))}
                 />

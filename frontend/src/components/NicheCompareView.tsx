@@ -1,8 +1,8 @@
 import { useEffect, useState, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { Sparkles, RefreshCw, Search, Filter, Zap, Target, Layers, TrendingUp } from "lucide-react";
-import type { SpeciesListItem, NicheCompareResult } from "../services/api.types";
-import { fetchSpeciesList, compareNiche } from "../services/api";
+import type { SpeciesListItem, NicheCompareResult } from "@/services/api.types";
+import { fetchSpeciesList, compareNiche } from "@/services/api";
 import { embeddingApi, type SpeciesCompareResponse } from "../services/embedding.api";
 
 interface NicheCompareViewProps {
@@ -112,9 +112,9 @@ export function NicheCompareView({ onClose }: NicheCompareViewProps) {
     try {
       const result = await compareNiche(selectedA, selectedB);
       setCompareResult(result);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("对比失败:", err);
-      setError(err.message || "对比失败");
+      setError(err instanceof Error ? err.message : "对比失败");
     } finally {
       setLoading(false);
     }
@@ -127,7 +127,7 @@ export function NicheCompareView({ onClose }: NicheCompareViewProps) {
     try {
       const result = await embeddingApi.compareSpecies(selectedA, selectedB);
       setAiCompareResult(result);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("AI对比失败:", err);
     } finally {
       setAiLoading(false);

@@ -7,6 +7,10 @@
 4. 迁徙决策参谋 - 智能规划迁徙路线（保留用于特殊情况）
 
 【兼容性】保留旧接口（assess_pressure_response、generate_emergency_response），内部调用新方法
+
+【可观测性】
+- 所有 AI 调用都记录耗时和计数
+- 使用 logger.info 输出结构化日志（含 method/duration_ms/count）
 """
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ import asyncio
 import json
 import logging
 import random
+import time
 from dataclasses import dataclass, field
 from typing import Sequence, Callable, Awaitable, TYPE_CHECKING
 
@@ -168,6 +173,37 @@ class AIPressureResponseService:
         self._event_callback: Callable[[str, str, str], None] | None = None
         # 【新增】是否使用流式传输
         self.use_streaming = True
+        
+        # 【可观测性】AI 调用计时统计
+        self._ai_metrics = {
+            "species_status_eval": {"count": 0, "total_ms": 0.0},
+            "narrative_generation": {"count": 0, "total_ms": 0.0},
+            "batch_eval": {"count": 0, "total_ms": 0.0},
+            "emergency_response": {"count": 0, "total_ms": 0.0},
+        }
+    
+    def get_ai_metrics(self) -> dict:
+        """获取 AI 调用统计指标"""
+        return {
+            method: {
+                "count": stats["count"],
+                "total_ms": round(stats["total_ms"], 1),
+                "avg_ms": round(stats["total_ms"] / stats["count"], 1) if stats["count"] > 0 else 0,
+            }
+            for method, stats in self._ai_metrics.items()
+        }
+    
+    def reset_ai_metrics(self) -> None:
+        """重置 AI 调用统计（每回合开始时调用）"""
+        for stats in self._ai_metrics.values():
+            stats["count"] = 0
+            stats["total_ms"] = 0.0
+    
+    def _record_ai_call(self, method: str, duration_ms: float) -> None:
+        """记录一次 AI 调用"""
+        if method in self._ai_metrics:
+            self._ai_metrics[method]["count"] += 1
+            self._ai_metrics[method]["total_ms"] += duration_ms
     
     def set_event_callback(self, callback: Callable[[str, str, str], None] | None) -> None:
         """设置事件回调函数
@@ -573,6 +609,8 @@ class AIPressureResponseService:
         if species.lineage_code in self._processed_this_turn:
             return None
         
+        start_time = time.perf_counter()
+        
         try:
             # 获取连续高危回合数
             consecutive = self._consecutive_danger.get(species.lineage_code, 0)
@@ -602,6 +640,17 @@ class AIPressureResponseService:
                     messages=[{"role": "user", "content": prompt}],
                     response_format={"type": "json_object"}
                 )
+            
+            duration_ms = (time.perf_counter() - start_time) * 1000
+            self._record_ai_call("species_status_eval", duration_ms)
+            logger.info(
+                f"[AI计时] species_status_eval 完成",
+                extra={
+                    "method": "evaluate_species_status",
+                    "species": species.lineage_code,
+                    "duration_ms": round(duration_ms, 1),
+                }
+            )
             
             # 解析结果
             result = self._parse_status_eval_result(species.lineage_code, full_content)

@@ -1,5 +1,5 @@
 import { Zap, Save, FolderOpen, Settings, Sparkles } from "lucide-react";
-import { ActionQueueStatus } from "../../services/api.types";
+import type { ActionQueueStatus } from "@/services/api.types";
 import { EnergyBar } from "../EnergyBar";
 
 interface Props {

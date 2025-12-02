@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from ..services.species.tiering import TieringResult
     from ..services.species.ai_pressure_response import SpeciesStatusEval
     from ..services.tectonic import TectonicStepResult
+    from ..services.ecology.resource_manager import ResourceSnapshot
     from .species import MortalityResult
 
 
@@ -156,6 +157,7 @@ class SimulationContext:
     niche_metrics: dict[str, NicheMetrics] = field(default_factory=dict)
     trophic_interactions: dict[str, float] = field(default_factory=dict)
     food_web_analysis: Any = None  # FoodWebAnalysis 类型
+    resource_snapshot: "ResourceSnapshot | None" = None  # 资源系统快照（NPP/承载力）
     
     # === 死亡率评估 ===
     preliminary_mortality: list[MortalityResult] = field(default_factory=list)

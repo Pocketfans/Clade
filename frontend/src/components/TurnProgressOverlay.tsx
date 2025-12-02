@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { connectToEventStream, abortCurrentTasks, skipCurrentAIStep } from "../services/api";
+import { connectToEventStream, abortCurrentTasks, skipCurrentAIStep } from "@/services/api";
 
 interface Props {
   message?: string;
@@ -547,8 +547,8 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
       } else {
         setAbortMessage(`❌ ${result.message}`);
       }
-    } catch (error: any) {
-      setAbortMessage(`❌ 重置失败: ${error.message}`);
+    } catch (error: unknown) {
+      setAbortMessage(`❌ 重置失败: ${error instanceof Error ? error.message : "未知错误"}`);
     }
     
     setTimeout(() => {
@@ -577,8 +577,8 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
       } else {
         setAbortMessage(`❌ ${result.message}`);
       }
-    } catch (error: any) {
-      setAbortMessage(`❌ 跳过失败: ${error.message}`);
+    } catch (error: unknown) {
+      setAbortMessage(`❌ 跳过失败: ${error instanceof Error ? error.message : "未知错误"}`);
     }
     
     setTimeout(() => {

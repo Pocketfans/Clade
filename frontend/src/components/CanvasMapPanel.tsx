@@ -8,7 +8,7 @@ import {
   useImperativeHandle,
 } from "react";
 import { Application, Container, Graphics, Sprite, Texture, Assets, BLEND_MODES } from "pixi.js";
-import type { MapOverview, MapTileInfo, RiverSegment, VegetationInfo } from "../services/api.types";
+import type { MapOverview, MapTileInfo, RiverSegment, VegetationInfo } from "@/services/api.types";
 import { ViewMode } from "./MapViewSelector";
 
 // Fix import issue if necessary - Pixi v8 structure

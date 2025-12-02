@@ -65,8 +65,8 @@ export function AIAssistantPanel({ onClose, initialTab = "search", initialSpecie
         10
       );
       setSearchResults(result.results);
-    } catch (err: any) {
-      setError(err.message || "搜索失败");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "搜索失败");
     } finally {
       setSearchLoading(false);
     }
@@ -83,8 +83,8 @@ export function AIAssistantPanel({ onClose, initialTab = "search", initialSpecie
       setQaResponse(result);
       setQaHistory(prev => [...prev, { question, answer: result }]);
       setQuestion("");
-    } catch (err: any) {
-      setError(err.message || "问答失败");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "问答失败");
     } finally {
       setQaLoading(false);
     }
@@ -103,8 +103,8 @@ export function AIAssistantPanel({ onClose, initialTab = "search", initialSpecie
         generate_description: generateDescription,
       });
       setPredictionResult(result);
-    } catch (err: any) {
-      setError(err.message || "预测失败");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "预测失败");
     } finally {
       setPredictLoading(false);
     }

@@ -28,15 +28,6 @@ from ...core.config import get_settings
 _settings = get_settings()
 
 
-def _load_speciation_config() -> SpeciationConfig:
-    """从 UI 配置加载分化配置，如果失败则返回默认配置"""
-    try:
-        ui_config_path = Path(_settings.ui_config_path)
-        ui_config = environment_repository.load_ui_config(ui_config_path)
-        return ui_config.speciation
-    except Exception as e:
-        logger.warning(f"[分化配置] 加载UI配置失败，使用默认值: {e}")
-        return SpeciationConfig()
 
 
 class SpeciationService:
@@ -46,9 +37,13 @@ class SpeciationService:
     - 分化发生在特定区域（地块集群），而非全局
     - 子代物种只在分化起源区域出现
     - 不同子代可以分配到不同地块（模拟地理隔离）
+    
+    【依赖注入】
+    配置必须通过构造函数注入，内部方法不再调用 _load_speciation_config。
+    如需刷新配置，使用 reload_config() 显式更新。
     """
 
-    def __init__(self, router) -> None:
+    def __init__(self, router, config: SpeciationConfig | None = None) -> None:
         self.router = router
         self.trophic_calculator = TrophicLevelCalculator()
         self.genetic_calculator = GeneticDistanceCalculator()
@@ -58,6 +53,12 @@ class SpeciationService:
         self.max_deferred_requests = 60
         self._deferred_requests: list[dict[str, Any]] = []
         
+        # 配置注入 - 如未提供则使用默认值并警告
+        if config is None:
+            logger.warning("[分化服务] config 未注入，使用默认值")
+            config = SpeciationConfig()
+        self._config = config
+        
         # 【新增】地块级数据缓存
         self._tile_mortality_cache: dict[str, dict[int, float]] = {}  # {lineage_code: {tile_id: death_rate}}
         self._tile_population_cache: dict[str, dict[int, float]] = {}  # {lineage_code: {tile_id: population}}
@@ -66,6 +67,18 @@ class SpeciationService:
         
         # 【Embedding集成】演化提示缓存
         self._evolution_hints: dict[str, dict] = {}  # {lineage_code: {reference_species, predicted_traits, ...}}
+    
+    def reload_config(self, config: SpeciationConfig | None = None) -> None:
+        """热更新配置
+        
+        Args:
+            config: 分化配置（必须由调用方提供）
+            
+        注意: 配置应由 SimulationEngine.reload_configs() 统一从容器获取后传入。
+        """
+        if config is not None:
+            self._config = config
+            logger.info("[分化服务] 配置已重新加载")
     
     def set_tile_mortality_data(
         self, 
@@ -172,7 +185,7 @@ class SpeciationService:
         self._food_chain_summary = self._summarize_food_chain_status(trophic_interactions)
         
         # ========== 加载分化配置 ==========
-        spec_config = _load_speciation_config()
+        spec_config = self._config
         is_early_game = turn_index < spec_config.early_game_turns
         
         # 动态分化限制 (Dynamic Speciation Limiting)
@@ -2839,7 +2852,7 @@ class SpeciationService:
         # 早期折减系数（从配置读取）
         # turn < early_game_turns 时门槛明显降低
         # 公式：factor = max(min_factor, 1 - decay_rate * turn_index)
-        spec_config = _load_speciation_config()
+        spec_config = self._config
         early_factor = max(
             spec_config.early_threshold_min_factor, 
             1.0 - spec_config.early_threshold_decay_rate * turn_index

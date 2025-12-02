@@ -136,20 +136,29 @@ class ReproductionService:
         niche_metrics: dict[str, tuple[float, float]],  # {lineage_code: (overlap, saturation)}
         survival_rates: dict[str, float],  # {lineage_code: survival_rate}
         habitat_manager: 'HabitatManager | None' = None,  # P3: 需要用于计算区域承载力
+        turn_index: int = 0,  # 【新增】当前回合索引，用于新物种繁殖率加成
     ) -> dict[str, int]:
         """计算所有物种的繁殖增长，返回新的种群数量。
         
         P3改进：如果启用区域承载力，将按地块分别计算
+        
+        【v4新增】新物种繁殖率加成：
+        - 新分化物种在前几回合获得繁殖率加成
+        - 这体现了新物种适应性优势的另一个维度
         
         Args:
             species_list: 所有存活物种
             niche_metrics: 生态位重叠和资源饱和度
             survival_rates: 上一回合的存活率（1 - 死亡率）
             habitat_manager: 栖息地管理器（P3需要）
+            turn_index: 当前回合索引
             
         Returns:
             {lineage_code: new_population}
         """
+        # 【新增】保存 turn_index 供子方法使用
+        self._current_turn_index = turn_index
+        
         if self.enable_regional_capacity and habitat_manager:
             # P3: 区域承载力模式
             return self._apply_reproduction_regional(
@@ -631,8 +640,8 @@ class ReproductionService:
                 by_trophic_range[t_range].append((species, suitability))
             
             # 3. 计算T1范围（1.0-1.5）的基础承载力
-            # T1依赖地块资源（光、水、营养）
-            t1_base_capacity = tile.resources * 100_000  # 资源1 = 10万kg
+            # 使用地块资源值计算（避免依赖全局资源管理器）
+            t1_base_capacity = tile.resources * 100_000
             
             # 应用P2动态修正（环境变化）
             if global_state:
@@ -661,23 +670,37 @@ class ReproductionService:
                     
                     tile_capacities[(tile_id, species.id)] = max(1000, species_capacity)
             
-            # 5. 【简化】基于生态金字塔计算各营养级承载力
-            # 每上升一个营养级，承载力下降到上一级的 15%
-            # 这避免了"先有鸡还是先有蛋"的循环依赖问题
-            PYRAMID_DECAY = 0.15  # 生态金字塔系数（能量传递效率）
+            # 5. 【改进】基于生态效率计算各营养级承载力
+            # 使用默认生态效率值（避免依赖全局资源管理器）
+            eff_t1_t2 = 0.12  # T1→T2 效率
+            eff_t2_t3 = 0.10  # T2→T3 效率
+            eff_t3_t4 = 0.10  # T3→T4 效率
+            eff_t4_t5 = 0.08  # T4→T5 效率
             
             # 计算各营养级的理论承载力
-            # T1.0 = 100%, T1.5 = 40%, T2.0 = 15%, T2.5 = 10%, T3.0 = 2.25%, ...
+            # T1.0 = 100%, T1.5 = 40%, T2.0 = 12%, T2.5 = 6%, T3.0 = 1.2%, ...
             trophic_capacities = {1.0: t1_base_capacity}
             for t in [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5]:
                 if t == 1.5:
                     # T1.5 (分解者) 承载力较高，约为 T1 的 40%
                     trophic_capacities[t] = t1_base_capacity * 0.4
                 else:
-                    # 其他消费者按照金字塔递减
+                    # 其他消费者按照生态效率递减
                     prev_level = t - 0.5
                     prev_cap = trophic_capacities.get(prev_level, t1_base_capacity * 0.01)
-                    trophic_capacities[t] = prev_cap * PYRAMID_DECAY
+                    
+                    # 根据营养级选择合适的效率
+                    base_level = int(t)
+                    if base_level == 2:
+                        efficiency = eff_t1_t2
+                    elif base_level == 3:
+                        efficiency = eff_t2_t3
+                    elif base_level == 4:
+                        efficiency = eff_t3_t4
+                    else:
+                        efficiency = eff_t4_t5
+                    
+                    trophic_capacities[t] = prev_cap * efficiency
             
             # 6. 检查猎物是否存在（用于食物链断裂检测）
             # 获取当前地块存在的营养级
@@ -1079,6 +1102,40 @@ class ReproductionService:
         # 综合繁殖加成（取最大值，避免双重加成过高）
         fertility_bonus = max(size_bonus, repro_bonus)
         base_growth_multiplier *= fertility_bonus
+        
+        # 【新增v4】新物种繁殖率加成
+        # 新分化物种在前几回合获得繁殖率加成，体现适应性优势
+        try:
+            from ...models.config import EcologyBalanceConfig
+            from ...repositories.environment_repository import environment_repository
+            from ...core.config import PROJECT_ROOT
+            ui_cfg = environment_repository.load_ui_config(PROJECT_ROOT / "data/settings.json")
+            eco_cfg = ui_cfg.ecology_balance
+            
+            if eco_cfg.enable_new_species_advantage:
+                current_turn = getattr(self, '_current_turn_index', 0)
+                species_created_turn = getattr(species, 'created_turn', 0) or 0
+                species_age = current_turn - species_created_turn
+                
+                if species_age == 0:
+                    # 新分化物种第1回合：最大繁殖率加成
+                    new_species_boost = eco_cfg.new_species_reproduction_boost
+                    base_growth_multiplier *= new_species_boost
+                    logger.debug(
+                        f"[新种繁殖加成] {species.common_name} T0: "
+                        f"繁殖率×{new_species_boost:.2f}"
+                    )
+                elif species_age == 1:
+                    # 第2回合：中等加成
+                    new_species_boost = 1.0 + (eco_cfg.new_species_reproduction_boost - 1.0) * 0.5
+                    base_growth_multiplier *= new_species_boost
+                elif species_age == 2:
+                    # 第3回合：轻微加成
+                    new_species_boost = 1.0 + (eco_cfg.new_species_reproduction_boost - 1.0) * 0.25
+                    base_growth_multiplier *= new_species_boost
+        except Exception as e:
+            # 配置加载失败时忽略新物种加成
+            pass
         
         # 【改进v6】营养级效率惩罚 - 从配置读取
         trophic_level = getattr(species, 'trophic_level', 1.0) or 1.0

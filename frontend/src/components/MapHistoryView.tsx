@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { TurnReport } from "../services/api.types";
-import { fetchHistory } from "../services/api";
+import type { TurnReport } from "@/services/api.types";
+import { fetchHistory } from "@/services/api";
 import { X } from "lucide-react";
 
 interface Props {

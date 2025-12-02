@@ -63,5 +63,8 @@ class GenusRepository:
             session.exec(text("DELETE FROM genus"))
 
 
+# DEPRECATED: Module-level singleton
+# Use container.genus_repository instead for proper isolation.
+# This global instance will be removed in a future version.
 genus_repository = GenusRepository()
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { checkHealth, dropDatabase } from "../services/api";
+import { checkHealth, dropDatabase } from "@/services/api";
 import { 
   X, 
   RefreshCw, 
@@ -54,8 +54,8 @@ export function AdminPanel({ onClose }: Props) {
       const res = await dropDatabase();
       alert("✅ " + res.message);
       window.location.reload();
-    } catch (err: any) {
-      alert("❌ 操作失败: " + err.message);
+    } catch (err: unknown) {
+      alert("❌ 操作失败: " + (err instanceof Error ? err.message : "未知错误"));
     } finally {
       setDropLoading(false);
       setConfirmText("");

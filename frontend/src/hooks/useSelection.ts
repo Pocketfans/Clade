@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from "react";
-import type { MapTileInfo, HabitatEntry, MapOverview, SpeciesDetail } from "../services/api.types";
-import { fetchSpeciesDetail } from "../services/api";
+import type { MapTileInfo, HabitatEntry, MapOverview, SpeciesDetail } from "@/services/api.types";
+import { fetchSpeciesDetail } from "@/services/api";
 
 export function useSelection(mapData: MapOverview | null) {
   const [selectedTileId, setSelectedTileId] = useState<number | null>(null);

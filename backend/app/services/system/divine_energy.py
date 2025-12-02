@@ -415,3 +415,6 @@ class DivineEnergyService:
             "percentage": round(self._state.current / self._state.maximum * 100, 1),
         }
 
+
+# 模块级单例
+energy_service = DivineEnergyService()

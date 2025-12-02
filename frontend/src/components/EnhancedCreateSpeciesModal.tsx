@@ -17,8 +17,8 @@ import {
   Search, X, Check, Info, Target, Link, PlusCircle
 } from "lucide-react";
 import { AnalysisPanel, ActionButton } from "./common/AnalysisPanel";
-import { fetchSpeciesList, generateSpeciesAdvanced, fetchFoodWeb } from "../services/api";
-import type { SpeciesListItem, FoodWebData, FoodWebNode } from "../services/api.types";
+import { fetchSpeciesList, generateSpeciesAdvanced, fetchFoodWeb } from "@/services/api";
+import type { SpeciesListItem, FoodWebData, FoodWebNode } from "@/services/api.types";
 
 interface Props {
   onClose: () => void;
@@ -332,9 +332,9 @@ export function EnhancedCreateSpeciesModal({ onClose, onSuccess }: Props) {
       });
       onSuccess();
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      setError(err.message || "生成失败，请稍后重试");
+      setError(err instanceof Error ? err.message : "生成失败，请稍后重试");
     } finally {
       setLoading(false);
     }

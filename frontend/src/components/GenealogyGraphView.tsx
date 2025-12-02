@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Application, Container, Graphics, Text, BlurFilter, FederatedPointerEvent } from "pixi.js";
 import * as d3 from "d3";
-import type { LineageNode } from "../services/api.types";
+import type { LineageNode } from "@/services/api.types";
 
 interface Props {
   nodes: LineageNode[];
@@ -79,7 +79,7 @@ interface FlowParticle {
 const ROOT_NAME = "始祖物种";
 const ROOT_CODE = "ROOT";
 
-export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNodeClick }: Props) {
+export function GenealogyGraphView({ nodes, spacingX = 160, spacingY = 120, onNodeClick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   
@@ -93,8 +93,11 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
   
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
   const [showAllHybridLinks, setShowAllHybridLinks] = useState(false);  // 是否显示所有杂交连线
+  const [focusedLineage, setFocusedLineage] = useState<string | null>(null);  // 聚焦的谱系物种代码
+  const [compactMode, setCompactMode] = useState(false);  // 概要模式（大量节点时简化显示）
 
-  const cameraRef = useRef({ x: 100, y: 300, zoom: 0.8 }); 
+  // CK3风格：垂直布局，初始相机位置调整到顶部中央
+  const cameraRef = useRef({ x: 400, y: 80, zoom: 0.7 }); 
   const isDragging = useRef(false);
   const lastMousePos = useRef({ x: 0, y: 0 });
   const currentMousePos = useRef({ x: 0, y: 0 });
@@ -121,9 +124,10 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
 
   const resetView = useCallback(() => {
     if (stageRef.current) {
-      cameraRef.current = { x: 100, y: 300, zoom: 0.8 };
-      stageRef.current.position.set(100, 300);
-      stageRef.current.scale.set(0.8);
+      // CK3风格：重置到顶部中央位置
+      cameraRef.current = { x: 400, y: 80, zoom: 0.7 };
+      stageRef.current.position.set(400, 80);
+      stageRef.current.scale.set(0.7);
     }
   }, []);
 
@@ -153,6 +157,41 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
     ).map(n => n.lineage_code);
     setCollapsedNodes(new Set(nodesWithChildren));
   }, [nodes]);
+
+  // 适应屏幕功能
+  const fitToScreen = useCallback(() => {
+    if (!stageRef.current || !canvasContainerRef.current || nodeVisualsRef.current.size === 0) return;
+    
+    const container = canvasContainerRef.current;
+    const { width: containerWidth, height: containerHeight } = container.getBoundingClientRect();
+    
+    // 计算所有节点的边界
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    nodeVisualsRef.current.forEach(vis => {
+      minX = Math.min(minX, vis.baseX - 70);
+      maxX = Math.max(maxX, vis.baseX + 70);
+      minY = Math.min(minY, vis.baseY - 22);
+      maxY = Math.max(maxY, vis.baseY + 22);
+    });
+    
+    const contentWidth = maxX - minX + 100;
+    const contentHeight = maxY - minY + 100;
+    
+    // 计算合适的缩放比例
+    const scaleX = containerWidth / contentWidth;
+    const scaleY = containerHeight / contentHeight;
+    const newZoom = Math.min(scaleX, scaleY, 1.5) * 0.9; // 留一些边距
+    
+    // 计算中心位置
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const newCamX = containerWidth / 2 - centerX * newZoom;
+    const newCamY = containerHeight / 2 - centerY * newZoom;
+    
+    cameraRef.current = { x: newCamX, y: newCamY, zoom: newZoom };
+    stageRef.current.position.set(newCamX, newCamY);
+    stageRef.current.scale.set(newZoom);
+  }, []);
 
   // Init Pixi
   useEffect(() => {
@@ -341,9 +380,10 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
       });
   };
 
+  // CK3风格：使用直线拐角连线（垂直布局）
   const updateLinks = () => {
-      const NODE_W = 140;
-      const NODE_OFFSET_X = NODE_W / 2;
+      const NODE_H = 44;  // 节点高度
+      const NODE_OFFSET_Y = NODE_H / 2;
       const activeCode = activeNodeRef.current;
       const showAll = showAllHybridLinksRef.current;
       
@@ -357,28 +397,26 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
           
           // 次要杂交连线的可见性逻辑
           if (link.isSecondaryHybrid) {
-              // 只在以下情况显示次要杂交连线：
-              // 1. 开启了"显示所有杂交关系"
-              // 2. hover/选中了该杂交物种
-              // 3. hover/选中了次要亲本
               const isRelatedToActive = activeCode && (
                   link.targetCode === activeCode || 
                   link.sourceCode === activeCode
               );
               
               if (!showAll && !isRelatedToActive) {
-                  return; // 不绘制
+                  return;
               }
           }
           
-          const p0 = { x: sourceVis.container.x + NODE_OFFSET_X, y: sourceVis.container.y };
-          const p3 = { x: targetVis.container.x - NODE_OFFSET_X, y: targetVis.container.y };
+          // CK3风格：垂直布局，从上到下
+          // 起点在父节点底部中央，终点在子节点顶部中央
+          const startX = sourceVis.container.x;
+          const startY = sourceVis.container.y + NODE_OFFSET_Y;
+          const endX = targetVis.container.x;
+          const endY = targetVis.container.y - NODE_OFFSET_Y;
           
-          const cpOffset = (p3.x - p0.x) * 0.5;
-          const p1 = { x: p0.x + cpOffset, y: p0.y };
-          const p2 = { x: p3.x - cpOffset, y: p3.y };
+          // 中间拐点的Y坐标（在两者之间）
+          const midY = startY + (endY - startY) * 0.5;
           
-          // 次要杂交连线在hover时增强显示
           const isHighlighted = link.isSecondaryHybrid && activeCode && (
               link.targetCode === activeCode || link.sourceCode === activeCode
           );
@@ -386,18 +424,23 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
           const width = isHighlighted ? 2.0 : link.width;
           
           if (link.type === 'dashed') {
-              drawDashedBezier(link.graphics, p0, p1, p2, p3, link.color, alpha, width);
+              // 虚线直线拐角
+              drawDashedOrthoLine(link.graphics, startX, startY, endX, endY, midY, link.color, alpha, width);
           } else {
-              link.graphics.moveTo(p0.x, p0.y);
-              link.graphics.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
+              // 实线直线拐角（CK3风格）
+              link.graphics.moveTo(startX, startY);
+              link.graphics.lineTo(startX, midY);  // 垂直向下
+              link.graphics.lineTo(endX, midY);    // 水平移动
+              link.graphics.lineTo(endX, endY);    // 垂直到子节点
               link.graphics.stroke({ width, color: link.color, alpha });
           }
       });
   };
 
+  // CK3风格：粒子沿直线拐角路径移动
   const updateParticles = (delta: number) => {
-     const NODE_W = 140;
-     const NODE_OFFSET_X = NODE_W / 2;
+     const NODE_H = 44;
+     const NODE_OFFSET_Y = NODE_H / 2;
      
      const particles = particlesRef.current;
      for (let i = particles.length - 1; i >= 0; i--) {
@@ -409,13 +452,14 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
          const targetVis = nodeVisualsRef.current.get(p.linkVisual.targetCode);
          
          if (sourceVis && targetVis) {
-             const p0 = { x: sourceVis.container.x + NODE_OFFSET_X, y: sourceVis.container.y };
-             const p3 = { x: targetVis.container.x - NODE_OFFSET_X, y: targetVis.container.y };
-             const cpOffset = (p3.x - p0.x) * 0.5;
-             const p1 = { x: p0.x + cpOffset, y: p0.y };
-             const p2 = { x: p3.x - cpOffset, y: p3.y };
+             const startX = sourceVis.container.x;
+             const startY = sourceVis.container.y + NODE_OFFSET_Y;
+             const endX = targetVis.container.x;
+             const endY = targetVis.container.y - NODE_OFFSET_Y;
+             const midY = startY + (endY - startY) * 0.5;
              
-             const pos = getPointOnBezier(p.t, p0, p1, p2, p3);
+             // 沿直线拐角路径插值
+             const pos = getPointOnOrthoPath(p.t, startX, startY, endX, endY, midY);
              p.graphics.position.set(pos.x, pos.y);
              p.graphics.alpha = Math.sin(p.t * Math.PI); 
          }
@@ -440,6 +484,10 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         return;
     }
 
+    // 自动启用概要模式（当节点数超过阈值时）
+    const autoCompactThreshold = 100;
+    const useCompact = compactMode || nodes.length > autoCompactThreshold;
+
     // 绘制背景网格
     const gridLayer = new Container();
     const gridG = new Graphics();
@@ -459,12 +507,19 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
     gridLayer.addChild(gridG);
     stage.addChild(gridLayer);
 
-    const visibleNodes = getVisibleNodes(nodes, collapsedNodes);
+    // 先应用谱系聚焦过滤，再应用折叠过滤
+    let filteredNodes = nodes;
+    if (focusedLineage) {
+      filteredNodes = getFocusedLineageNodes(nodes, focusedLineage);
+    }
+    const visibleNodes = getVisibleNodes(filteredNodes, collapsedNodes);
     
-    const root = buildHierarchy(visibleNodes, nodes);
+    const root = buildHierarchy(visibleNodes, filteredNodes);
+    // CK3风格：垂直布局（从上到下）
+    // nodeSize: [水平间距, 垂直间距]
     const treeLayout = d3.tree<LineageNode>()
-      .nodeSize([spacingY, spacingX])
-      .separation((a, b) => (a.parent === b.parent ? 1 : 1.2));
+      .nodeSize([spacingX, spacingY])
+      .separation((a, b) => (a.parent === b.parent ? 1 : 1.3));
     
     const treeData = treeLayout(root);
     const descendants = treeData.descendants();
@@ -492,15 +547,35 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         const hiddenChildCount = isCollapsed ? getHiddenDescendantCount(node.data.lineage_code, nodes, collapsedNodes) : 0;
         
         const nodeContainer = new Container();
-        nodeContainer.position.set(node.y, node.x);
+        // CK3风格：垂直布局 (x是水平位置, y是深度/垂直位置)
+        nodeContainer.position.set(node.x, node.y);
         
         nodeContainer.eventMode = 'static';
         nodeContainer.cursor = 'pointer';
+        
+        // 双击计时器
+        let clickTimer: ReturnType<typeof setTimeout> | null = null;
+        let clickCount = 0;
+        
         nodeContainer.on('pointerdown', (e: FederatedPointerEvent) => {
             e.stopPropagation();
             if (!isRoot) {
-              setSelectedNode(node.data.lineage_code);
-              onNodeClick?.(node.data);
+              clickCount++;
+              
+              if (clickCount === 1) {
+                // 单击：选中节点
+                clickTimer = setTimeout(() => {
+                  clickCount = 0;
+                  setSelectedNode(node.data.lineage_code);
+                  onNodeClick?.(node.data);
+                }, 250);
+              } else if (clickCount === 2) {
+                // 双击：聚焦该谱系
+                if (clickTimer) clearTimeout(clickTimer);
+                clickCount = 0;
+                setFocusedLineage(node.data.lineage_code);
+                setSelectedNode(node.data.lineage_code);
+              }
             }
         });
         nodeContainer.on('pointerenter', (e: FederatedPointerEvent) => {
@@ -582,7 +657,60 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
             icon.scale.set(0.8);
             innerGroup.addChild(icon);
             
+        } else if (useCompact) {
+            // === 概要模式：简化节点（仅圆形+代码） ===
+            const compactRadius = 18;
+            
+            // 节点背景圆
+            const nodeBg = new Graphics();
+            nodeBg.circle(0, 0, compactRadius);
+            nodeBg.fill({ color: roleColor, alpha: isAlive ? 0.9 : 0.4 });
+            innerGroup.addChild(nodeBg);
+            
+            // 状态边框
+            const nodeBorder = new Graphics();
+            nodeBorder.circle(0, 0, compactRadius);
+            nodeBorder.stroke({ 
+                width: 2, 
+                color: isAlive ? COLORS.ALIVE : COLORS.EXTINCT,
+                alpha: isAlive ? 1 : 0.6 
+            });
+            innerGroup.addChild(nodeBorder);
+            
+            // 折叠指示器
+            if (isCollapsed && hiddenChildCount > 0) {
+                const badge = new Graphics();
+                badge.circle(14, -14, 8);
+                badge.fill({ color: COLORS.SELECTED, alpha: 0.9 });
+                innerGroup.addChild(badge);
+                
+                const badgeText = new Text({
+                    text: `${hiddenChildCount}`,
+                    style: { fontFamily: 'system-ui, sans-serif', fontSize: 28, fontWeight: 'bold', fill: 0xffffff }
+                });
+                badgeText.scale.set(0.25);
+                badgeText.anchor.set(0.5, 0.5);
+                badgeText.position.set(14, -14);
+                innerGroup.addChild(badgeText);
+            }
+            
+            // 物种代码（缩小显示）
+            const codeText = new Text({
+                text: node.data.lineage_code,
+                style: {
+                    fontFamily: 'JetBrains Mono, Monaco, Consolas, monospace',
+                    fontSize: 36,
+                    fontWeight: 'bold',
+                    fill: 0xffffff,
+                }
+            });
+            codeText.scale.set(0.28);
+            codeText.anchor.set(0.5, 0.5);
+            codeText.position.set(0, compactRadius + 12);
+            innerGroup.addChild(codeText);
+            
         } else {
+            // === 完整模式：详细节点 ===
             const mask = new Graphics();
             mask.roundRect(-70, -22, 140, 44, 10);
             mask.fill(0xffffff);
@@ -705,7 +833,8 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         let collapseBtn: Container | undefined;
         if (hasChildren && !isRoot) {
             collapseBtn = new Container();
-            collapseBtn.position.set(70 + 15, 0);
+            // CK3风格：折叠按钮放在节点底部
+            collapseBtn.position.set(0, 22 + 12);
             collapseBtn.eventMode = 'static';
             collapseBtn.cursor = 'pointer';
             
@@ -758,10 +887,11 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
             border: innerGroup.children.find(c => c instanceof Graphics) as Graphics || new Graphics(),
             shadow,
             collapseBtn,
-            baseX: node.y, 
-            baseY: node.x,
-            targetX: node.y,
-            targetY: node.x,
+            // CK3风格：垂直布局坐标
+            baseX: node.x, 
+            baseY: node.y,
+            targetX: node.x,
+            targetY: node.y,
             targetLift: 0,
             targetScale: 1,
             targetShadowAlpha: 0,
@@ -846,7 +976,7 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         }
     });
 
-  }, [nodes, spacingX, spacingY, pixiReady, collapsedNodes, toggleCollapse, onNodeClick]);
+  }, [nodes, spacingX, spacingY, pixiReady, collapsedNodes, toggleCollapse, onNodeClick, focusedLineage, compactMode]);
 
   // State Updates
   useEffect(() => {
@@ -887,6 +1017,58 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
       showAllHybridLinksRef.current = showAllHybridLinks;
   }, [showAllHybridLinks]);
 
+  // 键盘快捷键支持
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 忽略在输入框中的按键
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      
+      switch (e.key) {
+        case '+':
+        case '=':
+          zoomIn();
+          break;
+        case '-':
+          zoomOut();
+          break;
+        case 'Home':
+        case 'h':
+          resetView();
+          break;
+        case 'f':
+        case 'F':
+          fitToScreen();
+          break;
+        case 'e':
+        case 'E':
+          expandAll();
+          break;
+        case 'c':
+        case 'C':
+          collapseAll();
+          break;
+        case 'Escape':
+          // 如果有聚焦，先退出聚焦；否则取消选择
+          if (focusedLineage) {
+            setFocusedLineage(null);
+          } else {
+            setSelectedNode(null);
+            setHoveredNode(null);
+          }
+          break;
+        case 'Backspace':
+          // Backspace 也可以退出聚焦
+          if (focusedLineage) {
+            setFocusedLineage(null);
+          }
+          break;
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [zoomIn, zoomOut, resetView, fitToScreen, expandAll, collapseAll, focusedLineage]);
+
   return (
     <div ref={containerRef} className="graph-container">
       {/* 渐变背景 */}
@@ -895,7 +1077,7 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
       {/* Canvas容器 */}
       <div ref={canvasContainerRef} className="graph-canvas" />
       
-      {/* 控制面板 */}
+      {/* CK3风格控制面板 */}
       <ControlPanel
         onZoomIn={zoomIn}
         onZoomOut={zoomOut}
@@ -904,13 +1086,25 @@ export function GenealogyGraphView({ nodes, spacingX = 200, spacingY = 85, onNod
         onCollapseAll={collapseAll}
         showHybridLinks={showAllHybridLinks}
         onToggleHybridLinks={() => setShowAllHybridLinks(!showAllHybridLinks)}
+        onFitToScreen={fitToScreen}
+        focusedLineage={focusedLineage}
+        focusedName={nodes.find(n => n.lineage_code === focusedLineage)?.common_name}
+        onClearFocus={() => setFocusedLineage(null)}
+        compactMode={compactMode}
+        onToggleCompact={() => setCompactMode(!compactMode)}
+        nodeCount={nodes.length}
       />
       
       {/* 统计信息 */}
-      <StatsBar nodes={nodes} collapsedCount={collapsedNodes.size} />
+      <StatsBar 
+        nodes={focusedLineage ? getFocusedLineageNodes(nodes, focusedLineage) : nodes} 
+        collapsedCount={collapsedNodes.size}
+        totalNodes={nodes.length}
+        isFocused={!!focusedLineage}
+      />
       
       {/* Tooltip */}
-      {hoveredNode && <Tooltip node={hoveredNode} pos={tooltipPos} />}
+      {hoveredNode && <Tooltip node={hoveredNode} pos={tooltipPos} isFocused={focusedLineage === hoveredNode.lineage_code} />}
       
       {/* 图例 */}
       <Legend />
@@ -936,6 +1130,35 @@ function getVisibleNodes(nodes: LineageNode[], collapsed: Set<string>): LineageN
   collapsed.forEach(code => markHidden(code));
   
   return nodes.filter(n => !hidden.has(n.lineage_code));
+}
+
+// 获取聚焦谱系的节点（祖先 + 自己 + 所有后代）
+function getFocusedLineageNodes(nodes: LineageNode[], focusCode: string): LineageNode[] {
+  const result = new Set<string>();
+  const nodeMap = new Map(nodes.map(n => [n.lineage_code, n]));
+  
+  // 添加焦点物种
+  result.add(focusCode);
+  
+  // 向上追溯所有祖先
+  let current = nodeMap.get(focusCode);
+  while (current && current.parent_code) {
+    result.add(current.parent_code);
+    current = nodeMap.get(current.parent_code);
+  }
+  
+  // 向下收集所有后代
+  const collectDescendants = (code: string) => {
+    nodes.forEach(n => {
+      if (n.parent_code === code && !result.has(n.lineage_code)) {
+        result.add(n.lineage_code);
+        collectDescendants(n.lineage_code);
+      }
+    });
+  };
+  collectDescendants(focusCode);
+  
+  return nodes.filter(n => result.has(n.lineage_code));
 }
 
 function getHiddenDescendantCount(parentCode: string, allNodes: LineageNode[], collapsed: Set<string>): number {
@@ -1011,6 +1234,37 @@ function getPointOnBezier(t: number, p0: {x:number, y:number}, p1: {x:number, y:
   return { x, y };
 }
 
+// CK3风格：沿直线拐角路径插值
+function getPointOnOrthoPath(t: number, startX: number, startY: number, endX: number, endY: number, midY: number) {
+  // 路径分三段：
+  // 1. startX, startY -> startX, midY (垂直向下)
+  // 2. startX, midY -> endX, midY (水平移动)
+  // 3. endX, midY -> endX, endY (垂直向下)
+  
+  const seg1Len = Math.abs(midY - startY);
+  const seg2Len = Math.abs(endX - startX);
+  const seg3Len = Math.abs(endY - midY);
+  const totalLen = seg1Len + seg2Len + seg3Len;
+  
+  if (totalLen === 0) return { x: startX, y: startY };
+  
+  const pos = t * totalLen;
+  
+  if (pos <= seg1Len) {
+    // 第一段
+    const ratio = pos / seg1Len;
+    return { x: startX, y: startY + (midY - startY) * ratio };
+  } else if (pos <= seg1Len + seg2Len) {
+    // 第二段
+    const ratio = (pos - seg1Len) / seg2Len;
+    return { x: startX + (endX - startX) * ratio, y: midY };
+  } else {
+    // 第三段
+    const ratio = (pos - seg1Len - seg2Len) / seg3Len;
+    return { x: endX, y: midY + (endY - midY) * ratio };
+  }
+}
+
 function drawDashedBezier(g: Graphics, p0: {x:number, y:number}, p1: {x:number, y:number}, p2: {x:number, y:number}, p3: {x:number, y:number}, color: number, alpha: number, width: number, dash = 10, gap = 5) {
    const roughLength = Math.hypot(p3.x - p0.x, p3.y - p0.y) * 1.5;
    const stepCount = Math.max(20, Math.ceil(roughLength / 5));
@@ -1047,7 +1301,56 @@ function drawDashedBezier(g: Graphics, p0: {x:number, y:number}, p1: {x:number, 
    }
 }
 
-// 控制面板组件
+// CK3风格：绘制虚线直线拐角
+function drawDashedOrthoLine(g: Graphics, startX: number, startY: number, endX: number, endY: number, midY: number, color: number, alpha: number, width: number, dash = 8, gap = 4) {
+  // 计算总长度用于步进
+  const seg1Len = Math.abs(midY - startY);
+  const seg2Len = Math.abs(endX - startX);
+  const seg3Len = Math.abs(endY - midY);
+  const totalLen = seg1Len + seg2Len + seg3Len;
+  
+  if (totalLen === 0) return;
+  
+  const stepSize = 3;
+  const stepCount = Math.max(10, Math.ceil(totalLen / stepSize));
+  
+  let currentDist = 0;
+  let drawing = true;
+  let prevPoint = getPointOnOrthoPath(0, startX, startY, endX, endY, midY);
+  g.moveTo(prevPoint.x, prevPoint.y);
+  
+  for (let i = 1; i <= stepCount; i++) {
+    const t = i / stepCount;
+    const curr = getPointOnOrthoPath(t, startX, startY, endX, endY, midY);
+    const d = Math.hypot(curr.x - prevPoint.x, curr.y - prevPoint.y);
+    currentDist += d;
+    
+    if (drawing) {
+      if (currentDist > dash) {
+        g.lineTo(curr.x, curr.y);
+        g.stroke({ width, color, alpha });
+        drawing = false;
+        currentDist = 0;
+        g.moveTo(curr.x, curr.y);
+      } else {
+        g.lineTo(curr.x, curr.y);
+      }
+    } else {
+      if (currentDist > gap) {
+        g.moveTo(curr.x, curr.y);
+        drawing = true;
+        currentDist = 0;
+      }
+    }
+    prevPoint = curr;
+  }
+  
+  if (drawing) {
+    g.stroke({ width, color, alpha });
+  }
+}
+
+// CK3风格控制面板组件
 const ControlPanel = ({ 
   onZoomIn, 
   onZoomOut, 
@@ -1055,7 +1358,14 @@ const ControlPanel = ({
   onExpandAll, 
   onCollapseAll,
   showHybridLinks,
-  onToggleHybridLinks
+  onToggleHybridLinks,
+  onFitToScreen,
+  focusedLineage,
+  focusedName,
+  onClearFocus,
+  compactMode,
+  onToggleCompact,
+  nodeCount
 }: {
   onZoomIn: () => void;
   onZoomOut: () => void;
@@ -1064,52 +1374,95 @@ const ControlPanel = ({
   onCollapseAll: () => void;
   showHybridLinks: boolean;
   onToggleHybridLinks: () => void;
+  onFitToScreen?: () => void;
+  focusedLineage?: string | null;
+  focusedName?: string;
+  onClearFocus?: () => void;
+  compactMode?: boolean;
+  onToggleCompact?: () => void;
+  nodeCount?: number;
 }) => (
   <div className="control-panel">
+    {/* 聚焦模式指示器 */}
+    {focusedLineage && (
+      <>
+        <div className="focus-indicator">
+          <div className="focus-header">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>
+            </svg>
+            <span>聚焦谱系</span>
+          </div>
+          <div className="focus-info">
+            <span className="focus-code">{focusedLineage}</span>
+            {focusedName && <span className="focus-name">{focusedName}</span>}
+          </div>
+          <button className="focus-clear" onClick={onClearFocus} title="退出聚焦 (Esc)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12"/>
+            </svg>
+            <span>显示全部</span>
+          </button>
+        </div>
+        <div className="control-divider" />
+      </>
+    )}
+    
     <div className="control-section">
-      <span className="section-label">缩放</span>
+      <span className="section-label">视图</span>
       <div className="control-buttons">
-        <button onClick={onZoomIn} title="放大">
+        <button onClick={onZoomIn} title="放大 (+)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="11" cy="11" r="8"/>
             <path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/>
           </svg>
         </button>
-        <button onClick={onZoomOut} title="缩小">
+        <button onClick={onZoomOut} title="缩小 (-)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="11" cy="11" r="8"/>
             <path d="M21 21l-4.35-4.35M8 11h6"/>
           </svg>
         </button>
-        <button onClick={onReset} title="重置视图">
+        <button onClick={onReset} title="重置视图 (Home)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
             <path d="M3 3v5h5"/>
           </svg>
         </button>
+        {onFitToScreen && (
+          <button onClick={onFitToScreen} title="适应屏幕 (F)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
+              <path d="M21 8V5a2 2 0 0 0-2-2h-3"/>
+              <path d="M3 16v3a2 2 0 0 0 2 2h3"/>
+              <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+            </svg>
+          </button>
+        )}
       </div>
     </div>
     <div className="control-divider" />
     <div className="control-section">
-      <span className="section-label">节点</span>
+      <span className="section-label">族谱</span>
       <div className="control-buttons">
-        <button onClick={onExpandAll} title="展开全部">
+        <button onClick={onExpandAll} title="展开全部 (E)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M18 15l-6-6-6 6"/>
-            <path d="M18 9l-6-6-6 6"/>
+            <path d="M7 13l5 5 5-5"/>
+            <path d="M7 6l5 5 5-5"/>
           </svg>
         </button>
-        <button onClick={onCollapseAll} title="折叠全部">
+        <button onClick={onCollapseAll} title="折叠全部 (C)">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M6 9l6 6 6-6"/>
-            <path d="M6 15l6 6 6-6"/>
+            <path d="M17 11l-5-5-5 5"/>
+            <path d="M17 18l-5-5-5 5"/>
           </svg>
         </button>
       </div>
     </div>
     <div className="control-divider" />
     <div className="control-section">
-      <span className="section-label">杂交</span>
+      <span className="section-label">显示</span>
       <div className="control-buttons">
         <button 
           onClick={onToggleHybridLinks} 
@@ -1118,19 +1471,64 @@ const ControlPanel = ({
         >
           <span style={{ fontSize: '14px' }}>🧬</span>
         </button>
+        {onToggleCompact && (
+          <button 
+            onClick={onToggleCompact} 
+            title={compactMode ? "详细模式" : "概要模式（简化显示）"}
+            className={compactMode ? "active compact" : ""}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="3"/>
+              <circle cx="4" cy="12" r="2"/>
+              <circle cx="20" cy="12" r="2"/>
+              <circle cx="12" cy="4" r="2"/>
+              <circle cx="12" cy="20" r="2"/>
+            </svg>
+          </button>
+        )}
       </div>
     </div>
+    {/* 节点数量提示（大量节点时显示） */}
+    {nodeCount && nodeCount > 50 && (
+      <>
+        <div className="control-divider" />
+        <div className="node-count-hint">
+          <span className="count-label">节点数</span>
+          <span className="count-value">{nodeCount}</span>
+          {nodeCount > 100 && !compactMode && (
+            <span className="count-warning">建议开启概要模式</span>
+          )}
+        </div>
+      </>
+    )}
   </div>
 );
 
 // 统计信息栏
-const StatsBar = ({ nodes, collapsedCount }: { nodes: LineageNode[]; collapsedCount: number }) => {
+const StatsBar = ({ nodes, collapsedCount, totalNodes, isFocused }: { 
+  nodes: LineageNode[]; 
+  collapsedCount: number;
+  totalNodes?: number;
+  isFocused?: boolean;
+}) => {
   const aliveCount = nodes.filter(n => n.state === 'alive').length;
   const extinctCount = nodes.filter(n => n.state === 'extinct').length;
   
   return (
     <div className="stats-bar">
-      <div className="stats-container">
+      <div className={`stats-container ${isFocused ? 'focused' : ''}`}>
+        {isFocused && (
+          <>
+            <div className="stat-item focus-mode">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>
+              </svg>
+              <span className="stat-label">聚焦模式</span>
+            </div>
+            <div className="stat-divider" />
+          </>
+        )}
         <div className="stat-item alive">
           <div className="stat-dot" />
           <span className="stat-label">存活</span>
@@ -1150,8 +1548,11 @@ const StatsBar = ({ nodes, collapsedCount }: { nodes: LineageNode[]; collapsedCo
             <rect x="14" y="14" width="7" height="7"/>
             <rect x="3" y="14" width="7" height="7"/>
           </svg>
-          <span className="stat-label">总计</span>
-          <span className="stat-value">{nodes.length}</span>
+          <span className="stat-label">{isFocused ? '谱系' : '总计'}</span>
+          <span className="stat-value">
+            {nodes.length}
+            {isFocused && totalNodes && <span className="stat-total">/{totalNodes}</span>}
+          </span>
         </div>
         {collapsedCount > 0 && (
           <>
@@ -1171,7 +1572,7 @@ const StatsBar = ({ nodes, collapsedCount }: { nodes: LineageNode[]; collapsedCo
 };
 
 // Tooltip组件
-const Tooltip = ({ node, pos }: { node: LineageNode, pos: {x:number, y:number} }) => {
+const Tooltip = ({ node, pos, isFocused }: { node: LineageNode, pos: {x:number, y:number}, isFocused?: boolean }) => {
     const isHybrid = node.taxonomic_rank === 'hybrid' || 
                     (node.hybrid_parent_codes && node.hybrid_parent_codes.length >= 2);
     
@@ -1216,11 +1617,18 @@ const Tooltip = ({ node, pos }: { node: LineageNode, pos: {x:number, y:number} }
             <span className="stat-val">T{node.birth_turn + 1}</span>
           </div>
         </div>
+        {/* 双击提示 */}
+        <div className="tooltip-hint">
+          {isFocused 
+            ? <span>当前聚焦物种</span>
+            : <span>双击聚焦此谱系</span>
+          }
+        </div>
       </div>
     );
 };
 
-// 图例组件
+// CK3风格图例组件
 const Legend = () => (
     <div className="legend">
         <div className="legend-header">
@@ -1235,11 +1643,11 @@ const Legend = () => (
           <div className="legend-title">状态</div>
           <div className="legend-item">
             <div className="legend-dot alive" />
-            <span>存活 Alive</span>
+            <span>存活</span>
           </div>
           <div className="legend-item">
             <div className="legend-dot extinct" />
-            <span>灭绝 Extinct</span>
+            <span>灭绝</span>
           </div>
         </div>
         
@@ -1251,36 +1659,41 @@ const Legend = () => (
           </div>
           <div className="legend-item">
             <div className="legend-bar" style={{ background: "#22d3ee" }} />
-            <span>T1.5 混合营养</span>
+            <span>T1.5 混养</span>
           </div>
           <div className="legend-item">
             <div className="legend-bar" style={{ background: "#fbbf24" }} />
-            <span>T2 草食动物</span>
+            <span>T2 草食</span>
           </div>
           <div className="legend-item">
             <div className="legend-bar" style={{ background: "#f97316" }} />
-            <span>T3 杂食动物</span>
+            <span>T3 杂食</span>
           </div>
           <div className="legend-item">
             <div className="legend-bar" style={{ background: "#f43f5e" }} />
-            <span>T4+ 肉食动物</span>
+            <span>T4+ 肉食</span>
           </div>
         </div>
         
         <div className="legend-group">
-          <div className="legend-title">连线类型</div>
+          <div className="legend-title">连线</div>
           <div className="legend-item">
-            <div className="legend-line solid" />
-            <span>演化谱系</span>
+            <div className="legend-line-ortho solid" />
+            <span>谱系</span>
           </div>
           <div className="legend-item">
-            <div className="legend-line dashed purple" />
-            <span>杂交关系</span>
+            <div className="legend-line-ortho dashed" />
+            <span>杂交/亚种</span>
           </div>
-          <div className="legend-item">
-            <div className="legend-line dashed violet" />
-            <span>亚种分支</span>
-          </div>
+        </div>
+        
+        <div className="legend-group shortcuts">
+          <div className="legend-title">快捷键</div>
+          <div className="shortcut-item"><kbd>双击</kbd> 聚焦谱系</div>
+          <div className="shortcut-item"><kbd>Esc</kbd> 退出聚焦</div>
+          <div className="shortcut-item"><kbd>+/-</kbd> 缩放</div>
+          <div className="shortcut-item"><kbd>F</kbd> 适应屏幕</div>
+          <div className="shortcut-item"><kbd>E/C</kbd> 展开/折叠</div>
         </div>
     </div>
 );
@@ -1378,6 +1791,106 @@ const graphStyles = `
     box-shadow: 
       0 8px 32px rgba(0, 0, 0, 0.4),
       0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  }
+  
+  /* 聚焦指示器 */
+  .focus-indicator {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    background: linear-gradient(135deg, rgba(251, 191, 36, 0.15) 0%, rgba(245, 158, 11, 0.1) 100%);
+    border: 1px solid rgba(251, 191, 36, 0.3);
+    border-radius: 10px;
+  }
+  
+  .focus-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #fbbf24;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  
+  .focus-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  
+  .focus-code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #fef3c7;
+  }
+  
+  .focus-name {
+    font-size: 0.8rem;
+    color: rgba(254, 243, 199, 0.7);
+  }
+  
+  .focus-clear {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 12px;
+    margin-top: 4px;
+    background: rgba(251, 191, 36, 0.15);
+    border: 1px solid rgba(251, 191, 36, 0.3);
+    border-radius: 8px;
+    color: #fbbf24;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  
+  .focus-clear:hover {
+    background: rgba(251, 191, 36, 0.25);
+    border-color: rgba(251, 191, 36, 0.5);
+    transform: translateY(-1px);
+  }
+  
+  /* 概要模式按钮 */
+  .control-panel button.compact {
+    background: rgba(34, 197, 94, 0.2);
+    border-color: rgba(34, 197, 94, 0.4);
+    color: #22c55e;
+  }
+  
+  /* 节点数量提示 */
+  .node-count-hint {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    background: rgba(30, 41, 59, 0.5);
+    border-radius: 8px;
+  }
+  
+  .count-label {
+    font-size: 0.65rem;
+    color: rgba(148, 163, 184, 0.6);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  
+  .count-value {
+    font-size: 1rem;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    color: #f1f5f9;
+  }
+  
+  .count-warning {
+    font-size: 0.65rem;
+    color: #fbbf24;
+    margin-top: 2px;
   }
   
   .control-section {
@@ -1505,6 +2018,21 @@ const graphStyles = `
     width: 1px;
     height: 20px;
     background: rgba(148, 163, 184, 0.15);
+  }
+  
+  .stats-container.focused {
+    border-color: rgba(251, 191, 36, 0.3);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 0 0 20px rgba(251, 191, 36, 0.1);
+  }
+  
+  .stat-item.focus-mode {
+    color: #fbbf24;
+  }
+  
+  .stat-total {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: rgba(148, 163, 184, 0.5);
   }
 
   /* Tooltip */
@@ -1634,6 +2162,16 @@ const graphStyles = `
     font-weight: 600;
     color: #e2e8f0;
   }
+  
+  .tooltip-hint {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed rgba(148, 163, 184, 0.2);
+    font-size: 0.7rem;
+    color: rgba(148, 163, 184, 0.5);
+    text-align: center;
+    font-style: italic;
+  }
 
   /* 图例 */
   .legend {
@@ -1732,5 +2270,86 @@ const graphStyles = `
   
   .legend-line.dashed.violet {
     border-color: #8b5cf6;
+  }
+  
+  /* CK3风格直线拐角图例 */
+  .legend-line-ortho {
+    width: 20px;
+    height: 14px;
+    position: relative;
+    flex-shrink: 0;
+  }
+  
+  .legend-line-ortho::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 2px;
+    height: 8px;
+    background: #475569;
+  }
+  
+  .legend-line-ortho::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 7px;
+    width: 20px;
+    height: 2px;
+    background: #475569;
+  }
+  
+  .legend-line-ortho.solid::before,
+  .legend-line-ortho.solid::after {
+    background: #475569;
+  }
+  
+  .legend-line-ortho.dashed::before {
+    background: repeating-linear-gradient(
+      to bottom,
+      #a78bfa 0px,
+      #a78bfa 3px,
+      transparent 3px,
+      transparent 5px
+    );
+  }
+  
+  .legend-line-ortho.dashed::after {
+    background: repeating-linear-gradient(
+      to right,
+      #a78bfa 0px,
+      #a78bfa 3px,
+      transparent 3px,
+      transparent 5px
+    );
+  }
+  
+  /* 快捷键样式 */
+  .legend-group.shortcuts {
+    border-top: 1px solid rgba(59, 130, 246, 0.1);
+    padding-top: 8px;
+    margin-top: 4px;
+  }
+  
+  .shortcut-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.7rem;
+    padding: 2px 0;
+    color: rgba(148, 163, 184, 0.7);
+  }
+  
+  .shortcut-item kbd {
+    padding: 2px 5px;
+    background: rgba(30, 41, 59, 0.8);
+    border: 1px solid rgba(100, 116, 139, 0.3);
+    border-radius: 3px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    color: #94a3b8;
+    min-width: 20px;
+    text-align: center;
   }
 `;

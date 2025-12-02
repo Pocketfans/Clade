@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { HabitatEntry, MapTileInfo, SuitabilityBreakdown } from "../services/api.types";
+import type { HabitatEntry, MapTileInfo, SuitabilityBreakdown } from "@/services/api.types";
 import { 
   Mountain, 
   Thermometer, 

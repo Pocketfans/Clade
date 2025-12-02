@@ -256,7 +256,9 @@ class PredationService:
         species_tiles: dict[str, set[int]] | None = None,
         embedding_matrix: np.ndarray | None = None,
         species_to_idx: dict[str, int] | None = None,
-        max_prey_count: int = 5
+        max_prey_count: int = 5,
+        hungry_tiles: set[int] | None = None,
+        isolated_tiles: set[int] | None = None,
     ) -> list[str]:
         """基于多维度筛选推断可能的猎物（优化版本）
         
@@ -265,6 +267,8 @@ class PredationService:
         2. 地块重叠：只考虑空间上能接触的物种
         3. Embedding相似度：优先选择生态位相近的物种
         4. 栖息地类型匹配
+        5. 【新增】区域权重：饥饿/孤立区域的同瓦片猎物权重更高
+        6. 【新增】生物量考虑
         
         这个方法不需要把所有物种传给LLM，而是通过规则+embedding预筛选。
         
@@ -276,6 +280,8 @@ class PredationService:
             embedding_matrix: 物种描述的embedding相似度矩阵
             species_to_idx: 物种代码→矩阵索引映射
             max_prey_count: 最大猎物数量
+            hungry_tiles: 饥饿区域（高死亡率地块）
+            isolated_tiles: 孤立区域（低连通性地块）
             
         Returns:
             推断的猎物代码列表
@@ -283,12 +289,27 @@ class PredationService:
         if species.trophic_level < 2.0:
             return []  # 生产者不需要猎物
         
+        # 加载配置
+        try:
+            from ...core.config import get_settings, PROJECT_ROOT
+            from ...repositories.environment_repository import environment_repository
+            _settings = get_settings()
+            ui_config = environment_repository.load_ui_config(PROJECT_ROOT / "data/settings.json")
+            fw_cfg = ui_config.food_web
+        except Exception:
+            from ...models.config import FoodWebConfig
+            fw_cfg = FoodWebConfig()
+        
         # 定义捕食范围
         min_prey_level = max(1.0, species.trophic_level - 1.5)
         max_prey_level = species.trophic_level - 0.5
         
         # 获取捕食者的栖息地块
         predator_tiles = species_tiles.get(species.lineage_code, set()) if species_tiles else set()
+        
+        # 检查捕食者是否在饥饿/孤立区域
+        in_hungry_region = bool(hungry_tiles and predator_tiles and (predator_tiles & hungry_tiles))
+        in_isolated_region = bool(isolated_tiles and predator_tiles and (predator_tiles & isolated_tiles))
         
         candidates = []
         
@@ -305,7 +326,14 @@ class PredationService:
             # 计算综合匹配分数
             score = 0.0
             
-            # 2. 地块重叠检查（权重 30%）
+            # 2. 地块重叠检查（权重 30%，可动态调整）
+            tile_weight = 0.3
+            if fw_cfg.enable_tile_weight:
+                if in_hungry_region:
+                    tile_weight += fw_cfg.hungry_region_weight_boost
+                if in_isolated_region:
+                    tile_weight += fw_cfg.isolated_region_weight_boost
+            
             if species_tiles and tile_species_map:
                 prey_tiles = species_tiles.get(prey.lineage_code, set())
                 if predator_tiles and prey_tiles:
@@ -313,9 +341,13 @@ class PredationService:
                     overlap = len(predator_tiles & prey_tiles)
                     total = len(predator_tiles | prey_tiles)
                     tile_overlap_ratio = overlap / total if total > 0 else 0
-                    score += tile_overlap_ratio * 0.3
+                    score += tile_overlap_ratio * tile_weight
                     
-                    # 如果完全不重叠，降低优先级但不排除（可能通过迁移接触）
+                    # 【新增】同瓦片猎物额外加成
+                    if overlap > 0 and fw_cfg.enable_tile_weight:
+                        score += fw_cfg.same_tile_prey_weight_boost
+                    
+                    # 如果完全不重叠，降低优先级但不排除
                     if overlap == 0:
                         score -= 0.1
             
@@ -331,7 +363,6 @@ class PredationService:
                 prey_idx = species_to_idx.get(prey.lineage_code)
                 if pred_idx is not None and prey_idx is not None:
                     similarity = embedding_matrix[pred_idx, prey_idx]
-                    # 相似度高表示生态位接近，更可能形成捕食关系
                     score += similarity * 0.25
             
             # 5. 体型匹配（权重 15%）
@@ -350,6 +381,20 @@ class PredationService:
                 score += 0.1
             elif prey_pop > 100:
                 score += 0.05
+            
+            # 7. 【新增】生物量考虑
+            if fw_cfg.enable_biomass_constraint:
+                prey_weight = prey.morphology_stats.get("body_weight_g", 0.001)
+                prey_biomass = prey_pop * prey_weight
+                
+                # 计算需要的最小生物量
+                trophic_diff = species.trophic_level - prey.trophic_level
+                required_biomass = fw_cfg.min_prey_biomass_g * (fw_cfg.biomass_trophic_multiplier ** trophic_diff)
+                
+                if prey_biomass < required_biomass:
+                    score -= 0.2  # 生物量不足惩罚
+                elif prey_biomass > required_biomass * 10:
+                    score += 0.1  # 生物量充足奖励
             
             candidates.append((prey.lineage_code, score))
         
@@ -377,25 +422,39 @@ class PredationService:
     def auto_assign_prey(
         self,
         species: Species,
-        all_species: Sequence[Species]
+        all_species: Sequence[Species],
+        tile_species_map: dict[int, set[str]] | None = None,
+        species_tiles: dict[str, set[int]] | None = None,
     ) -> tuple[list[str], dict[str, float]]:
         """自动为物种分配猎物和偏好
         
         Args:
             species: 目标物种
             all_species: 所有物种
+            tile_species_map: {tile_id: set(species_codes)} 地块→物种映射
+            species_tiles: {species_code: set(tile_ids)} 物种→地块映射
             
         Returns:
             (prey_codes, prey_preferences)
         """
-        prey_codes = self.infer_prey_from_trophic(species, all_species)
+        # 优先使用优化版本（带区域权重）
+        if tile_species_map or species_tiles:
+            prey_codes = self.infer_prey_optimized(
+                species, all_species,
+                tile_species_map=tile_species_map,
+                species_tiles=species_tiles,
+                max_prey_count=5
+            )
+        else:
+            prey_codes = self.infer_prey_from_trophic(species, all_species)
         
         if not prey_codes:
             return [], {}
         
-        # 根据营养级差分配偏好
+        # 根据营养级差分配偏好（带区域权重）
         preferences = {}
         species_map = {s.lineage_code: s for s in all_species}
+        predator_tiles = species_tiles.get(species.lineage_code, set()) if species_tiles else set()
         
         total_weight = 0.0
         for code in prey_codes:
@@ -406,6 +465,13 @@ class PredationService:
             # 营养级差越接近1.0，偏好越高
             level_diff = species.trophic_level - prey.trophic_level
             weight = 1.0 / (abs(level_diff - 1.0) + 0.5)
+            
+            # 【新增】区域权重：同瓦片猎物权重更高
+            if species_tiles and predator_tiles:
+                prey_tiles = species_tiles.get(code, set())
+                if predator_tiles & prey_tiles:
+                    weight *= 1.4  # 同瓦片加成 40%
+            
             preferences[code] = weight
             total_weight += weight
         

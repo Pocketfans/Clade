@@ -492,3 +492,6 @@ class GameHintsService:
         self._hint_cooldown.clear()
         self._last_hints.clear()
 
+
+# 模块级单例
+game_hints_service = GameHintsService()

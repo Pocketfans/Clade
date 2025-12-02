@@ -221,6 +221,7 @@ class LineageNode(BaseModel):
 
 class LineageTree(BaseModel):
     nodes: Sequence[LineageNode]
+    total_count: int | None = None  # 总数（用于分页）
 
 
 class ActionQueueStatus(BaseModel):
@@ -282,11 +283,15 @@ class SpeciesListItem(BaseModel):
     common_name: str
     population: int
     status: str
-    ecological_role: str
+    ecological_role: str | None = None  # 可选，兼容旧数据
+    genus_code: str | None = None
+    trophic_level: float | None = None
 
 
 class SpeciesList(BaseModel):
-    species: Sequence[SpeciesListItem]
+    items: Sequence[SpeciesListItem]
+    total: int
+    alive: int
 
 
 # ========== 生态系统健康指标响应 ==========

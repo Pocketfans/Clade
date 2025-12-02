@@ -1,6 +1,53 @@
-﻿from __future__ import annotations
+﻿"""
+⚠️⚠️⚠️ 已弃用 - Legacy API Routes ⚠️⚠️⚠️
+
+此文件为历史遗留的巨型路由模块，已被拆分到以下领域模块：
+- api/simulation.py: 回合推演、存档管理、压力队列
+- api/species.py: 物种管理、干预控制、系谱树
+- api/divine.py: 能量、成就、提示、杂交、神格系统
+- api/ecosystem.py: 食物网、生态健康分析
+- api/analytics.py: 导出、地图、配置、系统诊断
+
+┌─────────────────────────────────────────────────────────────┐
+│  ❌ 禁止向此文件添加新代码 ❌                                │
+│  所有新功能必须在 api/*.py 领域模块中实现                   │
+└─────────────────────────────────────────────────────────────┘
+
+退场计划与时间线：
+==================
+阶段 1（当前 - v1.5）：
+  - USE_LEGACY_ROUTES=true 时仍可启用（默认 false）
+  - 仅用于紧急回退和回归测试
+  - 不接受新功能 PR
+
+阶段 2（v1.5 - v2.0）：
+  - 移除 USE_LEGACY_ROUTES 开关
+  - 此文件仅作为参考保留在 docs/ 目录
+  - 新路由完全替代
+
+阶段 3（v2.0+）：
+  - 彻底删除此文件
+
+兼容性保证：
+-----------
+- 所有端点签名在新路由中保持一致
+- 响应格式不变
+- 迁移后前端无需修改
+
+迁移指南：
+---------
+- 所有新开发应使用 api/*.py 的领域模块
+- 通过 Depends() 注入服务，不使用模块级单例
+- 使用 SessionManager 进行状态管理和并发控制
+- 使用 ConfigService 获取配置
+
+最后更新：2025-01 (重构后保留作为兼容层)
+"""
+
+from __future__ import annotations
 
 import logging
+import warnings
 from pathlib import Path
 import uuid
 import json
@@ -8,11 +55,18 @@ import httpx
 import asyncio
 from queue import Queue
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query
+from fastapi.responses import JSONResponse, StreamingResponse
 
 logger = logging.getLogger(__name__)
-from fastapi.responses import StreamingResponse
+
+# 发出弃用警告（仅在首次导入时）
+warnings.warn(
+    "api/routes.py 已弃用，请使用新的领域路由模块 (api/simulation.py, api/species.py 等)。"
+    "设置 USE_LEGACY_ROUTES=false 以使用新路由（默认）。",
+    DeprecationWarning,
+    stacklevel=2
+)
 from sqlmodel import select
 
 from ..core.config import get_settings
@@ -557,17 +611,33 @@ action_queue = {"queued_rounds": 0, "running": False}
 
 # 后端会话ID：每次后端启动时生成新的UUID
 # 用于让前端检测后端是否重启，实现"后端重启回主菜单"的逻辑
+# 【迁移说明】这些全局变量将逐步迁移到 core/session.py 的 SimulationSessionManager
 _backend_session_id: str = ""
 
 
 def set_backend_session_id(session_id: str) -> None:
-    """设置后端会话ID（由 main.py 在启动时调用）"""
+    """设置后端会话ID（由 main.py 在启动时调用）
+    
+    【迁移说明】此函数保留用于向后兼容。
+    新代码应使用 core/session.py 的 get_session_manager().generate_session_id()
+    """
     global _backend_session_id
     _backend_session_id = session_id
+    # 【桥接】同时设置到新的 SessionManager
+    try:
+        from ..core.session import get_session_manager
+        session = get_session_manager()
+        session._session_id = session_id  # 直接设置以保持同步
+    except Exception:
+        pass  # 初始化阶段可能失败，忽略
 
 
 def get_backend_session_id() -> str:
-    """获取后端会话ID"""
+    """获取后端会话ID
+    
+    【迁移说明】此函数保留用于向后兼容。
+    新代码应使用 core/session.py 的 get_session_manager().session_id
+    """
     return _backend_session_id
 
 
@@ -621,6 +691,9 @@ def push_simulation_event(event_type: str, message: str, category: str = "其他
         category: 事件分类
         force: 是否强制推送（即使 simulation_running=False）
         **extra: 额外参数
+        
+    【迁移说明】此函数保留用于向后兼容。
+    新代码应使用 core/session.py 的 get_session_manager().push_event()
     """
     global simulation_events, simulation_running
     # 允许在 simulation_running=False 时也能推送关键事件（如 complete, error）
@@ -939,67 +1012,123 @@ def update_watchlist(request: WatchlistRequest) -> dict[str, list[str]]:
     return {"watching": sorted(watchlist)}
 
 
-@router.get("/lineage", response_model=LineageTree)
-def get_lineage_tree() -> LineageTree:
+import hashlib
+import time
+
+# 族谱缓存（简单内存缓存）
+_lineage_cache: dict[str, tuple[LineageTree, str, float]] = {}  # key -> (data, etag, timestamp)
+_lineage_cache_ttl = 30  # 缓存有效期（秒）
+
+def _invalidate_lineage_cache():
+    """在物种变化时调用以清除缓存"""
+    _lineage_cache.clear()
+
+@router.get("/lineage")
+def get_lineage_tree(
+    request: Request,
+    status: str | None = None,
+    prefix: str | None = None,
+    include_genetic_distances: bool = False,
+    limit: int | None = None,
+    offset: int = 0
+):
+    """
+    获取族谱树数据
+    
+    Args:
+        status: 可选，筛选状态 ("alive", "extinct")
+        prefix: 可选，按lineage_code前缀筛选（如 "A1" 获取A1及其后代）
+        include_genetic_distances: 是否包含遗传距离数据（默认False，减少响应体积）
+        limit: 可选，返回数量限制（用于分页）
+        offset: 分页偏移量
+        
+    支持 ETag 条件请求，减少重复传输。
+    """
+    # 构建缓存键
+    cache_key = f"{status}:{prefix}:{include_genetic_distances}:{limit}:{offset}"
+    current_time = time.time()
+    
+    # 检查缓存
+    if cache_key in _lineage_cache:
+        cached_data, cached_etag, cached_time = _lineage_cache[cache_key]
+        
+        # 检查缓存是否过期
+        if current_time - cached_time < _lineage_cache_ttl:
+            # 检查 If-None-Match 头
+            if_none_match = request.headers.get("if-none-match")
+            if if_none_match == cached_etag:
+                return JSONResponse(status_code=304, content=None, headers={"ETag": cached_etag})
+            
+            # 返回缓存数据
+            response = JSONResponse(content=cached_data.model_dump())
+            response.headers["ETag"] = cached_etag
+            response.headers["Cache-Control"] = f"max-age={_lineage_cache_ttl}"
+            return response
+    
     nodes: list[LineageNode] = []
-    all_species = species_repository.list_species()
-    all_genera = genus_repository.list_all()
     
+    # 获取物种列表（支持过滤和分页）
+    all_species = species_repository.list_species(
+        status=status,
+        prefix=prefix,
+        limit=limit,
+        offset=offset
+    )
+    
+    if not all_species:
+        return LineageTree(nodes=[], total_count=0)
+    
+    # 获取总数（用于分页）
+    total_count = species_repository.count_species(status=status, prefix=prefix)
+    
+    # 批量获取人口统计信息（单次查询替代 O(N) 次查询）
+    species_ids = [s.id for s in all_species]
+    population_stats = species_repository.get_population_stats_batch(species_ids)
+    
+    # 只在需要时加载遗传距离数据
     genus_distances = {}
-    for genus in all_genera:
-        genus_distances[genus.code] = genus.genetic_distances
+    if include_genetic_distances:
+        all_genera = genus_repository.list_all()
+        for genus in all_genera:
+            genus_distances[genus.code] = genus.genetic_distances
     
+    # 计算后代数量（内存计算，O(N)）
     descendant_map: dict[str, int] = {}
     for species in all_species:
         if species.parent_code:
             descendant_map[species.parent_code] = descendant_map.get(species.parent_code, 0) + 1
     
-    # 获取所有物种的最新人口快照
-    from ..repositories.species_repository import session_scope
-    from ..models.species import PopulationSnapshot
-    from sqlmodel import select, func
-    
+    # 构建节点（无数据库查询）
     for species in all_species:
-        # 【修复】当前种群直接从 morphology_stats 获取，与物种图鉴保持一致
+        # 当前种群从 morphology_stats 获取
         current_pop = int(species.morphology_stats.get("population", 0) or 0)
         
-        # 峰值种群：从快照表获取历史最大值，与当前值取较大者
-        with session_scope() as session:
-            peak_query = select(func.max(PopulationSnapshot.count)).where(
-                PopulationSnapshot.species_id == species.id
-            )
-            historical_peak = session.exec(peak_query).first() or 0
-            # 确保峰值不小于当前值
-            peak_pop = max(int(historical_peak), current_pop)
+        # 从批量查询结果获取峰值人口和最后回合
+        stats = population_stats.get(species.id, {})
+        historical_peak = stats.get("peak_population", 0)
+        peak_pop = max(int(historical_peak), current_pop)
         
-        # 推断生态角色：基于营养级
+        # 灭绝回合
+        extinction_turn = None
+        if species.status == "extinct":
+            extinction_turn = stats.get("last_turn", 0)
+        
+        # 推断生态角色
         ecological_role = _infer_ecological_role(species)
         
         # 推断tier
         tier = "background" if species.is_background else None
         
-        # 推断灭绝回合
-        extinction_turn = None
-        if species.status == "extinct":
-            with session_scope() as session:
-                last_turn_query = (
-                    select(PopulationSnapshot.turn_index)
-                    .where(PopulationSnapshot.species_id == species.id)
-                    .order_by(PopulationSnapshot.turn_index.desc())
-                    .limit(1)
-                )
-                last_turn = session.exec(last_turn_query).first()
-                extinction_turn = last_turn if last_turn else 0
-        
+        # 遗传距离（按需加载）
         genetic_distances_to_siblings = {}
-        if species.genus_code and species.genus_code in genus_distances:
+        if include_genetic_distances and species.genus_code and species.genus_code in genus_distances:
             for key, distance in genus_distances[species.genus_code].items():
                 if species.lineage_code in key:
                     other_code = key.replace(f"{species.lineage_code}-", "").replace(f"-{species.lineage_code}", "")
                     if other_code != species.lineage_code:
                         genetic_distances_to_siblings[other_code] = distance
         
-        # 获取营养级（用于前端族谱颜色判断）
+        # 获取营养级
         trophic_level = getattr(species, 'trophic_level', 1.0)
         if trophic_level is None or not isinstance(trophic_level, (int, float)):
             trophic_level = 1.0
@@ -1029,7 +1158,21 @@ def get_lineage_tree() -> LineageTree:
                 genetic_distances=genetic_distances_to_siblings,
             )
         )
-    return LineageTree(nodes=nodes)
+    
+    result = LineageTree(nodes=nodes, total_count=total_count)
+    
+    # 生成 ETag（基于内容哈希）
+    content_str = result.model_dump_json()
+    etag = f'"{hashlib.md5(content_str.encode()).hexdigest()}"'
+    
+    # 缓存结果
+    _lineage_cache[cache_key] = (result, etag, current_time)
+    
+    # 返回带 ETag 的响应
+    response = JSONResponse(content=result.model_dump())
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = f"max-age={_lineage_cache_ttl}"
+    return response
 
 
 @router.get("/queue", response_model=ActionQueueStatus)
@@ -1523,6 +1666,26 @@ async def load_game(request: LoadGameRequest) -> dict:
             current_save_name = request.save_name
         autosave_counter = 0
         logger.info(f"[存档加载] 当前存档名称设置为: {current_save_name}")
+        
+        # 【新增】存档恢复时重建食物网（可选）
+        try:
+            from ..repositories.environment_repository import environment_repository
+            from pathlib import Path
+            ui_config = environment_repository.load_ui_config(Path(settings.ui_config_path))
+            
+            if ui_config.food_web.rebuild_food_web_on_load:
+                from ..repositories.species_repository import species_repository
+                all_species = species_repository.list_species()
+                
+                rebuild_count = simulation_engine.food_web_manager.rebuild_food_web(
+                    all_species, species_repository,
+                    preserve_valid_links=ui_config.food_web.preserve_valid_links_on_rebuild
+                )
+                
+                if rebuild_count > 0:
+                    logger.info(f"[存档加载] 食物网重建完成，更新了 {rebuild_count} 个物种")
+        except Exception as e:
+            logger.warning(f"[存档加载] 食物网重建失败（非致命）: {e}")
         
         return {"success": True, "turn_index": turn_index}
     except FileNotFoundError as e:
@@ -2433,46 +2596,121 @@ food_web_manager = FoodWebManager(predation_service)
 
 
 @router.get("/ecosystem/food-web", tags=["ecosystem"])
-def get_food_web():
-    """获取真实的食物网数据
+def get_food_web(
+    max_nodes: int = Query(500, ge=1, le=1000, description="最大节点数"),
+    max_links: int = Query(2000, ge=1, le=5000, description="最大链接数"),
+    offset: int = Query(0, ge=0, description="节点偏移量"),
+    trophic_levels: str | None = Query(None, description="营养级过滤，逗号分隔，如 '1,2,3'"),
+    detail_level: str = Query("full", description="详细程度: simple, standard, full"),
+    include_preferences: bool = Query(True, description="是否包含猎物偏好"),
+    sort_by: str = Query("trophic_level", description="排序字段: trophic_level, population, name"),
+    use_cache: bool = Query(True, description="是否使用缓存"),
+    legacy_format: bool = Query(True, description="使用原有响应格式（向后兼容）"),
+):
+    """获取真实的食物网数据（支持分页/裁剪）
     
     返回基于物种prey_species字段的真实捕食关系，用于前端可视化。
     
-    返回格式：
-    {
-        "nodes": [
-            {
-                "id": "A1",
-                "name": "物种名称",
-                "trophic_level": 2.0,
-                "population": 1000,
-                "diet_type": "herbivore",
-                "habitat_type": "marine",
-                "prey_count": 2,
-                "predator_count": 3
-            }
-        ],
-        "links": [
-            {
-                "source": "A1",  // 猎物
-                "target": "B1",  // 捕食者
-                "value": 0.7,    // 偏好比例
-                "predator_name": "捕食者名称",
-                "prey_name": "猎物名称"
-            }
-        ],
-        "keystone_species": ["A1", "A2"],  // 关键物种
-        "trophic_levels": {1: ["A1"], 2: ["B1", "B2"]},
-        "total_species": 10,
-        "total_links": 15
-    }
+    【性能优化】
+    - 支持分页：max_nodes, offset 控制节点数量
+    - 支持过滤：trophic_levels 按营养级过滤
+    - 支持缓存：use_cache=True 时优先读取缓存
+    - legacy_format=True: 返回原有格式（默认，向后兼容）
     """
+    # 【向后兼容】默认使用原有的 build_food_web 方法
+    if legacy_format:
+        all_species = species_repository.list_species()
+        return predation_service.build_food_web(all_species)
+    
+    # 新的缓存+分页模式
+    from ..services.species.food_web_cache import get_food_web_cache, FoodWebQueryOptions
+    
+    cache_service = get_food_web_cache()
+    
+    # 解析营养级过滤
+    levels = None
+    if trophic_levels:
+        try:
+            levels = [int(x.strip()) for x in trophic_levels.split(",")]
+        except ValueError:
+            levels = None
+    
+    # 构建查询选项
+    options = FoodWebQueryOptions(
+        max_nodes=max_nodes,
+        max_links=max_links,
+        offset=offset,
+        trophic_levels=levels,
+        detail_level=detail_level,
+        include_preferences=include_preferences,
+        sort_by=sort_by,
+    )
+    
+    # 尝试使用缓存
+    if use_cache and cache_service.is_valid:
+        result = cache_service.query(options)
+        return {
+            "nodes": result.nodes,
+            "links": result.links,
+            "total_nodes": result.total_nodes,
+            "total_links": result.total_links,
+            "has_more_nodes": result.has_more_nodes,
+            "has_more_links": result.has_more_links,
+            "cache_hit": True,
+            "cache_age_seconds": round(result.cache_age_seconds, 1),
+        }
+    
+    # 缓存未命中，重建缓存
     all_species = species_repository.list_species()
-    return predation_service.build_food_web(all_species)
+    cache_service.build_cache(all_species, simulation_engine.turn_counter)
+    
+    result = cache_service.query(options)
+    return {
+        "nodes": result.nodes,
+        "links": result.links,
+        "total_nodes": result.total_nodes,
+        "total_links": result.total_links,
+        "has_more_nodes": result.has_more_nodes,
+        "has_more_links": result.has_more_links,
+        "cache_hit": False,
+        "cache_age_seconds": 0,
+    }
+
+
+@router.get("/ecosystem/food-web/summary", tags=["ecosystem"])
+def get_food_web_summary():
+    """获取食物网简版摘要（用于仪表盘，优先读缓存）
+    
+    返回轻量级的食物网统计，适合频繁刷新的仪表盘。
+    """
+    from ..services.species.food_web_cache import get_food_web_cache
+    
+    cache_service = get_food_web_cache()
+    return cache_service.get_simple_summary()
+
+
+@router.get("/ecosystem/food-web/cache-stats", tags=["ecosystem"])
+def get_food_web_cache_stats():
+    """获取食物网缓存统计（调试用）
+    
+    返回缓存命中率、内存占用等性能指标。
+    """
+    from ..services.species.food_web_cache import get_food_web_cache
+    from ..services.species.matrix_cache import get_matrix_cache
+    
+    food_web_cache = get_food_web_cache()
+    matrix_cache = get_matrix_cache()
+    
+    return {
+        "food_web_cache": food_web_cache.get_simple_summary(),
+        "matrix_cache": matrix_cache.stats,
+    }
 
 
 @router.get("/ecosystem/food-web/analysis", tags=["ecosystem"])
-def get_food_web_analysis():
+def get_food_web_analysis(
+    detail_level: str = Query("full", description="详细程度: simple, full"),
+):
     """获取食物网健康状况分析
     
     返回食物网的详细分析结果，包括：
@@ -2486,9 +2724,26 @@ def get_food_web_analysis():
     - avg_prey_per_consumer: 每个消费者的平均猎物种类数
     - food_web_density: 食物网连接密度
     - bottleneck_warnings: 瓶颈警告列表
+    
+    【性能优化】
+    - detail_level=simple: 只返回统计数字，不返回物种列表
     """
     all_species = species_repository.list_species()
     analysis = food_web_manager.analyze_food_web(all_species)
+    
+    if detail_level == "simple":
+        return {
+            "health_score": analysis.health_score,
+            "total_species": analysis.total_species,
+            "total_links": analysis.total_links,
+            "orphaned_count": len(analysis.orphaned_consumers),
+            "starving_count": len(analysis.starving_species),
+            "keystone_count": len(analysis.keystone_species),
+            "isolated_count": len(analysis.isolated_species),
+            "avg_prey_per_consumer": analysis.avg_prey_per_consumer,
+            "food_web_density": analysis.food_web_density,
+            "warning_count": len(analysis.bottleneck_warnings),
+        }
     
     return {
         "health_score": analysis.health_score,
@@ -2559,6 +2814,58 @@ def get_species_food_chain(lineage_code: str):
     
     all_species = species_repository.list_species()
     return predation_service.get_species_food_chain(species, all_species)
+
+
+@router.get("/ecosystem/food-web/{lineage_code}/neighborhood", tags=["ecosystem"])
+def get_species_neighborhood(
+    lineage_code: str,
+    k_hop: int = Query(2, ge=1, le=5, description="邻域跳数 (1-5)"),
+    max_nodes: int = Query(50, ge=1, le=200, description="最大节点数"),
+    detail_level: str = Query("standard", description="详细程度: simple, standard, full"),
+):
+    """获取特定物种的 k-hop 邻域（新 API，用于优化的局部视图）
+    
+    返回：
+    - neighborhood: k-hop 邻域内的节点和链接
+    - food_chain: 完整的食物链信息
+    """
+    from ..services.species.food_web_cache import get_food_web_cache, FoodWebQueryOptions
+    
+    species = species_repository.get_by_lineage(lineage_code)
+    if not species:
+        raise HTTPException(status_code=404, detail=f"物种 {lineage_code} 不存在")
+    
+    all_species = species_repository.list_species()
+    
+    # 尝试使用缓存获取邻域
+    cache_service = get_food_web_cache()
+    
+    # 确保缓存已构建
+    if not cache_service.is_valid:
+        cache_service.build_cache(all_species, simulation_engine.turn_counter)
+    
+    options = FoodWebQueryOptions(
+        max_nodes=max_nodes,
+        max_links=max_nodes * 3,
+        center_species=lineage_code,
+        k_hop=k_hop,
+        detail_level=detail_level,
+    )
+    result = cache_service.query(options)
+    
+    # 获取完整的食物链信息
+    food_chain = predation_service.get_species_food_chain(species, all_species)
+    
+    return {
+        "neighborhood": {
+            "nodes": result.nodes,
+            "links": result.links,
+            "total_nodes": result.total_nodes,
+            "total_links": result.total_links,
+        },
+        "food_chain": food_chain,
+        "cache_hit": result.cache_hit,
+    }
 
 
 @router.get("/ecosystem/extinction-impact/{lineage_code}", tags=["ecosystem"])

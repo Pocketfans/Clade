@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import type { PressureDraft } from "../services/api.types";
+import type { PressureDraft } from "@/services/api.types";
 
 export function usePressure() {
   const [pendingPressures, setPendingPressures] = useState<PressureDraft[]>([]);

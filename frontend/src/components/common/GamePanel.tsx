@@ -10,6 +10,7 @@ interface Props {
   height?: string;
   className?: string;
   icon?: React.ReactNode;
+  footer?: React.ReactNode;
 }
 
 export function GamePanel({ 
@@ -20,7 +21,8 @@ export function GamePanel({
   width, 
   height,
   className = '',
-  icon
+  icon,
+  footer
 }: Props) {
   const [mounted, setMounted] = useState(false);
 
@@ -179,10 +181,24 @@ export function GamePanel({
           flex: 1, 
           overflow: 'auto', 
           position: 'relative',
-          // Custom Scrollbar logic could go here via class
-        }} className="custom-scrollbar">
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          padding: '1rem',
+        }} className="game-panel-content custom-scrollbar">
           {children}
         </div>
+        
+        {footer && (
+          <div style={{
+            padding: '16px 24px',
+            borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+            background: 'linear-gradient(0deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0) 100%)',
+            flexShrink: 0,
+          }} className="game-panel-footer">
+            {footer}
+          </div>
+        )}
       </div>
     </>,
     document.body

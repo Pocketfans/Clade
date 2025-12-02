@@ -30,7 +30,7 @@ from ..services.species.niche import NicheMetrics
 from ..services.species.predation import PredationService
 from ..services.geo.suitability import get_habitat_type_mask as unified_habitat_mask
 from ..core.config import get_settings, PROJECT_ROOT
-from ..models.config import EcologyBalanceConfig, MortalityConfig
+from ..models.config import EcologyBalanceConfig, MortalityConfig, SpeciationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -38,42 +38,6 @@ logger = logging.getLogger(__name__)
 _settings = get_settings()
 
 
-def _load_ecology_config() -> EcologyBalanceConfig:
-    """从 UI 配置中加载生态平衡参数"""
-    try:
-        from ..repositories.environment_repository import environment_repository
-        ui_config_path = PROJECT_ROOT / "data/settings.json"
-        ui_config = environment_repository.load_ui_config(ui_config_path)
-        return ui_config.ecology_balance
-    except Exception as e:
-        logger.warning(f"[生态平衡] 无法加载配置，使用默认值: {e}")
-        return EcologyBalanceConfig()
-
-
-def _load_mortality_config() -> MortalityConfig:
-    """从 UI 配置中加载死亡率参数"""
-    try:
-        from ..repositories.environment_repository import environment_repository
-        ui_config_path = PROJECT_ROOT / "data/settings.json"
-        ui_config = environment_repository.load_ui_config(ui_config_path)
-        return ui_config.mortality
-    except Exception as e:
-        logger.warning(f"[死亡率] 无法加载配置，使用默认值: {e}")
-        return MortalityConfig()
-
-
-def _load_speciation_config():
-    """从 UI 配置中加载分化参数"""
-    try:
-        from ..repositories.environment_repository import environment_repository
-        from ..models.config import SpeciationConfig
-        ui_config_path = PROJECT_ROOT / "data/settings.json"
-        ui_config = environment_repository.load_ui_config(ui_config_path)
-        return ui_config.speciation
-    except Exception as e:
-        from ..models.config import SpeciationConfig
-        logger.warning(f"[分化配置] 无法加载配置，使用默认值: {e}")
-        return SpeciationConfig()
 
 
 def hex_distance(q1: int, r1: int, q2: int, r2: int) -> int:
@@ -186,10 +150,46 @@ class TileBasedMortalityEngine:
     【性能】
     使用稀疏矩阵表示种群分布，避免处理空白地块。
     预计算物种相似度矩阵，避免重复计算。
+    
+    【依赖注入】
+    配置必须通过构造函数注入，内部方法不再调用 _load_*_config。
+    如需刷新配置，使用 reload_config() 显式更新。
     """
     
-    def __init__(self, batch_limit: int = 50) -> None:
+    def __init__(
+        self,
+        batch_limit: int = 50,
+        ecology_config: EcologyBalanceConfig | None = None,
+        mortality_config: MortalityConfig | None = None,
+        speciation_config: SpeciationConfig | None = None,
+    ) -> None:
+        """初始化死亡率计算引擎
+        
+        Args:
+            batch_limit: 批处理大小
+            ecology_config: 生态平衡配置（必须提供，或调用 reload_config 加载）
+            mortality_config: 死亡率配置（必须提供，或调用 reload_config 加载）
+            speciation_config: 分化配置（必须提供，或调用 reload_config 加载）
+            
+        注意: 如果配置未提供，将使用默认值并记录警告。
+              生产环境应通过 SimulationEngine 传入配置。
+        """
         self.batch_limit = batch_limit
+        
+        # 配置注入 - 如未提供则使用默认值并警告
+        if ecology_config is None:
+            logger.warning("[死亡率引擎] ecology_config 未注入，使用默认值")
+            ecology_config = EcologyBalanceConfig()
+        if mortality_config is None:
+            logger.warning("[死亡率引擎] mortality_config 未注入，使用默认值")
+            mortality_config = MortalityConfig()
+        if speciation_config is None:
+            logger.warning("[死亡率引擎] speciation_config 未注入，使用默认值")
+            speciation_config = SpeciationConfig()
+        
+        self._ecology_config = ecology_config
+        self._mortality_config = mortality_config
+        self._speciation_config = speciation_config
         
         # 缓存地块信息
         self._tiles: list[MapTile] = []
@@ -228,6 +228,29 @@ class TileBasedMortalityEngine:
         # 【新增v3】物种相似度矩阵缓存（Embedding + 特征）
         self._species_similarity_matrix: np.ndarray | None = None
         self._embedding_service = None  # 由外部注入
+    
+    def reload_config(
+        self,
+        ecology_config: EcologyBalanceConfig | None = None,
+        mortality_config: MortalityConfig | None = None,
+        speciation_config: SpeciationConfig | None = None,
+    ) -> None:
+        """热更新配置
+        
+        Args:
+            ecology_config: 生态平衡配置（必须由调用方提供）
+            mortality_config: 死亡率配置（必须由调用方提供）
+            speciation_config: 分化配置（必须由调用方提供）
+            
+        注意: 配置应由 SimulationEngine.reload_configs() 统一从容器获取后传入。
+        """
+        if ecology_config is not None:
+            self._ecology_config = ecology_config
+        if mortality_config is not None:
+            self._mortality_config = mortality_config
+        if speciation_config is not None:
+            self._speciation_config = speciation_config
+        logger.info("[死亡率引擎] 配置已重新加载")
     
     def build_matrices(
         self,
@@ -683,8 +706,8 @@ class TileBasedMortalityEngine:
         if self._population_matrix is None or self._last_mortality_matrix is None:
             return {}
         
-        # 【改进】从配置加载所有参数
-        spec_config = _load_speciation_config()
+        # 【改进】使用注入的配置
+        spec_config = self._speciation_config
         
         # 使用配置值或传入的参数
         min_tile_population = min_tile_population if min_tile_population is not None else spec_config.candidate_tile_min_pop
@@ -916,6 +939,7 @@ class TileBasedMortalityEngine:
         tier: str,
         trophic_interactions: dict[str, float] | None = None,
         extinct_codes: set[str] | None = None,
+        turn_index: int = 0,
     ) -> list[AggregatedMortalityResult]:
         """计算物种死亡率（按地块计算后汇总）
         
@@ -926,6 +950,7 @@ class TileBasedMortalityEngine:
             tier: 物种层级
             trophic_interactions: 营养级互动（全局）
             extinct_codes: 已灭绝物种代码集合
+            turn_index: 当前回合索引（用于计算新物种优势）
             
         Returns:
             汇总后的死亡率结果列表
@@ -985,7 +1010,9 @@ class TileBasedMortalityEngine:
         # ========== 阶段3: 汇总各地块结果 ==========
         results = self._aggregate_tile_results(
             species_list, species_arrays, mortality_matrix, 
-            niche_metrics, tier, extinct_codes, batch_population_matrix
+            niche_metrics, tier, extinct_codes, batch_population_matrix,
+            turn_index=turn_index,  # 【新增】传递 turn_index
+            trophic_interactions=trophic_interactions,  # 【新增】传递食物网反馈信号
         )
         
         return results
@@ -1014,7 +1041,12 @@ class TileBasedMortalityEngine:
             'protection_turns': np.zeros(n, dtype=np.int32),
             'is_suppressed': np.zeros(n, dtype=bool),
             'suppression_turns': np.zeros(n, dtype=np.int32),
+            # 【新增】演化相关字段
+            'created_turn': np.zeros(n, dtype=np.int32),
         }
+        
+        # 【新增】收集 parent_code 供后续使用
+        parent_codes = []
         
         for i, sp in enumerate(species_list):
             arrays['base_sensitivity'][i] = sp.hidden_traits.get("environment_sensitivity", 0.5)
@@ -1036,6 +1068,13 @@ class TileBasedMortalityEngine:
             arrays['protection_turns'][i] = getattr(sp, 'protection_turns', 0) or 0
             arrays['is_suppressed'][i] = getattr(sp, 'is_suppressed', False) or False
             arrays['suppression_turns'][i] = getattr(sp, 'suppression_turns', 0) or 0
+            
+            # 【新增】演化相关
+            arrays['created_turn'][i] = getattr(sp, 'created_turn', 0) or 0
+            parent_codes.append(getattr(sp, 'parent_code', None))
+        
+        # 存储非数值数据供后续使用
+        arrays['_parent_codes'] = parent_codes
         
         return arrays
     
@@ -1106,8 +1145,8 @@ class TileBasedMortalityEngine:
         # 【新增】计算并缓存食草压力（供结果汇总使用）
         self._compute_and_cache_herbivory_pressure(species_list)
         
-        # ========== 【改进v6】从配置加载死亡率参数 ==========
-        mort_cfg = _load_mortality_config()
+        # ========== 【改进v6】使用注入的死亡率配置 ==========
+        mort_cfg = self._mortality_config
         
         # 【修复1】压力上限（从配置读取）
         env_capped = np.minimum(mort_cfg.env_pressure_cap, env_pressure)
@@ -1499,8 +1538,8 @@ class TileBasedMortalityEngine:
         
         # ======== 3. 综合竞争系数矩阵 ========
         # 竞争系数 = 相似度 × 营养级系数 × 配置系数
-        # 【改进v5】从配置读取竞争系数，支持动态调参
-        eco_cfg = _load_ecology_config()
+        # 【改进v5】使用注入的生态配置
+        eco_cfg = self._ecology_config
         comp_coef_matrix = (similarity_matrix * trophic_coef * eco_cfg.competition_base_coefficient).astype(np.float64)
         np.fill_diagonal(comp_coef_matrix, 0.0)
         
@@ -1640,9 +1679,9 @@ class TileBasedMortalityEngine:
                                np.clip(ratio_t4 - 1.0, 0, SCARCITY_MAX),
                                np.where(t5 > 0, SCARCITY_MAX, 0.0))
         
-        # 【改进v5】从配置读取稀缺权重
+        # 【改进v5】使用注入的生态配置
         # 消费者猎物稀缺时，死亡率显著上升
-        eco_cfg = _load_ecology_config()
+        eco_cfg = self._ecology_config
         SCARCITY_WEIGHT = eco_cfg.scarcity_weight
         
         # 将压力分配到各物种
@@ -1738,6 +1777,8 @@ class TileBasedMortalityEngine:
     ) -> np.ndarray:
         """计算每个地块的资源压力（矩阵优化版）
         
+        【v2改进】使用资源管理器的 NPP 模型，统一能量单位
+        
         考虑地块资源量 vs 该地块物种总需求
         
         Args:
@@ -1751,18 +1792,25 @@ class TileBasedMortalityEngine:
         if batch_population_matrix is None or self._tile_env_matrix is None:
             return np.zeros((n_tiles, n_species))
         
+        # 【改进】从资源配置加载参数
+        # 使用 ResourceSystemConfig 默认值，避免全局单例依赖
+        from ..models.config import ResourceSystemConfig
+        res_cfg = ResourceSystemConfig()
+        
+        metabolic_coef = res_cfg.metabolic_rate_coefficient
+        weight_exponent = res_cfg.metabolic_weight_exponent
+        harvestable_fraction = res_cfg.harvestable_fraction
+        pressure_cap = res_cfg.resource_pressure_cap
+        
         # 预计算物种属性向量
-        weights = np.array([
+        weights_g = np.array([
             sp.morphology_stats.get("body_weight_g", 1.0) 
             for sp in species_list
         ])
-        metabolics = np.array([
-            sp.morphology_stats.get("metabolic_rate", 3.0) 
-            for sp in species_list
-        ])
+        weights_kg = weights_g / 1000.0  # 转换为 kg
         
-        # 需求系数 = 体重 × (代谢率 / 10)
-        demand_coef = weights * (metabolics / 10.0)  # (n_species,)
+        # 【改进】使用异速生长代谢率：需求 ∝ 体重^0.75
+        demand_coef = metabolic_coef * (weights_kg ** weight_exponent)  # (n_species,)
         
         # 【关键修复】使用batch_population_matrix计算需求
         demand_matrix = batch_population_matrix * demand_coef[np.newaxis, :]
@@ -1770,11 +1818,10 @@ class TileBasedMortalityEngine:
         # 每个地块的总需求 (n_tiles,)
         total_demand_per_tile = demand_matrix.sum(axis=1)
         
-        # 地块资源 (n_tiles,)
+        # 使用地块资源计算供给容量（避免依赖全局资源管理器）
+        # tile.resources × 转换系数 × 可采份额
         tile_resources = self._tile_env_matrix[:, 2]
-        
-        # 供给能力 (n_tiles,)
-        supply_capacity = tile_resources * 1000
+        supply_capacity = tile_resources * res_cfg.resource_to_npp_factor * harvestable_fraction
         
         # 短缺比例 (n_tiles,)
         # shortage = max(0, (demand - supply) / demand)
@@ -1793,7 +1840,7 @@ class TileBasedMortalityEngine:
         # 【关键修复】使用batch_population_matrix
         resource_pressure = np.where(batch_population_matrix > 0, resource_pressure, 0.0)
         
-        return np.clip(resource_pressure, 0.0, 0.65)
+        return np.clip(resource_pressure, 0.0, pressure_cap)
     
     def _compute_predation_network_pressure(
         self,
@@ -2079,6 +2126,8 @@ class TileBasedMortalityEngine:
         tier: str,
         extinct_codes: set[str],
         batch_population_matrix: np.ndarray | None = None,
+        turn_index: int = 0,
+        trophic_interactions: dict[str, float] | None = None,
     ) -> list[AggregatedMortalityResult]:
         """汇总各地块结果，计算物种总体死亡率
         
@@ -2087,11 +2136,44 @@ class TileBasedMortalityEngine:
         - 避难所地块（死亡率<20%）可保证物种存续
         - 汇总各地块存活数得到总存活数
         
+        【v3更新】演化平衡调整：
+        - 频率依赖选择：常见型受惩罚，稀有型获优势
+        - 新物种适应性优势：新分化物种前几回合获得死亡率减免
+        - 增强子代压制：子代对亲代的竞争效应增强
+        - 高生态位重叠直接竞争：高重叠物种相互消耗
+        
+        【v4更新】食物网反馈压力：
+        - 饥饿物种：额外死亡率惩罚
+        - 孤立消费者：额外死亡率惩罚
+        - 猎物丰富区域：死亡率减免
+        
         汇总方式：按地块独立计算后求和
         total_survivors = Σ(tile_pop × (1 - tile_death_rate))
         """
+        if trophic_interactions is None:
+            trophic_interactions = {}
         n_species = len(species_list)
         results: list[AggregatedMortalityResult] = []
+        
+        # 【新增v3】使用注入的生态配置
+        eco_cfg = self._ecology_config
+        
+        # 【新增v3】计算总种群和物种频率（用于频率依赖选择）
+        total_ecosystem_pop = sum(int(species_arrays['population'][i]) for i in range(n_species))
+        species_frequencies = {}
+        if total_ecosystem_pop > 0:
+            for i in range(n_species):
+                pop = int(species_arrays['population'][i])
+                species_frequencies[species_list[i].lineage_code] = pop / total_ecosystem_pop
+        
+        # 【新增v3】构建亲子关系映射（用于增强子代压制）
+        parent_codes = species_arrays.get('_parent_codes', [None] * n_species)
+        parent_to_children: dict[str, list[int]] = {}
+        for i, pc in enumerate(parent_codes):
+            if pc:
+                if pc not in parent_to_children:
+                    parent_to_children[pc] = []
+                parent_to_children[pc].append(i)
         
         for sp_idx, species in enumerate(species_list):
             total_pop = int(species_arrays['population'][sp_idx])
@@ -2211,6 +2293,132 @@ class TileBasedMortalityEngine:
                 overall_death_rate = 1.0
             
             overall_death_rate = min(0.98, max(0.03, overall_death_rate))
+            
+            # ========== 【新增v3】演化平衡调整 ==========
+            evolution_adjustment = 0.0
+            adjustment_notes = []
+            
+            # 1. 频率依赖选择
+            if eco_cfg.enable_frequency_dependence and total_ecosystem_pop > 0:
+                freq = species_frequencies.get(species.lineage_code, 0.0)
+                
+                if freq > eco_cfg.common_type_threshold:
+                    # 常见型惩罚：频率越高，惩罚越重
+                    excess = freq - eco_cfg.common_type_threshold
+                    penalty = min(eco_cfg.common_type_max_penalty, 
+                                  excess * eco_cfg.frequency_dependence_strength * 2)
+                    evolution_adjustment += penalty
+                    adjustment_notes.append(f"常见型惩罚+{penalty:.1%}")
+                    
+                elif freq < eco_cfg.rare_type_threshold and freq > 0:
+                    # 稀有型优势：频率越低，优势越大
+                    rarity = eco_cfg.rare_type_threshold - freq
+                    advantage = min(eco_cfg.rare_type_max_advantage,
+                                    rarity * eco_cfg.frequency_dependence_strength * 3)
+                    evolution_adjustment -= advantage
+                    adjustment_notes.append(f"稀有型优势-{advantage:.1%}")
+            
+            # 2. 新物种适应性优势
+            if eco_cfg.enable_new_species_advantage:
+                species_age = turn_index - species_arrays['created_turn'][sp_idx]
+                
+                if species_age == 0:
+                    # 新分化物种第1回合：最大优势
+                    advantage = eco_cfg.new_species_advantage_turn0
+                    evolution_adjustment -= advantage
+                    adjustment_notes.append(f"新种优势T0-{advantage:.1%}")
+                elif species_age == 1:
+                    advantage = eco_cfg.new_species_advantage_turn1
+                    evolution_adjustment -= advantage
+                    adjustment_notes.append(f"新种优势T1-{advantage:.1%}")
+                elif species_age == 2:
+                    advantage = eco_cfg.new_species_advantage_turn2
+                    evolution_adjustment -= advantage
+                    adjustment_notes.append(f"新种优势T2-{advantage:.1%}")
+            
+            # 3. 增强子代压制（对亲代的额外惩罚）
+            lineage_code = species.lineage_code
+            if lineage_code in parent_to_children:
+                # 该物种有子代，施加演化滞后惩罚
+                children_indices = parent_to_children[lineage_code]
+                
+                # 计算最年轻子代的年龄
+                min_child_age = min(
+                    turn_index - species_arrays['created_turn'][ci]
+                    for ci in children_indices
+                )
+                
+                if min_child_age == 0:
+                    penalty = eco_cfg.parent_lag_penalty_turn0
+                    evolution_adjustment += penalty
+                    adjustment_notes.append(f"亲代滞后T0+{penalty:.1%}")
+                elif min_child_age == 1:
+                    penalty = eco_cfg.parent_lag_penalty_turn1
+                    evolution_adjustment += penalty
+                    adjustment_notes.append(f"亲代滞后T1+{penalty:.1%}")
+                elif min_child_age == 2:
+                    penalty = eco_cfg.parent_lag_penalty_turn2
+                    evolution_adjustment += penalty
+                    adjustment_notes.append(f"亲代滞后T2+{penalty:.1%}")
+            
+            # 4. 高生态位重叠直接竞争
+            overlap = species_arrays['overlap'][sp_idx]
+            if overlap > eco_cfg.high_overlap_threshold:
+                excess_overlap = overlap - eco_cfg.high_overlap_threshold
+                # 每 0.1 重叠度增加一定死亡率
+                overlap_penalty = min(
+                    eco_cfg.overlap_competition_max,
+                    (excess_overlap / 0.1) * eco_cfg.overlap_competition_per_01
+                )
+                evolution_adjustment += overlap_penalty
+                adjustment_notes.append(f"重叠竞争+{overlap_penalty:.1%}")
+            
+            # 【新增v4】5. 食物网反馈压力
+            # 处理来自 FoodWebManager 的反馈信号
+            lineage_code = species.lineage_code
+            
+            # 5a. 物种特定的食物网死亡率惩罚（饥饿/孤立）
+            food_web_mortality_key = f"food_web_mortality_{lineage_code}"
+            if food_web_mortality_key in trophic_interactions:
+                food_web_penalty = trophic_interactions[food_web_mortality_key]
+                evolution_adjustment += food_web_penalty
+                adjustment_notes.append(f"食物网压力+{food_web_penalty:.1%}")
+            
+            # 5b. 全局食物网健康度惩罚
+            if "food_web_global_penalty" in trophic_interactions:
+                if species_arrays['trophic_level'][sp_idx] >= 2.0:  # 只影响消费者
+                    global_penalty = trophic_interactions["food_web_global_penalty"]
+                    evolution_adjustment += global_penalty
+                    adjustment_notes.append(f"食物网健康度惩罚+{global_penalty:.1%}")
+            
+            # 5c. 营养级稀缺信号
+            trophic_level_int = int(species_arrays['trophic_level'][sp_idx])
+            scarcity_key = f"t{trophic_level_int}_scarcity"
+            if scarcity_key in trophic_interactions:
+                scarcity = trophic_interactions[scarcity_key]
+                if scarcity > 0.5:  # 只有高稀缺时才应用
+                    scarcity_penalty = min(0.1, (scarcity - 0.5) * 0.1)
+                    evolution_adjustment += scarcity_penalty
+                    adjustment_notes.append(f"T{trophic_level_int}稀缺+{scarcity_penalty:.1%}")
+            
+            # 应用调整
+            if evolution_adjustment != 0:
+                old_rate = overall_death_rate
+                overall_death_rate = min(0.95, max(0.03, overall_death_rate + evolution_adjustment))
+                
+                # 重新计算存活数
+                if total_pop > 0:
+                    new_survivors = int(total_pop * (1.0 - overall_death_rate))
+                    new_deaths = total_pop - new_survivors
+                    total_survivors = max(0, new_survivors)
+                    total_deaths = max(0, new_deaths)
+                
+                if adjustment_notes:
+                    logger.debug(
+                        f"[演化平衡] {species.common_name}: "
+                        f"死亡率 {old_rate:.1%} → {overall_death_rate:.1%} "
+                        f"({', '.join(adjustment_notes)})"
+                    )
             
             # 生成分析文本（包含地块信息）
             notes = [self._generate_tile_mortality_notes(

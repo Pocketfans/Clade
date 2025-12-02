@@ -1,4 +1,4 @@
-import type { ActionQueueStatus, PressureDraft } from "../services/api.types";
+import type { ActionQueueStatus, PressureDraft } from "@/services/api.types";
 
 interface Props {
   drafts: PressureDraft[];

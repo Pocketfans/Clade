@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchLogs, fetchAIDiagnostics, resetAIDiagnostics, type AIDiagnostics } from "../services/api";
+import { fetchLogs, fetchAIDiagnostics, resetAIDiagnostics, type AIDiagnostics } from "@/services/api";
 
 interface LogPanelProps {
   onClose: () => void;

@@ -655,3 +655,6 @@ class AchievementService:
             "by_rarity": by_rarity,
         }
 
+
+# 模块级单例
+achievement_service = AchievementService()

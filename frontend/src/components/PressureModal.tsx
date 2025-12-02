@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-import type { PressureDraft, PressureTemplate } from "../services/api.types";
+import type { PressureDraft, PressureTemplate } from "@/services/api.types";
 
 interface Props {
   pressures: PressureDraft[];

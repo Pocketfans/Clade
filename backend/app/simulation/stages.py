@@ -228,6 +228,7 @@ class StageOrder(Enum):
     MAP_EVOLUTION = 20
     TECTONIC_MOVEMENT = 25
     FETCH_SPECIES = 30
+    RESOURCE_CALC = 32  # 资源计算（NPP/承载力）
     FOOD_WEB = 35
     TIERING_AND_NICHE = 40
     PRELIMINARY_MORTALITY = 50
@@ -574,11 +575,68 @@ class TectonicMovementStage(BaseStage):
             # 合并压力反馈
             for key, value in ctx.tectonic_result.pressure_feedback.items():
                 ctx.modifiers[key] = ctx.modifiers.get(key, 0) + value
+            
+            # 【新增】触发资源系统事件脉冲
+            self._apply_resource_event_pulses(ctx, ctx.tectonic_result, map_tiles)
         
         except Exception as e:
             logger.warning(f"[板块系统] 运行失败: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _apply_resource_event_pulses(
+        self,
+        ctx: "SimulationContext",
+        tectonic_result,
+        map_tiles: list,
+    ):
+        """将板块/地质事件转换为资源脉冲"""
+        try:
+            # 使用 engine 注入的 resource_manager，避免全局单例
+            resource_mgr = engine.resource_manager if engine else None
+            if resource_mgr is None:
+                logger.warning("[地质阶段] 资源管理器未注入，跳过资源脉冲")
+                return
+            
+            # 初始化地块资源状态（如果尚未初始化）
+            if map_tiles:
+                resource_mgr.initialize_tiles(map_tiles)
+            
+            # 处理火山事件
+            if hasattr(tectonic_result, 'volcanic_events'):
+                for event in tectonic_result.volcanic_events:
+                    affected_tiles = event.get('affected_tiles', [])
+                    for tile_id in affected_tiles:
+                        resource_mgr.apply_event_pulse(tile_id, "volcanic_ash", duration_turns=5)
+                    
+                    if affected_tiles:
+                        ctx.emit_event(
+                            "info",
+                            f"🌋 火山灰影响 {len(affected_tiles)} 个地块的资源",
+                            "生态"
+                        )
+            
+            # 处理洪水事件（从 modifiers 检测）
+            flood_intensity = ctx.modifiers.get("flood", 0)
+            if flood_intensity > 0.3:
+                # 影响低海拔地块
+                for tile in map_tiles or []:
+                    if hasattr(tile, 'elevation') and tile.elevation < 50:
+                        resource_mgr.apply_event_pulse(tile.id, "flood", duration_turns=3)
+            
+            # 处理干旱事件
+            drought_intensity = ctx.modifiers.get("drought", 0)
+            if drought_intensity > 0.3:
+                # 影响干旱敏感地块
+                for tile in map_tiles or []:
+                    if hasattr(tile, 'humidity') and tile.humidity < 0.3:
+                        resource_mgr.apply_event_pulse(tile.id, "drought", duration_turns=4)
+            
+            # 更新资源动态（计算消耗）
+            # 消耗数据将在后续阶段计算后更新
+            
+        except Exception as e:
+            logger.warning(f"[资源事件脉冲] 处理失败: {e}")
 
 
 class FetchSpeciesStage(BaseStage):
@@ -629,11 +687,126 @@ class FetchSpeciesStage(BaseStage):
         intervention_service.update_intervention_status(ctx.species_batch)
 
 
+class ResourceCalcStage(BaseStage):
+    """资源计算阶段
+    
+    使用 ResourceManager 计算各地块的 NPP 和承载力，
+    生成 resource_snapshot 供后续阶段（死亡率、繁殖、迁徙）使用。
+    """
+    
+    def __init__(self):
+        super().__init__(StageOrder.RESOURCE_CALC.value, "资源计算")
+    
+    def get_dependency(self) -> StageDependency:
+        return StageDependency(
+            requires_stages={"获取物种列表"},  # 需要物种列表和地块信息
+            requires_fields={"species_batch", "all_tiles", "turn_index"},
+            writes_fields={"resource_snapshot"},
+        )
+    
+    async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
+        """执行资源计算
+        
+        1. 从引擎获取 ResourceManager（通过容器注入）
+        2. 计算各地块的消耗量（基于物种分布）
+        3. 更新资源动态
+        4. 生成资源快照供后续阶段使用
+        """
+        logger.info("计算资源分布...")
+        ctx.emit_event("stage", "🌿 计算资源分布", "生态")
+        
+        try:
+            # 从引擎获取 ResourceManager（不再使用全局容器）
+            resource_manager = engine.resource_manager
+            if resource_manager is None:
+                logger.warning("ResourceManager 不可用，跳过资源阶段")
+                return
+            
+            # 计算各地块的物种消耗
+            consumption_by_tile = self._calculate_consumption(ctx)
+            
+            # 更新资源动态
+            if ctx.all_tiles:
+                resource_manager.update_resource_dynamics(
+                    ctx.all_tiles,
+                    consumption_by_tile,
+                    ctx.turn_index,
+                )
+            
+            # 生成并存储资源快照
+            ctx.resource_snapshot = resource_manager.get_snapshot(ctx.turn_index)
+            
+            # 输出汇总信息
+            if ctx.resource_snapshot:
+                overgrazing = ctx.resource_snapshot.overgrazing_tiles
+                total_npp = ctx.resource_snapshot.total_npp
+                ctx.emit_event(
+                    "info",
+                    f"🌱 总NPP: {total_npp:.0f} kg | 过采地块: {overgrazing}",
+                    "生态"
+                )
+                logger.info(
+                    f"资源计算完成: total_npp={total_npp:.0f}, "
+                    f"avg_npp={ctx.resource_snapshot.avg_npp:.2f}, "
+                    f"overgrazing_tiles={overgrazing}"
+                )
+        except Exception as e:
+            logger.warning(f"资源计算阶段出错: {e}")
+            ctx.emit_event("warning", f"资源计算出错: {e}", "生态")
+    
+    def _calculate_consumption(self, ctx: SimulationContext) -> dict[int, float]:
+        """计算各地块的资源消耗量
+        
+        基于物种分布和代谢需求估算消耗。
+        """
+        consumption: dict[int, float] = {}
+        
+        # 遍历存活物种
+        for species in ctx.species_batch:
+            if species.status != "alive":
+                continue
+            
+            # 获取体重（用于代谢计算）
+            body_weight = getattr(species, 'body_weight_kg', 1.0)
+            if body_weight is None:
+                body_weight = 1.0
+            
+            # 获取栖息地分布
+            habitats = getattr(species, 'habitats', []) or []
+            
+            if not habitats:
+                continue
+            
+            # 估算代谢需求（异速生长：需求 ∝ 体重^0.75）
+            individual_demand = 0.01 * (body_weight ** 0.75)  # 简化的代谢模型
+            
+            # 按栖息地分配消耗
+            population = species.population or 0
+            tiles_count = len(habitats)
+            pop_per_tile = population / tiles_count if tiles_count > 0 else 0
+            
+            for hab in habitats:
+                tile_id = getattr(hab, 'tile_id', None)
+                if tile_id is not None:
+                    tile_consumption = individual_demand * pop_per_tile
+                    consumption[tile_id] = consumption.get(tile_id, 0.0) + tile_consumption
+        
+        return consumption
+
+
 class FoodWebStage(BaseStage):
-    """食物网维护阶段"""
+    """食物网维护阶段
+    
+    【v2增强】
+    1. 猎物多样性阈值检查和自动补充
+    2. 新物种（T1/T2）自动集成
+    3. 区域权重感知（饥饿区域、孤立区域）
+    4. 生成 trophic_interactions 反馈信号
+    """
     
     def __init__(self):
         super().__init__(StageOrder.FOOD_WEB.value, "食物网维护")
+        self._previous_species_codes: set[str] | None = None
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
         from ..repositories.species_repository import species_repository
@@ -642,8 +815,20 @@ class FoodWebStage(BaseStage):
         ctx.emit_event("stage", "🕸️ 维护食物网", "生态")
         
         try:
+            # 构建地块-物种映射（用于区域权重）
+            tile_species_map, species_tiles = self._build_tile_species_map(ctx.all_species)
+            
+            # 获取上回合的物种代码（用于检测新物种）
+            current_codes = {s.lineage_code for s in ctx.all_species if s.status == "alive"}
+            previous_codes = self._previous_species_codes
+            self._previous_species_codes = current_codes.copy()
+            
+            # 执行食物网维护（v2增强版）
             ctx.food_web_analysis = engine.food_web_manager.maintain_food_web(
-                ctx.all_species, species_repository, ctx.turn_index
+                ctx.all_species, species_repository, ctx.turn_index,
+                tile_species_map=tile_species_map,
+                species_tiles=species_tiles,
+                previous_species_codes=previous_codes,
             )
             food_web_changes = engine.food_web_manager.get_changes()
             
@@ -656,6 +841,32 @@ class FoodWebStage(BaseStage):
                 ctx.all_species = species_repository.list_species()
                 ctx.species_batch = [sp for sp in ctx.all_species if sp.status == "alive"]
             
+            # 【新增】生成 trophic_interactions 反馈信号
+            trophic_signals = engine.food_web_manager.generate_trophic_signals(
+                ctx.food_web_analysis, ctx.all_species
+            )
+            
+            # 合并到 trophic_interactions（供后续阶段使用）
+            if not hasattr(ctx, 'trophic_interactions') or ctx.trophic_interactions is None:
+                ctx.trophic_interactions = {}
+            ctx.trophic_interactions.update(trophic_signals)
+            
+            # 报告新生产者
+            if ctx.food_web_analysis.new_producers:
+                ctx.emit_event(
+                    "info",
+                    f"🌱 发现 {len(ctx.food_web_analysis.new_producers)} 个新 T1/T2 物种",
+                    "生态"
+                )
+            
+            # 报告猎物不足的物种
+            if ctx.food_web_analysis.prey_shortage_species:
+                ctx.emit_event(
+                    "warning",
+                    f"⚠️ {len(ctx.food_web_analysis.prey_shortage_species)} 个物种猎物多样性不足",
+                    "生态"
+                )
+            
             if ctx.food_web_analysis.bottleneck_warnings:
                 for warning in ctx.food_web_analysis.bottleneck_warnings[:3]:
                     ctx.emit_event("warning", warning, "生态")
@@ -663,10 +874,32 @@ class FoodWebStage(BaseStage):
             logger.info(
                 f"[食物网] 健康度: {ctx.food_web_analysis.health_score:.0%}, "
                 f"链接数: {ctx.food_web_analysis.total_links}, "
-                f"孤立消费者: {len(ctx.food_web_analysis.orphaned_consumers)}"
+                f"孤立消费者: {len(ctx.food_web_analysis.orphaned_consumers)}, "
+                f"trophic_signals: {len(trophic_signals)}"
             )
         except Exception as e:
             logger.warning(f"[食物网维护] 失败: {e}")
+    
+    def _build_tile_species_map(
+        self, 
+        all_species: list
+    ) -> tuple[dict[int, set[str]], dict[str, set[int]]]:
+        """构建地块-物种双向映射"""
+        tile_species_map: dict[int, set[str]] = {}
+        species_tiles: dict[str, set[int]] = {}
+        
+        for sp in all_species:
+            if sp.status != "alive":
+                continue
+            tiles = set(sp.morphology_stats.get("tile_ids", []))
+            if tiles:
+                species_tiles[sp.lineage_code] = tiles
+                for tid in tiles:
+                    if tid not in tile_species_map:
+                        tile_species_map[tid] = set()
+                    tile_species_map[tid].add(sp.lineage_code)
+        
+        return tile_species_map, species_tiles
 
 
 class TieringAndNicheStage(BaseStage):
@@ -715,15 +948,18 @@ class PreliminaryMortalityStage(BaseStage):
             
             preliminary_critical = engine.tile_mortality.evaluate(
                 ctx.tiered.critical, ctx.modifiers, ctx.niche_metrics, tier="critical",
-                trophic_interactions=ctx.trophic_interactions, extinct_codes=ctx.extinct_codes
+                trophic_interactions=ctx.trophic_interactions, extinct_codes=ctx.extinct_codes,
+                turn_index=ctx.turn_index
             )
             preliminary_focus = engine.tile_mortality.evaluate(
                 ctx.tiered.focus, ctx.modifiers, ctx.niche_metrics, tier="focus",
-                trophic_interactions=ctx.trophic_interactions, extinct_codes=ctx.extinct_codes
+                trophic_interactions=ctx.trophic_interactions, extinct_codes=ctx.extinct_codes,
+                turn_index=ctx.turn_index
             )
             preliminary_background = engine.tile_mortality.evaluate(
                 ctx.tiered.background, ctx.modifiers, ctx.niche_metrics, tier="background",
-                trophic_interactions=ctx.trophic_interactions, extinct_codes=ctx.extinct_codes
+                trophic_interactions=ctx.trophic_interactions, extinct_codes=ctx.extinct_codes,
+                turn_index=ctx.turn_index
             )
         else:
             preliminary_critical = engine.mortality.evaluate(
@@ -912,15 +1148,18 @@ class FinalMortalityStage(BaseStage):
             
             ctx.critical_results = engine.tile_mortality.evaluate(
                 ctx.tiered.critical, ctx.modifiers, ctx.niche_metrics, tier="critical",
-                trophic_interactions=ctx.trophic_interactions, extinct_codes=ctx.extinct_codes
+                trophic_interactions=ctx.trophic_interactions, extinct_codes=ctx.extinct_codes,
+                turn_index=ctx.turn_index
             )
             ctx.focus_results = engine.tile_mortality.evaluate(
                 ctx.tiered.focus, ctx.modifiers, ctx.niche_metrics, tier="focus",
-                trophic_interactions=ctx.trophic_interactions, extinct_codes=ctx.extinct_codes
+                trophic_interactions=ctx.trophic_interactions, extinct_codes=ctx.extinct_codes,
+                turn_index=ctx.turn_index
             )
             ctx.background_results = engine.tile_mortality.evaluate(
                 ctx.tiered.background, ctx.modifiers, ctx.niche_metrics, tier="background",
-                trophic_interactions=ctx.trophic_interactions, extinct_codes=ctx.extinct_codes
+                trophic_interactions=ctx.trophic_interactions, extinct_codes=ctx.extinct_codes,
+                turn_index=ctx.turn_index
             )
         else:
             ctx.critical_results = engine.mortality.evaluate(
@@ -1042,7 +1281,8 @@ class PopulationUpdateStage(BaseStage):
         
         ctx.reproduction_results = engine.reproduction_service.apply_reproduction(
             ctx.species_batch, niche_data, survival_rates,
-            habitat_manager=habitat_manager
+            habitat_manager=habitat_manager,
+            turn_index=ctx.turn_index
         )
         
         # 计算最终种群
@@ -1147,6 +1387,79 @@ class PopulationUpdateStage(BaseStage):
                 result.death_rate,
                 growth_rate
             )
+        
+        # 【新增】更新资源系统动态
+        self._update_resource_dynamics(ctx, engine)
+    
+    def _update_resource_dynamics(self, ctx: "SimulationContext", engine: "SimulationEngine"):
+        """更新资源系统动态（计算消耗并触发再生）"""
+        try:
+            from ..repositories.environment_repository import environment_repository
+            
+            # 使用 engine 注入的 resource_manager，避免全局单例
+            resource_mgr = engine.resource_manager if engine else None
+            if resource_mgr is None:
+                logger.warning("[资源动态] 资源管理器未注入，跳过资源更新")
+                return
+            
+            # 获取所有地块
+            all_tiles = environment_repository.list_tiles()
+            if not all_tiles:
+                return
+            
+            # 计算各地块的资源消耗
+            consumption_by_tile: dict[int, float] = {}
+            
+            for result in ctx.combined_results:
+                sp = result.species
+                if sp.trophic_level >= 2.0:
+                    continue  # 只计算生产者的消耗（由消费者施加）
+                
+                # 获取物种分布
+                habitats = getattr(sp, 'habitats', [])
+                body_weight_kg = sp.morphology_stats.get("body_weight_g", 1.0) / 1000.0
+                
+                for hab in habitats:
+                    tile_id = getattr(hab, 'tile_id', 0)
+                    pop = getattr(hab, 'population', 0)
+                    
+                    if tile_id > 0 and pop > 0:
+                        # 简单估算消耗（生产者的生物量 = 消费者的食物）
+                        consumption = pop * body_weight_kg * 0.1  # 每回合消耗 10%
+                        consumption_by_tile[tile_id] = consumption_by_tile.get(tile_id, 0) + consumption
+            
+            # 添加消费者的猎物消耗
+            for result in ctx.combined_results:
+                sp = result.species
+                if sp.trophic_level < 2.0:
+                    continue
+                
+                habitats = getattr(sp, 'habitats', [])
+                body_weight_kg = sp.morphology_stats.get("body_weight_g", 1.0) / 1000.0
+                metabolic_rate = sp.morphology_stats.get("metabolic_rate", 3.0)
+                
+                for hab in habitats:
+                    tile_id = getattr(hab, 'tile_id', 0)
+                    pop = getattr(hab, 'population', 0)
+                    
+                    if tile_id > 0 and pop > 0:
+                        # 消费者的能量需求
+                        consumption = pop * body_weight_kg * (metabolic_rate / 10.0)
+                        consumption_by_tile[tile_id] = consumption_by_tile.get(tile_id, 0) + consumption
+            
+            # 更新资源动态
+            resource_mgr.update_resource_dynamics(all_tiles, consumption_by_tile, ctx.turn_index)
+            
+            # 记录统计
+            stats = resource_mgr.get_stats()
+            if stats.get("overgrazing_tiles", 0) > 0:
+                logger.info(
+                    f"[资源动态] 过采地块: {stats['overgrazing_tiles']}, "
+                    f"平均NPP: {stats['avg_npp']:.0f} kg"
+                )
+        
+        except Exception as e:
+            logger.warning(f"[资源动态] 更新失败: {e}")
 
 
 # ============================================================================
@@ -2017,6 +2330,13 @@ class SpeciationStage(BaseStage):
                 
                 ctx.species_batch.extend(new_species)
                 logger.info(f"新物种已加入，总数: {len(ctx.species_batch)}")
+                
+                # 【新增】分化后触发局部食物网更新
+                # 将新生产者/初级消费者立即集成到食物网，不等下一回合全量扫描
+                if new_species:
+                    self._integrate_new_species_to_food_web(
+                        new_species, ctx, engine, species_repository
+                    )
         
         except asyncio.TimeoutError:
             logger.warning("[物种分化] 超时")
@@ -2024,6 +2344,95 @@ class SpeciationStage(BaseStage):
         except Exception as e:
             logger.error(f"[物种分化] 失败: {e}")
             ctx.branching_events = []
+    
+    def _integrate_new_species_to_food_web(
+        self,
+        new_species: list,
+        ctx: "SimulationContext",
+        engine: "SimulationEngine",
+        species_repository,
+    ) -> None:
+        """将新物种立即集成到食物网
+        
+        【触发条件】
+        - 新物种是 T1/T2（生产者或初级消费者）
+        - 或新物种是消费者但没有分配猎物
+        """
+        from ..services.species.food_web_manager import FoodWebChange
+        
+        try:
+            all_species = species_repository.list_species()
+            alive_species = [s for s in all_species if s.status == "alive"]
+            
+            # 构建地块-物种映射
+            species_tiles = {}
+            tile_species_map = {}
+            for sp in alive_species:
+                tiles = set(sp.morphology_stats.get("tile_ids", []))
+                if tiles:
+                    species_tiles[sp.lineage_code] = tiles
+                    for tid in tiles:
+                        if tid not in tile_species_map:
+                            tile_species_map[tid] = set()
+                        tile_species_map[tid].add(sp.lineage_code)
+            
+            changes = []
+            
+            for sp in new_species:
+                # 为新消费者分配猎物
+                if sp.trophic_level >= 2.0 and not sp.prey_species:
+                    prey_changes = engine.food_web_manager.integrate_new_species(
+                        sp, alive_species, species_repository
+                    )
+                    changes.extend(prey_changes)
+                
+                # 将新 T1/T2 物种添加到现有消费者的猎物列表
+                if sp.trophic_level < 3.0:
+                    # 找到猎物不足的消费者
+                    for consumer in alive_species:
+                        if consumer.lineage_code == sp.lineage_code:
+                            continue
+                        if consumer.trophic_level < 2.0:
+                            continue
+                        
+                        # 检查营养级匹配
+                        trophic_diff = consumer.trophic_level - sp.trophic_level
+                        if not (0.5 <= trophic_diff <= 1.5):
+                            continue
+                        
+                        current_prey = consumer.prey_species or []
+                        alive_codes = {s.lineage_code for s in alive_species}
+                        valid_prey = [c for c in current_prey if c in alive_codes]
+                        
+                        # 只对猎物不足的消费者添加
+                        if len(valid_prey) <= 3 and sp.lineage_code not in current_prey:
+                            # 检查栖息地/瓦片重叠
+                            consumer_tiles = species_tiles.get(consumer.lineage_code, set())
+                            sp_tiles = species_tiles.get(sp.lineage_code, set())
+                            
+                            if consumer_tiles and sp_tiles and not (consumer_tiles & sp_tiles):
+                                continue  # 无重叠，跳过
+                            
+                            # 添加为新猎物
+                            new_prey_list = valid_prey + [sp.lineage_code]
+                            consumer.prey_species = new_prey_list
+                            species_repository.upsert(consumer)
+                            
+                            changes.append(FoodWebChange(
+                                species_code=consumer.lineage_code,
+                                species_name=consumer.common_name,
+                                change_type="prey_added",
+                                details=f"分化后添加新猎物 {sp.common_name}",
+                                old_prey=current_prey,
+                                new_prey=new_prey_list,
+                            ))
+            
+            if changes:
+                logger.info(f"[分化-食物网] 更新了 {len(changes)} 条食物关系")
+                ctx.emit_event("info", f"🕸️ 分化后更新 {len(changes)} 条食物链", "生态")
+        
+        except Exception as e:
+            logger.warning(f"[分化-食物网] 集成失败: {e}")
 
 
 class BackgroundManagementStage(BaseStage):
@@ -2483,6 +2892,7 @@ def get_default_stages() -> list[BaseStage]:
         MapEvolutionStage(),
         TectonicMovementStage(),
         FetchSpeciesStage(),
+        ResourceCalcStage(),  # 资源计算（NPP/承载力）
         FoodWebStage(),
         TieringAndNicheStage(),
         PreliminaryMortalityStage(),

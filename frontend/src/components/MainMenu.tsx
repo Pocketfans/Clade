@@ -20,9 +20,9 @@ import {
   PlusCircle
 } from "lucide-react";
 
-import type { UIConfig, SaveMetadata } from "../services/api.types";
-import { formatSaveName, formatRelativeTime } from "../services/api.types";
-import { listSaves, createSave, loadGame, deleteSave } from "../services/api";
+import type { UIConfig, SaveMetadata } from "@/services/api.types";
+import { formatSaveName, formatRelativeTime } from "@/services/api.types";
+import { listSaves, createSave, loadGame, deleteSave } from "@/services/api";
 import { SpeciesInputCard, type SpeciesInputData } from "./SpeciesInputCard";
 
 export interface StartPayload {
@@ -76,9 +76,9 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
     try {
       const data = await listSaves();
       setSaves(data);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("加载存档列表失败:", error);
-      setError(error.message);
+      setError(error instanceof Error ? error.message : "加载失败");
     } finally {
       if (isRefresh) setRefreshing(false);
     }
@@ -105,8 +105,8 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
         map_seed: mapSeed.trim() ? parseInt(mapSeed) : undefined,
       });
       onStart({ mode: "create", scenario, save_name: saveName });
-    } catch (error: any) {
-      setError(error.message);
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "操作失败");
     } finally {
       setLoading(false);
     }
@@ -171,9 +171,9 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
         map_seed: mapSeed.trim() ? parseInt(mapSeed) : undefined,
       });
       onStart({ mode: "create", scenario: "空白剧本", save_name: saveName });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("[前端] 创建存档失败:", error);
-      setError(error.message);
+      setError(error instanceof Error ? error.message : "创建失败");
     } finally {
       setLoading(false);
     }
@@ -208,8 +208,8 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
     try {
       await loadGame(save_name);
       onStart({ mode: "load", scenario: "已保存的游戏", save_name });
-    } catch (error: any) {
-      setError(error.message);
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "操作失败");
     } finally {
       setLoading(false);
     }
@@ -226,9 +226,9 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
     try {
       await deleteSave(save_name);
       await loadSavesList();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("删除存档失败:", error);
-      setError(error.message);
+      setError(error instanceof Error ? error.message : "删除失败");
     } finally {
       setLoading(false);
     }

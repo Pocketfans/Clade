@@ -10,8 +10,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { Clock, Sparkles, Globe, ChevronDown, ChevronUp, RefreshCw, BookOpen, Zap } from "lucide-react";
 import { GamePanel } from "./common/GamePanel";
-import { embeddingApi, type NarrativeResponse, type Era } from "../services/embedding.api";
-import type { TurnReport } from "../services/api.types";
+import { embeddingApi, type NarrativeResponse, type Era } from "@/services/embedding.api";
+import type { TurnReport } from "@/services/api.types";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
 interface Props {
@@ -44,8 +44,8 @@ export function AIEnhancedTimeline({ reports, onClose }: Props) {
       const maxTurn = Math.max(...reports.map(r => r.turn_index));
       const result = await embeddingApi.getEras(0, maxTurn);
       setEras(result.eras);
-    } catch (err: any) {
-      setError(err.message || "加载时代划分失败");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "加载时代划分失败");
     } finally {
       setErasLoading(false);
     }
@@ -59,7 +59,7 @@ export function AIEnhancedTimeline({ reports, onClose }: Props) {
     try {
       const result = await embeddingApi.getTurnNarrative(turnIndex);
       setNarratives(prev => new Map(prev).set(turnIndex, result));
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(`加载回合 ${turnIndex} 叙事失败:`, err);
     } finally {
       setLoadingTurns(prev => {

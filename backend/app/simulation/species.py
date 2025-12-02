@@ -10,11 +10,14 @@ import numpy as np
 from ..models.species import Species
 from ..services.species.niche import NicheMetrics
 from ..core.config import get_settings
+from ..models.config import EcologyBalanceConfig
 
 logger = logging.getLogger(__name__)
 
-# 获取配置
+# 获取基础设置（非UI配置）
 _settings = get_settings()
+
+
 
 
 # ============ 向量化辅助函数 ============
@@ -50,6 +53,9 @@ def _extract_species_arrays(species_list: list[Species], niche_metrics: dict[str
     is_suppressed = np.zeros(n, dtype=bool)
     suppression_turns = np.zeros(n, dtype=np.int32)
     
+    # 【新增】演化相关字段
+    created_turn = np.zeros(n, dtype=np.int32)
+    
     # 批量提取
     for i, sp in enumerate(species_list):
         base_sensitivity[i] = sp.hidden_traits.get("environment_sensitivity", 0.5)
@@ -71,6 +77,9 @@ def _extract_species_arrays(species_list: list[Species], niche_metrics: dict[str
         protection_turns[i] = getattr(sp, 'protection_turns', 0) or 0
         is_suppressed[i] = getattr(sp, 'is_suppressed', False) or False
         suppression_turns[i] = getattr(sp, 'suppression_turns', 0) or 0
+        
+        # 【新增】演化相关
+        created_turn[i] = getattr(sp, 'created_turn', 0) or 0
     
     return {
         'base_sensitivity': base_sensitivity,
@@ -88,6 +97,7 @@ def _extract_species_arrays(species_list: list[Species], niche_metrics: dict[str
         'protection_turns': protection_turns,
         'is_suppressed': is_suppressed,
         'suppression_turns': suppression_turns,
+        'created_turn': created_turn,
     }
 
 
@@ -204,10 +214,34 @@ class MortalityEngine:
     """Rule-driven mortality calculator for bulk species.
     
     【性能优化】使用NumPy向量化计算核心死亡率，显著提升大量物种时的性能。
+    
+    【依赖注入】
+    配置必须通过构造函数注入，内部方法不再调用隐式加载。
+    如需刷新配置，使用 reload_config() 显式更新。
     """
 
-    def __init__(self, batch_limit: int = 50) -> None:
+    def __init__(
+        self, 
+        batch_limit: int = 50,
+        ecology_config: EcologyBalanceConfig | None = None,
+    ) -> None:
         self.batch_limit = batch_limit
+        
+        # 配置注入 - 如未提供则使用默认值并警告
+        if ecology_config is None:
+            logger.warning("[死亡率引擎] ecology_config 未注入，使用默认值")
+            ecology_config = EcologyBalanceConfig()
+        self._ecology_config = ecology_config
+    
+    def reload_config(self, ecology_config: EcologyBalanceConfig | None = None) -> None:
+        """热更新配置
+        
+        Args:
+            ecology_config: 生态平衡配置（必须由调用方提供）
+        """
+        if ecology_config is not None:
+            self._ecology_config = ecology_config
+            logger.info("[死亡率引擎] 配置已重新加载")
 
     def evaluate(
         self,
@@ -460,7 +494,7 @@ class MortalityEngine:
         """计算演化滞后惩罚（亲代被子代竞争淘汰）
         
         检查该物种是否有近期分化出的子代，如果有则施加衰退惩罚。
-        惩罚随时间衰减：第1回合后15%，第2回合10%，第3回合5%。
+        惩罚随时间衰减，使用配置参数控制惩罚强度。
         
         Args:
             species: 目标物种
@@ -468,11 +502,14 @@ class MortalityEngine:
             tier: 物种层级
             
         Returns:
-            额外死亡率惩罚（0-0.15）
+            额外死亡率惩罚
         """
         # 只对非background物种计算（background已经在低关注度）
         if tier == "background":
             return 0.0
+        
+        # 使用注入的配置
+        eco_cfg = self._ecology_config
         
         # 查找以该物种为parent的子代
         offspring = [
@@ -487,13 +524,13 @@ class MortalityEngine:
         youngest_offspring = max(offspring, key=lambda s: s.created_turn)
         turns_since_speciation = max(0, youngest_offspring.created_turn - species.created_turn)
         
-        # 衰减惩罚：0回合(刚分化)15%，1回合10%，2回合5%，3回合后0%
+        # 使用配置参数的衰减惩罚
         if turns_since_speciation == 0:
-            penalty = 0.15
+            penalty = eco_cfg.parent_lag_penalty_turn0
         elif turns_since_speciation == 1:
-            penalty = 0.10
+            penalty = eco_cfg.parent_lag_penalty_turn1
         elif turns_since_speciation == 2:
-            penalty = 0.05
+            penalty = eco_cfg.parent_lag_penalty_turn2
         else:
             penalty = 0.0
         
@@ -508,9 +545,9 @@ class MortalityEngine:
         子代对亲代的竞争压力更大（体现演化优势）。
         
         【优化】增加了以下竞争来源：
-        1. 子代对亲代的压制（原有）
-        2. 同级兄弟竞争（新增）- 同一次分化产生的兄弟物种
-        3. 近亲竞争（新增）- 共享祖先的物种
+        1. 子代对亲代的压制（使用配置参数）
+        2. 同级兄弟竞争 - 同一次分化产生的兄弟物种
+        3. 近亲竞争 - 共享祖先的物种
         
         Args:
             species: 目标物种
@@ -518,8 +555,11 @@ class MortalityEngine:
             base_overlap: 基础生态位重叠度
             
         Returns:
-            额外死亡率（0-0.40）
+            额外死亡率（0-0.45）
         """
+        # 使用注入的配置
+        eco_cfg = self._ecology_config
+        
         lineage = species.lineage_code
         population = int(species.morphology_stats.get("population", 0) or 0)
         
@@ -552,17 +592,17 @@ class MortalityEngine:
         
         total_competition = 0.0
         
-        # 1. 子代对亲代的压制（增强系数）
+        # 1. 子代对亲代的压制（使用配置参数）
         for sibling in siblings:
             sibling_pop = int(sibling.morphology_stats.get("population", 0) or 0)
             
             if sibling.created_turn > species.created_turn:
                 pop_ratio = sibling_pop / max(population, 1)
-                # 【增强】压制系数从0.15提高到0.20
-                competition = base_overlap * min(pop_ratio, 2.0) * 0.20
+                # 使用配置的压制系数
+                competition = base_overlap * min(pop_ratio, 2.0) * eco_cfg.offspring_suppression_coefficient
                 total_competition += competition
         
-        # 2. 【新增】同级兄弟竞争
+        # 2. 同级兄弟竞争
         # 同一次分化产生的物种（parent_code相同）竞争最激烈
         my_parent = getattr(species, 'parent_code', None)
         for sibling in siblings:
@@ -574,7 +614,7 @@ class MortalityEngine:
                 competition = base_overlap * min(pop_ratio, 1.5) * 0.15
                 total_competition += competition
         
-        # 3. 【新增】近亲竞争（表亲级别）
+        # 3. 近亲竞争（表亲级别）
         # 系数较低，但会随着属内物种数量增加而累积
         cousin_count = len(cousins)
         if cousin_count > 3:
@@ -582,8 +622,8 @@ class MortalityEngine:
             cousin_penalty = min(0.15, (cousin_count - 3) * 0.05)
             total_competition += cousin_penalty * base_overlap
         
-        # 【调整】上限从25%提高到40%
-        return min(total_competition, 0.40)
+        # 上限提高到45%
+        return min(total_competition, 0.45)
     
     def _calculate_generational_mortality(
         self,
