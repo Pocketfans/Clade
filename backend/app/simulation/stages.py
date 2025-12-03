@@ -1258,7 +1258,7 @@ class PopulationUpdateStage(BaseStage):
                 adjusted = base_death_rate
             
             # 确保死亡率在有效范围内
-            adjusted_death_rates[code] = max(0.0, min(0.99, adjusted))
+            adjusted_death_rates[code] = max(0.0, min(1.0, adjusted))
         
         # 【关键修复】使用真实存活率（1 - adjusted_death_rate）
         # 原来硬编码为 1.0，导致繁殖模块忽略了压力/LLM/规则系统计算的死亡率

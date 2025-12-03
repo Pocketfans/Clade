@@ -153,7 +153,7 @@ def _vectorized_generational_mortality(
     resistance_factor = (1.0 - size_resistance * 0.6) * (1.0 - repro_resistance * 0.5)
     adjusted = cumulative_mortality * resistance_factor
     
-    return np.clip(adjusted, 0.0, 0.98)
+    return np.clip(adjusted, 0.0, 1.0)
 
 
 def _vectorized_density_penalty(total_count: int, trophic_levels: np.ndarray) -> np.ndarray:

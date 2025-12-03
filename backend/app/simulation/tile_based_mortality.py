@@ -2293,7 +2293,7 @@ class TileBasedMortalityEngine:
             adjusted_mortality
         )
         
-        return np.clip(adjusted_mortality, 0.0, 0.95)
+        return np.clip(adjusted_mortality, 0.0, 1.0)
     
     def _aggregate_tile_results(
         self,
@@ -2470,12 +2470,66 @@ class TileBasedMortalityEngine:
             else:
                 overall_death_rate = 1.0
             
-            overall_death_rate = min(0.98, max(0.03, overall_death_rate))
+            overall_death_rate = min(1.0, max(0.03, overall_death_rate))
             
-            # ========== 【新增v3】演化平衡调整 ==========
+            # ========== 【新增v3】演化平衡调整与过滤 ==========
             evolution_adjustment = 0.0
             adjustment_notes = []
             
+            # 【新增 v12 改进版】物种生命周期过滤器 (Evolutionary Filtering System)
+            
+            # 1. 基因衰老 (Genetic Decay) - 替代原有的“演化停滞”
+            # 不再依赖 last_description_update_turn，只看绝对寿命
+            # 任何物种都有其寿命极限，无论怎么适应，老了就是老了
+            species_age = turn_index - species_arrays['created_turn'][sp_idx]
+            
+            # 寿命阈值：20回合（约1000万年）
+            # 超过这个时间，每回合增加 5% 死亡率，直到灭绝
+            LIFESPAN_LIMIT = 20
+            if species_age > LIFESPAN_LIMIT:
+                excess_age = species_age - LIFESPAN_LIMIT
+                decay_penalty = min(0.8, excess_age * 0.05)  # 上限80%
+                evolution_adjustment += decay_penalty
+                adjustment_notes.append(f"基因衰老T{species_age}+{decay_penalty:.1%}")
+
+            # 2. 亲代让位与系统发生压力 (Parental Obsolescence)
+            # 检查该物种是否有新生子代
+            lineage_code = species.lineage_code
+            has_children = False
+            if lineage_code in parent_to_children:
+                 children_indices = parent_to_children[lineage_code]
+                 # 只要有存活的子代，就视为“已完成历史使命”
+                 # 检查子代是否有存活个体
+                 for ci in children_indices:
+                     if species_arrays['population'][ci] > 0:
+                         has_children = True
+                         break
+
+            if has_children:
+                # 场景A：有子代 -> 亲代应加速退场，为子代腾出空间
+                # 这是一个非常强的惩罚，确保老物种被新物种取代
+                obsolescence_penalty = 0.25  # 固定 +25% 死亡率
+                evolution_adjustment += obsolescence_penalty
+                adjustment_notes.append(f"亲代让位+{obsolescence_penalty:.1%}")
+            elif species_age > 10:
+                # 场景B：老了但没子代 -> 进化死胡同
+                # 施加轻微压力逼迫其分化或灭亡
+                dead_end_penalty = 0.10
+                evolution_adjustment += dead_end_penalty
+                adjustment_notes.append(f"进化死胡同+{dead_end_penalty:.1%}")
+
+            # 3. 阿利效应 (Allee Effect) / 崩溃加速
+            # 种群过低时不再享受保护，反而加速灭亡
+            # 阈值设为 500 (对于大多数物种来说这已经很少了)
+            ALLEE_THRESHOLD = 500
+            if total_pop < ALLEE_THRESHOLD and total_pop > 0:
+                # 种群越少，惩罚越大
+                # pop=250 -> 额外+25%死亡率
+                # pop=50 -> 额外+45%死亡率
+                allee_penalty = 0.5 * (1.0 - total_pop / ALLEE_THRESHOLD)
+                evolution_adjustment += allee_penalty
+                adjustment_notes.append(f"种群崩溃加速+{allee_penalty:.1%}")
+
             # 1. 频率依赖选择
             if eco_cfg.enable_frequency_dependence and total_ecosystem_pop > 0:
                 freq = species_frequencies.get(species.lineage_code, 0.0)
@@ -2539,17 +2593,28 @@ class TileBasedMortalityEngine:
                     evolution_adjustment += penalty
                     adjustment_notes.append(f"亲代滞后T2+{penalty:.1%}")
             
-            # 4. 高生态位重叠直接竞争
+            # 4. 高生态位重叠直接竞争 (增强版：竞争排斥)
             overlap = species_arrays['overlap'][sp_idx]
+            # 原有逻辑保留作为基础压力
             if overlap > eco_cfg.high_overlap_threshold:
                 excess_overlap = overlap - eco_cfg.high_overlap_threshold
-                # 每 0.1 重叠度增加一定死亡率
                 overlap_penalty = min(
                     eco_cfg.overlap_competition_max,
                     (excess_overlap / 0.1) * eco_cfg.overlap_competition_per_01
                 )
                 evolution_adjustment += overlap_penalty
                 adjustment_notes.append(f"重叠竞争+{overlap_penalty:.1%}")
+            
+            # 【新增 v12】竞争排斥 (Competitive Exclusion)
+            # 如果重叠度极高 (>60%) 且自身适应性不是最优，受到额外重罚
+            if overlap > 0.6:
+                # 简单判断：如果该物种的饱和度也高，说明它在竞争中处于劣势（资源不够分）
+                saturation = species_arrays['saturation'][sp_idx]
+                if saturation > 1.2:
+                    # 竞争失败惩罚
+                    exclusion_penalty = 0.20  # 额外+20%
+                    evolution_adjustment += exclusion_penalty
+                    adjustment_notes.append(f"竞争排斥淘汰+{exclusion_penalty:.1%}")
             
             # 【新增v4】5. 食物网反馈压力
             # 处理来自 FoodWebManager 的反馈信号
@@ -2582,7 +2647,7 @@ class TileBasedMortalityEngine:
             # 应用调整
             if evolution_adjustment != 0:
                 old_rate = overall_death_rate
-                overall_death_rate = min(0.98, max(0.01, overall_death_rate + evolution_adjustment))
+                overall_death_rate = min(1.0, max(0.01, overall_death_rate + evolution_adjustment))
                 
                 # 【修复】同步更新地块统计数据，确保UI显示的一致性
                 # 全局演化修正（如新种优势、竞争惩罚）应体现到每个地块的统计中
@@ -2590,7 +2655,7 @@ class TileBasedMortalityEngine:
                     # 将修正应用到地块死亡率统计样本上
                     adjusted_rates = occupied_rates + evolution_adjustment
                     # 确保范围合理
-                    adjusted_rates = np.clip(adjusted_rates, 0.01, 0.98)
+                    adjusted_rates = np.clip(adjusted_rates, 0.01, 1.0)
                     
                     # 重新计算统计指标
                     healthy_tiles = int((adjusted_rates < 0.25).sum())
@@ -2822,7 +2887,7 @@ class TileBasedMortalityEngine:
             overlap_penalty = metrics.overlap * 0.3
             saturation_penalty = min(0.3, metrics.saturation * 0.1)
             
-            death_rate = min(0.98, max(0.03, base_mortality + overlap_penalty + saturation_penalty))
+            death_rate = min(1.0, max(0.03, base_mortality + overlap_penalty + saturation_penalty))
             
             deaths = int(population * death_rate)
             survivors = max(0, population - deaths)
