@@ -27,222 +27,222 @@ class ParsedPressure:
 PRESSURE_TO_MODIFIER_MAP = {
     # ============================================================
     # === 气候相关 ===
-    # 参考：新生代气候变化、第四纪冰期-间冰期旋回
+    # 【平衡调整v2】所有系数大幅降低，确保生态系统可持续
     # ============================================================
     "glacial_period": {       # 冰河时期
-        "temperature": -1.0,   # 全球平均降温5-10°C
-        "drought": 0.15,       # 【修正】冰期降水减少但蒸发也低，实际干旱程度较低
-        "sea_level": -0.6,     # 大量水冻结，海平面下降可达120米
-        "habitat_fragmentation": 0.4,  # 冰川切割栖息地
+        "temperature": -0.4,   # 【v2】从-1.0降到-0.4，温和降温
+        "drought": 0.05,       # 【v2】从0.15降到0.05
+        "sea_level": -0.2,     # 【v2】从-0.6降到-0.2
+        "habitat_fragmentation": 0.15,  # 【v2】从0.4降到0.15
     },
     "greenhouse_earth": {     # 温室地球（如白垩纪）
-        "temperature": 1.0,    # 全球升温，热带扩展
-        "humidity": 0.6,       # 蒸发增强，大气水汽增加
-        "sea_level": 0.4,      # 冰盖融化，海平面上升
-        "productivity": 0.3,   # 温暖有利于初级生产力
+        "temperature": 0.4,    # 【v2】从1.0降到0.4
+        "humidity": 0.25,      # 【v2】从0.6降到0.25
+        "sea_level": 0.15,     # 【v2】从0.4降到0.15
+        "productivity": 0.2,   # 【v2】从0.3降到0.2（正面效果）
     },
     "pluvial_period": {       # 洪积期（雨期）
-        "flood": 1.0,          # 洪水频发
-        "humidity": 0.9,       # 极高湿度
-        "erosion": 0.5,        # 侵蚀加剧
-        "freshwater_input": 0.7,  # 淡水输入增加（影响沿海盐度）
+        "flood": 0.4,          # 【v2】从1.0降到0.4
+        "humidity": 0.35,      # 【v2】从0.9降到0.35
+        "erosion": 0.2,        # 【v2】从0.5降到0.2
+        "freshwater_input": 0.3,  # 【v2】从0.7降到0.3
     },
     "drought_period": {       # 干旱期
-        "drought": 1.0,        # 严重缺水
-        "temperature": 0.25,   # 干旱通常伴随轻微升温
-        "wildfire_risk": 0.6,  # 火灾风险增加
-        "resource_decline": 0.5,  # 植被减少
+        "drought": 0.4,        # 【v2】从1.0降到0.4
+        "temperature": 0.1,    # 【v2】从0.25降到0.1
+        "wildfire_risk": 0.25, # 【v2】从0.6降到0.25
+        "resource_decline": 0.2,  # 【v2】从0.5降到0.2
     },
     "monsoon_shift": {        # 季风变动
-        "humidity": 0.7,       # 湿度波动大
-        "temperature": 0.15,   # 季节性温度变化
-        "seasonality": 0.8,    # 季节性增强
-        "flood": 0.3,          # 季节性洪水
+        "humidity": 0.3,       # 【v2】从0.7降到0.3
+        "temperature": 0.05,   # 【v2】从0.15降到0.05
+        "seasonality": 0.35,   # 【v2】从0.8降到0.35
+        "flood": 0.1,          # 【v2】从0.3降到0.1
     },
     "fog_period": {           # 浓雾时期（如寒武纪海洋）
-        "humidity": 0.85,      # 高湿度
-        "light_reduction": 0.7, # 光照减少（影响光合作用）
-        "temperature": -0.1,   # 略微降温
+        "humidity": 0.35,      # 【v2】从0.85降到0.35
+        "light_reduction": 0.3, # 【v2】从0.7降到0.3
+        "temperature": -0.03,  # 【v2】从-0.1降到-0.03
     },
     "extreme_weather": {      # 极端天气（风暴/飓风）
-        "storm_damage": 1.0,   # 物理破坏
-        "flood": 0.5,          # 暴雨洪涝
-        "habitat_fragmentation": 0.4,  # 栖息地破碎
-        "mortality_spike": 0.3,  # 【平衡】从0.5降低到0.3
+        "storm_damage": 0.4,   # 【v2】从1.0降到0.4
+        "flood": 0.2,          # 【v2】从0.5降到0.2
+        "habitat_fragmentation": 0.15, # 【v2】从0.4降到0.15
+        "mortality_spike": 0.1,  # 【v2】从0.3降到0.1
     },
     
     # ============================================================
-    # === 地质相关 ===
-    # 参考：大规模火成岩省(LIP)、威尔逊旋回、造山运动
+    # === 地质相关（三阶天灾）===
+    # 【平衡调整v3】三阶天灾恢复大灭绝效果！
     # ============================================================
-    "volcanic_eruption": {    # 火山喷发期
-        "volcanic": 1.0,       # 火山活动强度
-        "volcano": 1.0,        # 死亡率计算用
-        "temperature": -0.6,   # 【修正】大规模喷发可降温2-6°C（如坦博拉）
-        "sulfur_aerosol": 0.8, # 硫酸盐气溶胶
-        "acidity": 0.4,        # 酸雨
-        "light_reduction": 0.5, # 火山灰遮光
-        "mortality_spike": 0.35, # 【平衡】从0.5降低到0.35
-        "toxin_level": 0.3,    # 【平衡】从0.4降低到0.3
+    "volcanic_eruption": {    # 火山喷发期 (Tier 3)
+        "volcanic": 1.0,       # 【v3】恢复！
+        "volcano": 1.0,        # 【v3】恢复！
+        "temperature": -0.8,   # 【v3】恢复！大规模喷发降温
+        "sulfur_aerosol": 1.0, # 【v3】恢复！硫酸盐气溶胶
+        "acidity": 0.5,        # 【v3】恢复！酸雨
+        "light_reduction": 0.6, # 【v3】恢复！火山灰遮光
+        "mortality_spike": 0.5, # 【v3】恢复！直接死亡
+        "toxin_level": 0.4,    # 【v3】恢复！
     },
-    "orogeny": {              # 造山期（如喜马拉雅造山）
-        "tectonic": 1.0,       # 构造活动
-        "altitude_change": 0.7,# 海拔剧变
-        "habitat_fragmentation": 0.5,  # 地形隔离
-        "rain_shadow": 0.4,    # 雨影效应（山脉背风坡干旱）
+    "orogeny": {              # 造山期 (Tier 3)
+        "tectonic": 1.0,       # 【v3】恢复！
+        "altitude_change": 0.8,# 【v3】恢复！
+        "habitat_fragmentation": 0.6,  # 【v3】恢复！
+        "rain_shadow": 0.5,    # 【v3】恢复！
     },
-    "subsidence": {           # 陆架沉降
-        "flood": 0.7,          # 低地淹没
-        "tectonic": 0.4,       # 构造活动
-        "sea_level": 0.5,      # 相对海平面上升
-        "habitat_loss": 0.6,   # 栖息地丧失
+    "subsidence": {           # 陆架沉降 (Tier 3)
+        "flood": 0.8,          # 【v3】恢复！
+        "tectonic": 0.5,       # 【v3】恢复！
+        "sea_level": 0.6,      # 【v3】恢复！
+        "habitat_loss": 0.7,   # 【v3】恢复！
     },
-    "land_degradation": {     # 土地退化
-        "drought": 0.4,        # 土壤干燥
-        "resource_decline": 0.9,  # 【增强】土壤贫瘠化严重影响生产力
-        "erosion": 0.7,        # 水土流失
-        "desertification": 0.6,  # 荒漠化
+    "land_degradation": {     # 土地退化 (Tier 2，保持较低)
+        "drought": 0.2,        # 保持较低
+        "resource_decline": 0.4,
+        "erosion": 0.35,
+        "desertification": 0.3,
     },
-    "sea_level_rise": {       # 海平面上升
-        "sea_level": 1.0,      # 海平面上升
-        "coastal_flooding": 0.8,  # 沿海淹没
-        "salinity_intrusion": 0.5,  # 盐水入侵
-        "habitat_loss": 0.6,   # 沿海栖息地丧失
+    "sea_level_rise": {       # 海平面上升 (Tier 3)
+        "sea_level": 1.0,      # 【v3】恢复！
+        "coastal_flooding": 0.9,  # 【v3】恢复！
+        "salinity_intrusion": 0.6,  # 【v3】恢复！
+        "habitat_loss": 0.7,   # 【v3】恢复！
     },
-    "sea_level_fall": {       # 海平面下降
-        "sea_level": -1.0,     # 海平面下降
-        "continental_shelf_exposure": 0.8,  # 大陆架暴露
-        "habitat_expansion": 0.4,  # 陆地面积增加
-        "coastal_salinity": 0.3,  # 局部盐度升高
+    "sea_level_fall": {       # 海平面下降 (Tier 3)
+        "sea_level": -1.0,     # 【v3】恢复！
+        "continental_shelf_exposure": 0.9,  # 【v3】恢复！
+        "habitat_expansion": 0.3,  # 正面效果
+        "coastal_salinity": 0.4,
     },
-    "earthquake_period": {    # 地震活跃期
-        "tectonic": 0.8,       # 构造活动
-        "habitat_fragmentation": 0.6,  # 地形破碎
-        "landslide_risk": 0.7, # 滑坡风险
-        "mortality_spike": 0.25,  # 【平衡】从0.4降低到0.25
+    "earthquake_period": {    # 地震活跃期 (Tier 3)
+        "tectonic": 0.9,       # 【v3】恢复！
+        "habitat_fragmentation": 0.7, # 【v3】恢复！
+        "landslide_risk": 0.8, # 【v3】恢复！
+        "mortality_spike": 0.3, # 【v3】恢复！
     },
     
     # ============================================================
     # === 海洋相关 ===
-    # 参考：PETM热事件、OAE缺氧事件、现代海洋环流
+    # 【平衡调整v2】所有系数大幅降低
     # ============================================================
     "ocean_current_shift": {  # 洋流变迁（如AMOC减弱）
-        "temperature": 0.5,    # 区域温度剧变
-        "humidity": 0.35,      # 气候模式改变
-        "nutrient_redistribution": 0.7,  # 营养盐重新分布
-        "upwelling_change": 0.6,  # 上升流变化
+        "temperature": 0.2,    # 【v2】从0.5降到0.2
+        "humidity": 0.15,      # 【v2】从0.35降到0.15
+        "nutrient_redistribution": 0.3, # 【v2】从0.7降到0.3
+        "upwelling_change": 0.25, # 【v2】从0.6降到0.25
     },
     "ocean_acidification": {  # 海洋酸化（PETM类似事件）
-        "acidity": 1.0,        # 酸度增加（pH下降0.3-0.5）
-        "carbonate_stress": 0.9,  # 碳酸钙壳体溶解压力
-        "temperature": 0.2,    # 通常与升温相伴
-        "coral_stress": 0.8,   # 珊瑚/钙质生物压力
+        "acidity": 0.4,        # 【v2】从1.0降到0.4
+        "carbonate_stress": 0.35, # 【v2】从0.9降到0.35
+        "temperature": 0.08,   # 【v2】从0.2降到0.08
+        "coral_stress": 0.3,   # 【v2】从0.8降到0.3
     },
     
     # ============================================================
     # === 生态相关 ===
-    # 参考：现代生态学、古生态重建
+    # 【平衡调整v2】所有系数大幅降低
     # ============================================================
-    "resource_abundance": {   # 资源繁盛期
-        "resource_boost": 1.0, # 资源丰富
-        "competition": -0.3,   # 竞争减弱
-        "productivity": 0.8,   # 生产力高
+    "resource_abundance": {   # 资源繁盛期（正面效果保留较高）
+        "resource_boost": 0.5, # 【v2】从1.0降到0.5
+        "competition": -0.15,  # 【v2】从-0.3降到-0.15
+        "productivity": 0.4,   # 【v2】从0.8降到0.4
     },
     "productivity_decline": { # 生产力衰退
-        "resource_decline": 1.0,  # 资源匮乏
-        "competition": 0.7,    # 竞争加剧
-        "starvation_risk": 0.6,  # 饥饿风险
+        "resource_decline": 0.4,  # 【v2】从1.0降到0.4
+        "competition": 0.3,    # 【v2】从0.7降到0.3
+        "starvation_risk": 0.25, # 【v2】从0.6降到0.25
     },
     "predator_rise": {        # 捕食者兴起
-        "predator": 1.0,       # 捕食压力
-        "prey_mortality": 0.5, # 猎物死亡率增加
-        "behavioral_stress": 0.3,  # 行为压力（警觉消耗）
+        "predator": 0.4,       # 【v2】从1.0降到0.4
+        "prey_mortality": 0.2, # 【v2】从0.5降到0.2
+        "behavioral_stress": 0.12, # 【v2】从0.3降到0.12
     },
     "species_invasion": {     # 物种入侵
-        "competitor": 1.0,     # 竞争压力
-        "niche_displacement": 0.6,  # 生态位置换
-        "disease_risk": 0.3,   # 新疾病风险
+        "competitor": 0.4,     # 【v2】从1.0降到0.4
+        "niche_displacement": 0.25, # 【v2】从0.6降到0.25
+        "disease_risk": 0.12,  # 【v2】从0.3降到0.12
     },
     "disease_outbreak": {     # 疾病爆发
-        "disease": 1.0,        # 疾病压力
-        "mortality_spike": 0.4,  # 【平衡】从0.7降低到0.4
-        "social_disruption": 0.4,  # 社会行为打乱
-        "immune_stress": 0.5,  # 免疫系统压力
+        "disease": 0.4,        # 【v2】从1.0降到0.4
+        "mortality_spike": 0.15, # 【v2】从0.4降到0.15
+        "social_disruption": 0.15, # 【v2】从0.4降到0.15
+        "immune_stress": 0.2,  # 【v2】从0.5降到0.2
     },
     "wildfire_period": {      # 野火肆虐期
-        "wildfire": 1.0,       # 火灾强度
-        "mortality_spike": 0.4,  # 【平衡】从0.6降低到0.4
-        "habitat_loss": 0.7,   # 栖息地丧失
-        "resource_decline": 0.5,  # 食物减少
-        "regeneration_opportunity": 0.3,  # 先锋物种机会
+        "wildfire": 0.4,       # 【v2】从1.0降到0.4
+        "mortality_spike": 0.15, # 【v2】从0.4降到0.15
+        "habitat_loss": 0.3,   # 【v2】从0.7降到0.3
+        "resource_decline": 0.2, # 【v2】从0.5降到0.2
+        "regeneration_opportunity": 0.15, # 【v2】从0.3降到0.15
     },
     "algal_bloom": {          # 藻华爆发（赤潮）
-        "algae_bloom": 1.0,    # 藻华强度
-        "oxygen": -0.6,        # 夜间/死亡时消耗氧气
-        "toxin_level": 0.5,    # 藻毒素
-        "light_reduction": 0.4,  # 水下光照减少
+        "algae_bloom": 0.4,    # 【v2】从1.0降到0.4
+        "oxygen": -0.25,       # 【v2】从-0.6降到-0.25
+        "toxin_level": 0.2,    # 【v2】从0.5降到0.2
+        "light_reduction": 0.15, # 【v2】从0.4降到0.15
     },
     
     # ============================================================
-    # === 化学/大气相关 ===
-    # 参考：大氧化事件、P-T灭绝硫化事件、现代臭氧研究
+    # === 化学/大气相关（大部分是三阶天灾）===
+    # 【平衡调整v3】三阶恢复大灭绝效果！
     # ============================================================
-    "oxygen_increase": {      # 氧气增多（如石炭纪）
-        "oxygen": 1.0,         # 氧含量增加
-        "metabolic_boost": 0.5,  # 代谢能力增强
-        "body_size_potential": 0.6,  # 大型化潜力
-        "wildfire_risk": 0.4,  # 高氧助燃
+    "oxygen_increase": {      # 氧气增多（Tier 2，正面效果）
+        "oxygen": 0.5,
+        "metabolic_boost": 0.3,
+        "body_size_potential": 0.35,
+        "wildfire_risk": 0.2,
     },
-    "anoxic_event": {         # 缺氧事件（OAE）
-        "oxygen": -1.0,        # 氧气骤降
-        "mortality_spike": 0.5,  # 【平衡】从0.8降低到0.5，避免一击必杀
-        "sulfide_production": 0.4,  # 厌氧菌产硫化氢
-        "deep_water_anoxia": 0.9,  # 深层缺氧
+    "anoxic_event": {         # 缺氧事件 (Tier 3) 大灭绝！
+        "oxygen": -1.2,        # 【v3】恢复！氧气骤降
+        "mortality_spike": 0.8, # 【v3】恢复！大规模死亡
+        "sulfide_production": 0.5, # 【v3】恢复！
+        "deep_water_anoxia": 1.0, # 【v3】恢复！
     },
-    "sulfide_event": {        # 硫化事件（如P-T边界）
-        "sulfide": 1.0,        # 硫化氢浓度
-        "toxicity": 0.9,       # 剧毒
-        "oxygen": -0.5,        # 伴随缺氧
-        "mortality_spike": 0.5,  # 【平衡】从0.8降低到0.5
+    "sulfide_event": {        # 硫化事件 (Tier 3) 大灭绝！
+        "sulfide": 1.2,        # 【v3】恢复！硫化氢浓度
+        "toxicity": 1.0,       # 【v3】恢复！剧毒
+        "oxygen": -0.6,        # 【v3】恢复！伴随缺氧
+        "mortality_spike": 0.8, # 【v3】恢复！大规模死亡
     },
-    "uv_radiation_increase": { # 紫外辐射增强（臭氧减少）
-        "uv_radiation": 1.0,   # UV-B增强
-        "dna_damage": 0.7,     # DNA损伤
-        "surface_avoidance": 0.6,  # 迫使生物躲避表层
-        "mutation_rate": 0.3,  # 突变率增加
+    "uv_radiation_increase": { # 紫外辐射增强 (Tier 2)
+        "uv_radiation": 0.5,
+        "dna_damage": 0.4,
+        "surface_avoidance": 0.35,
+        "mutation_rate": 0.2,
     },
-    "salinity_change": {      # 盐度变化
-        "salinity_change": 1.0,  # 盐度波动
-        "osmotic_stress": 0.8, # 渗透压力
-        "habitat_shift": 0.5,  # 栖息地迁移
+    "salinity_change": {      # 盐度变化 (Tier 2)
+        "salinity_change": 0.5,
+        "osmotic_stress": 0.4,
+        "habitat_shift": 0.3,
     },
-    "methane_release": {      # 甲烷释放（如PETM）
-        "methane": 1.0,        # 甲烷浓度
-        "temperature": 0.6,    # 强温室效应
-        "oxygen": -0.3,        # 氧化消耗氧气
-        "ocean_acidification": 0.4,  # 碳循环扰动
+    "methane_release": {      # 甲烷释放 (Tier 3) 大灭绝！
+        "methane": 1.0,        # 【v3】恢复！
+        "temperature": 0.8,    # 【v3】恢复！强温室效应
+        "oxygen": -0.4,        # 【v3】恢复！
+        "ocean_acidification": 0.5, # 【v3】恢复！
     },
     
     # ============================================================
-    # === 新增：末日级天灾 ===
-    # 这些是最高级别的毁灭性事件，保持较高但合理的系数
+    # === 末日级天灾 ===
+    # 【平衡调整v3】恢复大灭绝效果！天灾就应该大浪淘沙
     # ============================================================
     "meteor_impact": {        # 陨石撞击（如K-Pg灭绝事件）
-        "mortality_spike": 0.8,     # 【平衡】从1.0降低到0.8，大灾难但不是100%
-        "temperature": -0.8,        # 撞击冬天
-        "light_reduction": 1.0,     # 尘埃遮天蔽日
-        "wildfire": 0.6,            # 撞击引发大火
-        "acidity": 0.5,             # 酸雨
-        "habitat_fragmentation": 0.8,  # 栖息地毁坏
-        "resource_decline": 0.9,    # 食物链崩溃
+        "mortality_spike": 1.0,     # 【v3】恢复！满强度直接灭绝
+        "temperature": -1.0,        # 【v3】恢复！撞击冬天
+        "light_reduction": 1.2,     # 【v3】恢复！尘埃遮天蔽日
+        "wildfire": 0.8,            # 【v3】恢复！撞击引发大火
+        "acidity": 0.6,             # 【v3】恢复！酸雨
+        "habitat_fragmentation": 1.0, # 【v3】恢复！栖息地毁坏
+        "resource_decline": 1.2,    # 【v3】恢复！食物链崩溃
     },
     "gamma_ray_burst": {      # 伽马射线暴（奥陶纪灭绝假说之一）
-        "mortality_spike": 0.8,     # 【平衡】从1.0降低到0.8
-        "uv_radiation": 1.0,        # 臭氧层被破坏
-        "dna_damage": 1.0,          # 严重基因损伤
-        "mutation_rate": 0.8,       # 突变率暴增
-        "light_reduction": 0.3,     # 大气化学变化
-        "surface_avoidance": 0.9,   # 表层生物受创最重
+        "mortality_spike": 1.0,     # 【v3】恢复！
+        "uv_radiation": 1.2,        # 【v3】恢复！臭氧层被破坏
+        "dna_damage": 1.2,          # 【v3】恢复！严重基因损伤
+        "mutation_rate": 1.0,       # 【v3】恢复！突变率暴增
+        "light_reduction": 0.4,     # 【v3】恢复！
+        "surface_avoidance": 1.0,   # 【v3】恢复！表层生物受创最重
     },
 }
 

@@ -189,9 +189,10 @@ export function PressureModal({
   }
 
   function getIntensityLabel(val: number) {
-    if (val <= PRESSURE_TIER_1_LIMIT) return "轻微";
-    if (val <= PRESSURE_TIER_2_LIMIT) return "显著";
-    return "毁灭性";
+    // 【v3】更新倍率显示，与后端一致
+    if (val <= PRESSURE_TIER_1_LIMIT) return "轻微 (×0.3)";
+    if (val <= PRESSURE_TIER_2_LIMIT) return "显著 (×0.6)";
+    return "毁灭性 (×1.5)";  // 大浪淘沙！
   }
 
   function getIntensityColor(val: number) {

@@ -1346,9 +1346,10 @@ class TileBasedMortalityEngine:
         # 【优化v7】改进极端温度压力计算，使冰河期/温室效应产生显著影响
         # 全局温度修饰（来自冰河期/温室效应等）
         temp_modifier = pressure_modifiers.get('temperature', 0.0)
-        # 【平衡调整】降低温度修饰效果：每单位 = 2°C（从5°C降低）
-        # 这样5级冰川期 = -9 * 2 = -18°C，更加合理
-        adjusted_temps = tile_temps + temp_modifier * 2.0
+        # 【平衡调整v2】大幅降低温度修饰效果：每单位 = 0.8°C（从2°C降低）
+        # 这样5级冰川期 = -0.4(系数) * 5 * 0.7(倍率) * 0.8(类型) * 0.8°C = -0.9°C，非常温和
+        # 即使10级也只有约 -2.2°C
+        adjusted_temps = tile_temps + temp_modifier * 0.8
         
         # 【修改2】引入极端温度阈值
         # - 适宜温度范围：5°C ~ 25°C（原10°C ~ 20°C）
@@ -1425,9 +1426,9 @@ class TileBasedMortalityEngine:
         drought_modifier = pressure_modifiers.get('drought', 0.0)
         flood_modifier = pressure_modifiers.get('flood', 0.0)
         
-        # 干旱压力
-        adjusted_humidity = tile_humidity - drought_modifier * 0.1
-        drought_base = np.maximum(0, 0.5 - adjusted_humidity[:, np.newaxis]) * 2.0
+        # 干旱压力 【v2】降低系数：0.1 -> 0.04
+        adjusted_humidity = tile_humidity - drought_modifier * 0.04
+        drought_base = np.maximum(0, 0.5 - adjusted_humidity[:, np.newaxis]) * 1.2  # 【v2】从2.0降到1.2
         drought_pressure = drought_base * (1.0 - drought_res[np.newaxis, :])
         
         # 洪水压力（陆生生物受影响）
@@ -1442,17 +1443,17 @@ class TileBasedMortalityEngine:
         # ========== 特殊事件压力 ==========
         special_pressure = np.zeros((n_tiles, n_species))
         
-        # 疾病压力 - 社会性越高越容易传播
+        # 疾病压力 - 社会性越高越容易传播 【v2】降低系数
         disease_mod = pressure_modifiers.get('disease', 0.0)
         if disease_mod > 0:
             for sp_idx, sp in enumerate(species_list):
                 sociality = sp.abstract_traits.get('社会性', 3.0)
                 immunity = sp.abstract_traits.get('免疫力', 5.0) / 15.0
-                # 社会性高的物种更易感染，免疫力提供保护
-                disease_risk = (sociality / 10.0) * disease_mod * 0.08 * (1.0 - immunity)
+                # 【v2】系数从0.08降到0.03
+                disease_risk = (sociality / 10.0) * disease_mod * 0.03 * (1.0 - immunity)
                 special_pressure[:, sp_idx] += disease_risk
         
-        # 野火压力 - 陆生生物受影响，挖掘能力提供保护
+        # 野火压力 - 陆生生物受影响，挖掘能力提供保护 【v2】降低系数
         wildfire_mod = pressure_modifiers.get('wildfire', 0.0)
         if wildfire_mod > 0:
             for sp_idx, sp in enumerate(species_list):
@@ -1460,43 +1461,60 @@ class TileBasedMortalityEngine:
                 if habitat in ('terrestrial', 'aerial', 'amphibious'):
                     fire_res = sp.abstract_traits.get('耐火性', 0.0) / 15.0
                     burrow = sp.abstract_traits.get('挖掘能力', 0.0) / 15.0
-                    fire_risk = wildfire_mod * 0.07 * (1.0 - max(fire_res, burrow))
+                    # 【v2】系数从0.07降到0.025
+                    fire_risk = wildfire_mod * 0.025 * (1.0 - max(fire_res, burrow))
                     special_pressure[:, sp_idx] += fire_risk
         
-        # 紫外辐射压力 - 表层生物受影响
+        # 紫外辐射压力 - 表层生物受影响 【v2】降低系数
         uv_mod = pressure_modifiers.get('uv_radiation', 0.0)
         if uv_mod > 0:
             for sp_idx, sp in enumerate(species_list):
                 uv_res = sp.abstract_traits.get('抗紫外线', 0.0) / 15.0
-                uv_risk = uv_mod * 0.06 * (1.0 - uv_res)
+                # 【v2】系数从0.06降到0.02
+                uv_risk = uv_mod * 0.02 * (1.0 - uv_res)
                 special_pressure[:, sp_idx] += uv_risk
         
-        # 硫化物/毒素压力
+        # 硫化物/毒素压力 【v2】降低系数
         sulfide_mod = pressure_modifiers.get('sulfide', 0.0) + pressure_modifiers.get('toxin_level', 0.0)
         if sulfide_mod > 0:
             for sp_idx, sp in enumerate(species_list):
                 detox = sp.abstract_traits.get('解毒能力', 0.0) / 15.0
-                toxin_risk = sulfide_mod * 0.08 * (1.0 - detox)
+                # 【v2】系数从0.08降到0.03
+                toxin_risk = sulfide_mod * 0.03 * (1.0 - detox)
                 special_pressure[:, sp_idx] += toxin_risk
         
-        # 盐度变化压力 - 主要影响水生生物
+        # 盐度变化压力 - 主要影响水生生物 【v2】降低系数
         salinity_mod = abs(pressure_modifiers.get('salinity_change', 0.0))
         if salinity_mod > 0:
-            salinity_pressure = salinity_mod * 0.05 * (1.0 - salinity_res[np.newaxis, :])
+            # 【v2】系数从0.05降到0.02
+            salinity_pressure = salinity_mod * 0.02 * (1.0 - salinity_res[np.newaxis, :])
             for sp_idx, sp in enumerate(species_list):
                 habitat = getattr(sp, 'habitat_type', 'terrestrial')
                 if habitat in ('marine', 'coastal', 'freshwater', 'deep_sea'):
                     special_pressure[:, sp_idx] += salinity_pressure[0, sp_idx]
         
         # 直接死亡率修饰（风暴、地震、陨石撞击等）
-        # 【大灭绝机制】天灾应该造成大规模死亡，但留下少数幸存者
+        # 【大灭绝机制v3】低级压力温和，大灾变大浪淘沙！
         mortality_spike = pressure_modifiers.get('mortality_spike', 0.0)
         if mortality_spike > 0:
-            # 使用 sigmoid 曲线：低强度线性增长，高强度趋近上限
-            # 最大可达 ~0.85 的额外死亡率（配合 max_mortality=0.92，仍有生存空间）
-            # mortality_spike=100 时约 0.75，mortality_spike=200 时约 0.85
-            spike_factor = 1.0 / (1.0 + np.exp(-mortality_spike * 0.03 + 3))  # sigmoid
-            capped_spike = spike_factor * 0.85
+            # 【v3】分段处理：低值温和，高值致命
+            # mortality_spike < 5: 温和效果
+            # mortality_spike 5-20: 显著效果
+            # mortality_spike > 20: 大灭绝效果！
+            if mortality_spike < 5:
+                # 低级压力：几乎无影响
+                spike_factor = mortality_spike * 0.02  # 最多 0.10
+            elif mortality_spike < 20:
+                # 中级压力：逐渐增加
+                spike_factor = 0.10 + (mortality_spike - 5) * 0.02  # 0.10 ~ 0.40
+            else:
+                # 大灭绝级：陡峭增长！
+                # mortality_spike = 20 → 0.40
+                # mortality_spike = 50 → 0.70
+                # mortality_spike = 100 → 0.85
+                spike_factor = 0.40 + 0.45 * (1.0 - np.exp(-(mortality_spike - 20) * 0.025))
+            
+            capped_spike = min(spike_factor, 0.90)  # 最高90%，留一线生机
             special_pressure += capped_spike
         
         # ========== 基础环境敏感度 ==========
@@ -1586,7 +1604,8 @@ class TileBasedMortalityEngine:
             max(0, v) for k, v in pressure_modifiers.items() 
             if k not in excluded_modifiers
         )
-        global_pressure = (other_pressure / 30.0) * base_sens[np.newaxis, :]
+        # 【v2】从30.0提高到60.0，降低其他压力的影响
+        global_pressure = (other_pressure / 60.0) * base_sens[np.newaxis, :]
         
         # ========== 【新增】正面压力减免 ==========
         # 资源繁盛、高生产力等正面条件会降低环境压力
