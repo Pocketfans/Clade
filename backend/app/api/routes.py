@@ -641,6 +641,10 @@ def _perform_autosave(turn_index: int) -> bool:
     
     Returns:
         bool: 是否成功保存
+    
+    【健壮性改进】
+    - 使用 simulation_engine.turn_counter 作为权威回合数源
+    - 传入的 turn_index 作为备选，但优先使用引擎状态
     """
     global current_save_name, autosave_counter
     
@@ -665,23 +669,32 @@ def _perform_autosave(turn_index: int) -> bool:
     autosave_counter = 0
     
     try:
+        # 【关键】使用 simulation_engine.turn_counter 作为权威回合数
+        authoritative_turn = simulation_engine.turn_counter
+        
+        # 如果传入的 turn_index 与引擎状态不一致，记录警告
+        if turn_index != authoritative_turn:
+            logger.warning(
+                f"[自动保存] 回合数不一致: 传入={turn_index}, 引擎={authoritative_turn}，使用引擎值"
+            )
+        
         # 生成自动保存存档名称
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         autosave_name = f"autosave_{current_save_name}_{timestamp}"
         
-        logger.info(f"[自动保存] 开始保存: {autosave_name}, 回合={turn_index}")
+        logger.info(f"[自动保存] 开始保存: {autosave_name}, 回合={authoritative_turn}")
         push_simulation_event("autosave", f"💾 自动保存中...", "系统")
         
         # 创建自动保存
-        save_manager.create_save(autosave_name, f"自动保存 - T{turn_index}")
-        save_manager.save_game(autosave_name, turn_index)
+        save_manager.create_save(autosave_name, f"自动保存 - T{authoritative_turn}")
+        save_manager.save_game(autosave_name, authoritative_turn)
         
         # 清理旧的自动保存（保留最新的N个）
         _cleanup_old_autosaves(current_save_name, config.autosave_max_slots)
         
         logger.info(f"[自动保存] 完成: {autosave_name}")
-        push_simulation_event("autosave_complete", f"✅ 自动保存完成 (T{turn_index})", "系统")
+        push_simulation_event("autosave_complete", f"✅ 自动保存完成 (T{authoritative_turn})", "系统")
         return True
     except Exception as e:
         logger.error(f"[自动保存] 失败: {str(e)}")

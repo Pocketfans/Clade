@@ -15,6 +15,7 @@ interface Props {
 }
 
 const organCategoryMap: Record<string, string> = {
+  // 动物器官
   metabolic: "代谢系统",
   locomotion: "运动系统",
   sensory: "感觉系统",
@@ -25,6 +26,13 @@ const organCategoryMap: Record<string, string> = {
   circulatory: "循环系统",
   reproductive: "繁殖系统",
   excretory: "排泄系统",
+  // 植物器官
+  photosynthetic: "光合器官",
+  root_system: "根系",
+  stem: "茎",
+  protection: "保护结构",
+  vascular: "维管系统",
+  storage: "储存器官",
 };
 
 const statusMap: Record<string, string> = {
@@ -437,14 +445,16 @@ function NodeDetailCard({ node, onClose }: { node: LineageNode; onClose: () => v
             </div>
 
             {/* 器官系统 */}
-            {speciesDetail?.organs && Object.keys(speciesDetail.organs).length > 0 && (
+            {speciesDetail?.organs && Object.keys(speciesDetail.organs).filter(k => !k.startsWith("_")).length > 0 && (
               <div className="detail-section">
                 <div className="section-header">
                   <span>🦴</span>
                   <span>器官系统</span>
                 </div>
                 <div className="organs-grid">
-                  {Object.entries(speciesDetail.organs).map(([category, organ]: [string, any]) => (
+                  {Object.entries(speciesDetail.organs)
+                    .filter(([category]) => !category.startsWith("_"))  // 过滤内部字段
+                    .map(([category, organ]: [string, any]) => (
                     <div key={category} className="organ-card">
                       <div className="organ-category">{organCategoryMap[category] || category}</div>
                       <div className="organ-type">{organ.type || "未知"}</div>

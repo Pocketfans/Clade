@@ -1,6 +1,7 @@
 import { Zap, Save, FolderOpen, Settings, Sparkles } from "lucide-react";
 import type { ActionQueueStatus } from "@/services/api.types";
 import { EnergyBar } from "../EnergyBar";
+import { getTimeConfig, formatYear } from "@/utils/time";
 
 interface Props {
   turnIndex: number;
@@ -33,11 +34,10 @@ export function TopBar({
 }: Props) {
   const normalizedTurn = Math.max(turnIndex, 0);
   const displayTurn = normalizedTurn + 1;
-  // Calculate time: Start 2800 MYA, 0.5 MY per turn
-  const yearsAgo = 2800 - (normalizedTurn * 0.5);
-  const timeText = yearsAgo >= 100 
-    ? `${(yearsAgo / 100).toFixed(1)} 亿年前` 
-    : `${(yearsAgo * 100).toFixed(0)} 万年前`;
+  
+  // 【动态时间流】使用与后端同步的时间计算
+  const timeConfig = getTimeConfig(normalizedTurn);
+  const timeText = formatYear(timeConfig.currentYear);
 
   return (
     <div className="topbar-container">
@@ -66,10 +66,11 @@ export function TopBar({
 
       {/* Center: Time Display & Next Turn Button */}
       <div className="topbar-center">
-        <div className="time-display">
+        <div className="time-display" title={`${timeConfig.eraName} · 每回合 ${(timeConfig.yearsPerTurn / 10000).toFixed(0)} 万年`}>
           <span className="turn-number">第 {displayTurn} 回合</span>
           <span className="time-separator">·</span>
           <span className="time-era">{timeText}</span>
+          <span className="era-badge">{timeConfig.eraName}</span>
         </div>
         
         {/* Prominent Next Turn / Pressure Button */}

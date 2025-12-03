@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { ViewMode } from "./MapViewSelector";
 
 interface Props {
@@ -50,35 +50,52 @@ const MODE_INFO: Record<ViewMode, {
   },
 };
 
+const TOAST_DURATION = 3500; // ms
+
 export function MapModeToast({ viewMode, hasSelectedSpecies }: Props) {
   const [visible, setVisible] = useState(false);
-  const [lastMode, setLastMode] = useState<ViewMode | null>(null);
+  const [displayMode, setDisplayMode] = useState<ViewMode>(viewMode);
+  const lastModeRef = useRef<ViewMode | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   useEffect(() => {
     // 首次加载不显示提示
-    if (lastMode === null) {
-      setLastMode(viewMode);
+    if (lastModeRef.current === null) {
+      lastModeRef.current = viewMode;
       return;
     }
     
     // 模式改变时显示提示
-    if (viewMode !== lastMode) {
-      setLastMode(viewMode);
+    if (viewMode !== lastModeRef.current) {
+      lastModeRef.current = viewMode;
+      setDisplayMode(viewMode);
       setVisible(true);
       
-      // 3秒后隐藏
-      const timer = setTimeout(() => {
-        setVisible(false);
-      }, 3500);
+      // 清除之前的 timer
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
       
-      return () => clearTimeout(timer);
+      // 设置新的 timer
+      timerRef.current = setTimeout(() => {
+        setVisible(false);
+        timerRef.current = null;
+      }, TOAST_DURATION);
     }
-  }, [viewMode, lastMode]);
+    
+    // 组件卸载时清除 timer
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [viewMode]);
   
   if (!visible) return null;
   
-  const info = MODE_INFO[viewMode];
-  const showWarning = viewMode === "suitability" && !hasSelectedSpecies;
+  const info = MODE_INFO[displayMode];
+  const showWarning = displayMode === "suitability" && !hasSelectedSpecies;
   
   return (
     <div className={`map-mode-toast ${visible ? 'visible' : ''} ${showWarning ? 'warning' : ''}`}>
@@ -97,6 +114,7 @@ export function MapModeToast({ viewMode, hasSelectedSpecies }: Props) {
     </div>
   );
 }
+
 
 
 

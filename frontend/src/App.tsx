@@ -344,11 +344,34 @@ function GameScene() {
     return () => clearInterval(interval);
   }, [setHintsInfo, speciesRefreshTrigger]);
 
-  // 处理加载游戏
+  // 处理加载游戏（打开设置菜单的加载视图）
   const handleLoadGame = useCallback(() => {
     setSettingsInitialView("load");
     openModal("gameSettings");
   }, [setSettingsInitialView, openModal]);
+
+  // 加载存档后刷新所有数据
+  const handleLoadGameFromSettings = useCallback(async (saveName: string) => {
+    console.log("[App] 加载存档完成，刷新数据:", saveName);
+    try {
+      // 刷新游戏状态
+      const state = await fetchGameState();
+      setCurrentTurnIndex(state.turn_index);
+      if (state.backend_session_id) {
+        setBackendSessionId(state.backend_session_id);
+      }
+      // 刷新历史报告
+      const history = await fetchHistory(20);
+      setReports(history);
+      // 刷新地图和物种
+      await refreshMap();
+      await refreshSpeciesList();
+      // 失效族谱缓存
+      invalidateLineage();
+    } catch (err) {
+      console.error("[App] 刷新数据失败:", err);
+    }
+  }, [setCurrentTurnIndex, setBackendSessionId, setReports, refreshMap, refreshSpeciesList, invalidateLineage]);
 
   // 保存游戏
   const handleSaveGame = useCallback(async () => {
@@ -392,7 +415,7 @@ function GameScene() {
         topBar={
           <TopBar
             turnIndex={currentTurnIndex}
-            speciesCount={latestReport?.species.length ?? speciesList.length}
+            speciesCount={speciesList.filter(s => s.status === "alive").length}
             queueStatus={queueStatus}
             saveName={currentSaveName}
             scenarioInfo={sessionInfo?.scenario}
@@ -490,7 +513,7 @@ function GameScene() {
                 onRefreshQueue={refreshQueue}
                 onRefreshSpecies={refreshSpeciesList}
                 onBackToMenu={backToMenu}
-                onLoadGame={() => {}}
+                onLoadGame={handleLoadGameFromSettings}
                 onDismissAchievement={() => setPendingAchievement(null)}
               />
             </Suspense>

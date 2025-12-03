@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { 
   Play, 
   BookOpen, 
@@ -8,22 +8,30 @@ import {
   Cpu, 
   ArrowLeft, 
   Trash2, 
-  Save,
   Clock,
   Users,
   Zap,
   RefreshCw,
   ChevronDown,
   Archive,
-  Check,
   FolderOpen,
-  PlusCircle
+  PlusCircle,
+  Sparkles,
+  Dna,
+  Leaf,
+  GitBranch,
+  ChevronRight,
+  Check,
+  Star,
+  Info,
+  ExternalLink,
 } from "lucide-react";
 
 import type { UIConfig, SaveMetadata } from "@/services/api.types";
 import { formatSaveName, formatRelativeTime } from "@/services/api.types";
 import { listSaves, createSave, loadGame, deleteSave } from "@/services/api";
 import { SpeciesInputCard, type SpeciesInputData } from "./SpeciesInputCard";
+import "./MainMenu.css";
 
 export interface StartPayload {
   mode: "create" | "load";
@@ -39,6 +47,13 @@ interface Props {
 
 // 初始化物种输入数据
 const createEmptySpeciesData = (): SpeciesInputData => ({ prompt: "" });
+
+// 特色功能提示
+const FEATURES = [
+  { icon: <Dna size={14} />, text: "AI驱动的物种进化" },
+  { icon: <GitBranch size={14} />, text: "分支谱系追踪" },
+  { icon: <Leaf size={14} />, text: "生态系统模拟" },
+];
 
 export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
   const [stage, setStage] = useState<"root" | "create" | "load" | "blank">("root");
@@ -64,6 +79,26 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
     const name = s.name || s.save_name;
     return name.toLowerCase().includes('autosave');
   });
+
+  // AI 状态信息
+  const aiStatus = useMemo(() => {
+    if (uiConfig?.default_provider_id && uiConfig?.providers?.[uiConfig.default_provider_id]) {
+      const provider = uiConfig.providers[uiConfig.default_provider_id];
+      return {
+        configured: true,
+        provider: provider.name,
+        model: uiConfig.default_model || "默认模型",
+      };
+    }
+    if (uiConfig?.ai_provider) {
+      return {
+        configured: true,
+        provider: uiConfig.ai_provider,
+        model: uiConfig.ai_model || "默认模型",
+      };
+    }
+    return { configured: false, provider: "", model: "" };
+  }, [uiConfig]);
 
   useEffect(() => {
     if (stage === "load") {
@@ -118,14 +153,12 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
       return;
     }
 
-    // 过滤有效的物种输入
     const validInputs = speciesInputs.filter(input => input.prompt.trim());
     if (validInputs.length === 0) {
       setError("请至少输入一个物种描述");
       return;
     }
 
-    // 构建物种描述（带有元数据提示）
     const speciesPrompts = validInputs.map(input => {
       let prompt = input.prompt;
       const hints: string[] = [];
@@ -179,7 +212,6 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
     }
   }
   
-  // 更新物种输入数据
   const updateSpeciesInput = (index: number, data: SpeciesInputData) => {
     setSpeciesInputs(prev => {
       const newInputs = [...prev];
@@ -188,14 +220,12 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
     });
   };
   
-  // 添加新的物种槽位
   const addSpeciesSlot = () => {
     if (speciesInputs.length < 5) {
       setSpeciesInputs(prev => [...prev, createEmptySpeciesData()]);
     }
   };
   
-  // 移除物种槽位
   const removeSpeciesSlot = (index: number) => {
     if (index > 0 && speciesInputs.length > 1) {
       setSpeciesInputs(prev => prev.filter((_, i) => i !== index));
@@ -235,535 +265,463 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
   }
 
   return (
-    <div className="main-menu">
-      {/* 演化主题动态背景 */}
-      <div className="animated-bg">
-        {/* 细胞粒子 */}
-        {Array.from({ length: 25 }).map((_, i) => (
-          <div 
-            key={`cell-${i}`} 
-            className="bg-particle" 
-            style={{
-              left: `${Math.random() * 100}%`,
-              width: `${Math.random() * 8 + 4}px`,
-              height: `${Math.random() * 8 + 4}px`,
-              animationDuration: `${Math.random() * 15 + 12}s`,
-              animationDelay: `${Math.random() * 8}s`
-            }}
-          />
+    <div className="mm-container">
+      {/* 动态背景 */}
+      <div className="mm-bg">
+        <div className="mm-bg-gradient" />
+        <div className="mm-bg-grid" />
+        {/* 浮动粒子 */}
+        {Array.from({ length: 20 }).map((_, i) => (
+          <div key={i} className="mm-particle" style={{
+            left: `${Math.random() * 100}%`,
+            animationDelay: `${Math.random() * 10}s`,
+            animationDuration: `${15 + Math.random() * 10}s`,
+          }} />
         ))}
-        {/* 分裂粒子 */}
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div
-            key={`mitosis-${i}`}
-            className="mitosis-particle"
-            style={{
-              left: `${10 + Math.random() * 80}%`,
-              top: `${10 + Math.random() * 80}%`,
-              width: `${Math.random() * 40 + 20}px`,
-              height: `${Math.random() * 40 + 20}px`,
-              animationDelay: `${i * 1.5}s`,
-              animationDuration: `${6 + Math.random() * 4}s`
-            }}
-          />
-        ))}
-        {/* 神经连接线 */}
-        <div className="neural-connections">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div
-              key={`neural-${i}`}
-              className="neural-line"
-              style={{
-                top: `${15 + i * 10}%`,
-                left: `${Math.random() * 30}%`,
-                width: `${40 + Math.random() * 40}%`,
-                animationDelay: `${i * 0.5}s`,
-                transform: `rotate(${-10 + Math.random() * 20}deg)`
-              }}
-            />
+        {/* DNA螺旋装饰 */}
+        <div className="mm-dna-decoration">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="mm-dna-dot" style={{
+              top: `${i * 8}%`,
+              animationDelay: `${i * 0.2}s`,
+            }} />
           ))}
         </div>
-        {/* 演化树背景 */}
-        <div className="evolution-tree-bg" />
       </div>
 
-      <div className="menu-hero fade-in">
-        <div className="menu-crest" style={{ 
-          background: 'linear-gradient(135deg, rgba(45, 212, 191, 0.2), rgba(34, 197, 94, 0.15))', 
-          border: '2px solid rgba(45, 212, 191, 0.3)',
-          boxShadow: '0 0 30px rgba(45, 212, 191, 0.15), inset 0 0 20px rgba(45, 212, 191, 0.1)'
-        }}>
-          <span style={{ 
-            background: 'linear-gradient(135deg, #2dd4bf, #22c55e)', 
-            WebkitBackgroundClip: 'text', 
-            WebkitTextFillColor: 'transparent',
-            fontWeight: 700
-          }}>EVO</span>
-        </div>
-        <div>
-          <h1 style={{ 
-            fontSize: '2.5rem', 
-            marginBottom: '0.5rem',
-            background: 'linear-gradient(135deg, #f0f4e8 0%, #2dd4bf 50%, #22c55e 100%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            textShadow: '0 0 40px rgba(45, 212, 191, 0.3)'
-          }}>Clade</h1>
-          <p style={{ fontSize: '1.1rem', opacity: 0.8, color: 'rgba(240, 244, 232, 0.85)' }}>
-            化身诸神视角，操控压力、塑造生态、见证族群谱系的沉浮。
-          </p>
-        </div>
-      </div>
-
-      {error && (
-        <div className="error-banner">
-          <span>{error}</span>
-          <button onClick={() => setError(null)} className="btn-icon-sm">×</button>
-        </div>
-      )}
-
-      <div className="menu-shell fade-in" style={{ animationDelay: '0.1s', maxWidth: '1000px', margin: '0 auto', width: '100%' }}>
-        
-        {/* 侧边导航 */}
-        <aside className="menu-sidebar" style={{ minWidth: '240px' }}>
-          <button
-            className={`menu-nav ${stage === "root" || stage === "create" || stage === "blank" ? "active" : ""}`}
-            onClick={() => setStage("root")}
-          >
-            <Play size={18} style={{ marginRight: 8 }} /> 开始新纪元
-          </button>
-          <button
-            className={`menu-nav ${stage === "load" ? "active" : ""}`}
-            onClick={() => setStage("load")}
-          >
-            <BookOpen size={18} style={{ marginRight: 8 }} /> 读取编年史
-          </button>
-          <button className="menu-nav" onClick={onOpenSettings}>
-            <Settings size={18} style={{ marginRight: 8 }} /> 设置与 AI
-          </button>
-          
-          <div style={{ marginTop: 'auto', padding: '1rem', background: 'rgba(255,255,255,0.05)', borderRadius: '12px' }}>
-            <p className="hint" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Cpu size={14} />
-              AI 引擎状态
-            </p>
-            <p style={{ fontSize: '0.85rem', margin: '0.5rem 0 0', opacity: 0.9 }}>
-              {(() => {
-                // 优先检查新配置格式
-                if (uiConfig?.default_provider_id && uiConfig?.providers?.[uiConfig.default_provider_id]) {
-                  const provider = uiConfig.providers[uiConfig.default_provider_id];
-                  return `${provider.name} · ${uiConfig.default_model || "默认"}`;
-                }
-                // 回退到旧配置格式
-                if (uiConfig?.ai_provider) {
-                  return `${uiConfig.ai_provider} · ${uiConfig.ai_model || "默认"}`;
-                }
-                return "未配置";
-              })()}
-            </p>
+      {/* 主内容 */}
+      <div className="mm-content">
+        {/* Hero区域 */}
+        <header className="mm-hero">
+          <div className="mm-logo">
+            <div className="mm-logo-ring">
+              <div className="mm-logo-inner">
+                <Sparkles className="mm-logo-icon" />
+              </div>
+            </div>
+            <div className="mm-logo-glow" />
           </div>
-        </aside>
-
-        {/* 主内容区 */}
-        <section style={{ flex: 1 }}>
-          
-          {/* 首页：选择模式 */}
-          {stage === "root" && (
-            <div className="grid grid-cols-1 gap-6 fade-in">
-              <div 
-                className="menu-visual-card"
-                onClick={() => setStage("create")}
-              >
-                <div className="menu-icon-wrapper">
-                  <Globe />
-                </div>
-                <div>
-                  <h3 className="menu-card-title">原初大陆 · 三族起源</h3>
-                  <p className="menu-card-desc">经典开局。从三个基础物种开始，观察它们如何在标准环境中竞争与演化。</p>
-                </div>
-              </div>
-
-              <div 
-                className="menu-visual-card"
-                onClick={() => setStage("blank")}
-              >
-                <div className="menu-icon-wrapper" style={{ background: 'rgba(16, 185, 129, 0.2)', color: '#34d399' }}>
-                  <Plus />
-                </div>
-                <div>
-                  <h3 className="menu-card-title">空白剧本 · 从零塑造</h3>
-                  <p className="menu-card-desc">完全自由。使用自然语言描述你想要的初始物种，由 AI 为你生成独一无二的开局。</p>
-                </div>
-              </div>
+          <div className="mm-hero-text">
+            <h1 className="mm-title">
+              <span className="mm-title-main">Clade</span>
+              <span className="mm-title-badge">BETA</span>
+            </h1>
+            <p className="mm-subtitle">化身诸神视角，操控压力、塑造生态、见证族群谱系的沉浮</p>
+            <div className="mm-features">
+              {FEATURES.map((f, i) => (
+                <span key={i} className="mm-feature" style={{ animationDelay: `${0.5 + i * 0.1}s` }}>
+                  {f.icon}
+                  <span>{f.text}</span>
+                </span>
+              ))}
             </div>
-          )}
+          </div>
+        </header>
 
-          {/* 创建普通存档 */}
-          {stage === "create" && (
-            <div className="glass-card fade-in">
-              <div className="flex justify-between items-center mb-lg">
-                <h2 className="text-xl font-display">新纪元配置</h2>
-                <button className="btn btn-ghost btn-sm" onClick={() => setStage("root")}>
-                  <ArrowLeft size={16} style={{ marginRight: 4 }} /> 返回
-                </button>
+        {/* 错误提示 */}
+        {error && (
+          <div className="mm-error">
+            <Info size={16} />
+            <span>{error}</span>
+            <button onClick={() => setError(null)}>×</button>
+          </div>
+        )}
+
+        {/* 主面板 */}
+        <div className="mm-main">
+          {/* 侧边栏 */}
+          <nav className="mm-sidebar">
+            <button
+              className={`mm-nav-btn ${stage === "root" || stage === "create" || stage === "blank" ? "active" : ""}`}
+              onClick={() => setStage("root")}
+            >
+              <span className="mm-nav-icon"><Play size={18} /></span>
+              <span className="mm-nav-text">开始新纪元</span>
+              <ChevronRight size={14} className="mm-nav-arrow" />
+            </button>
+            <button
+              className={`mm-nav-btn ${stage === "load" ? "active" : ""}`}
+              onClick={() => setStage("load")}
+            >
+              <span className="mm-nav-icon"><BookOpen size={18} /></span>
+              <span className="mm-nav-text">读取编年史</span>
+              <ChevronRight size={14} className="mm-nav-arrow" />
+            </button>
+            <button className="mm-nav-btn" onClick={onOpenSettings}>
+              <span className="mm-nav-icon"><Settings size={18} /></span>
+              <span className="mm-nav-text">设置与 AI</span>
+              <ChevronRight size={14} className="mm-nav-arrow" />
+            </button>
+
+            {/* AI状态卡片 */}
+            <div className="mm-ai-card">
+              <div className="mm-ai-header">
+                <Cpu size={14} />
+                <span>AI 引擎</span>
+                <span className={`mm-ai-status ${aiStatus.configured ? "online" : "offline"}`}>
+                  {aiStatus.configured ? "在线" : "离线"}
+                </span>
               </div>
-              
-              <div className="form-field mb-xl">
-                <label className="field-label mb-xs">存档名称</label>
-                <input
-                  type="text"
-                  value={saveName}
-                  onChange={(e) => setSaveName(e.target.value)}
-                  placeholder="为这个新世界命名..."
-                  className="input-visual"
-                  autoFocus
-                />
-              </div>
-
-              <div className="form-field mb-xl">
-                <label className="field-label mb-xs">
-                  地图种子
-                  <span className="text-xs text-muted ml-2">(选填，留空则随机生成)</span>
-                </label>
-                <input
-                  type="text"
-                  value={mapSeed}
-                  onChange={(e) => setMapSeed(e.target.value.replace(/\D/g, ''))}
-                  placeholder="例如: 12345 (仅数字)"
-                  className="input-visual"
-                />
-                <p className="text-xs text-muted mt-1">使用相同种子可以重现相同的地图形状</p>
-              </div>
-
-              <div className="p-lg rounded-lg bg-white/5 mb-xl border border-white/10">
-                <h4 className="font-medium mb-sm text-info">剧本：原初大陆</h4>
-                <p className="text-sm text-muted">包含生产者、食草动物和食肉动物的基本生态平衡。</p>
-              </div>
-
-              <button
-                className="btn btn-primary btn-lg w-full justify-center"
-                onClick={() => handleCreateSave("原初大陆 · 三族起源")}
-                disabled={loading}
-                style={{ width: '100%' }}
-              >
-                {loading ? <span className="spinner mr-sm"/> : <Play size={20} className="mr-sm" />}
-                {loading ? "正在创世纪..." : "启动模拟"}
-              </button>
-            </div>
-          )}
-
-          {/* 空白剧本创建 */}
-          {stage === "blank" && (
-            <div className="glass-card fade-in">
-              <div className="flex justify-between items-center mb-lg">
-                <h2 className="text-xl font-display">智能物种生成</h2>
-                <button className="btn btn-ghost btn-sm" onClick={() => setStage("root")}>
-                  <ArrowLeft size={16} style={{ marginRight: 4 }} /> 返回
-                </button>
-              </div>
-
-              <div className="form-field mb-xl">
-                <label className="field-label mb-xs">存档名称</label>
-                <input
-                  type="text"
-                  value={saveName}
-                  onChange={(e) => setSaveName(e.target.value)}
-                  placeholder="为这个新世界命名..."
-                  className="input-visual"
-                />
-              </div>
-
-              <div className="form-field mb-xl">
-                <label className="field-label mb-xs">
-                  地图种子
-                  <span className="text-xs text-muted ml-2">(选填，留空则随机生成)</span>
-                </label>
-                <input
-                  type="text"
-                  value={mapSeed}
-                  onChange={(e) => setMapSeed(e.target.value.replace(/\D/g, ''))}
-                  placeholder="例如: 12345 (仅数字)"
-                  className="input-visual"
-                />
-                <p className="text-xs text-muted mt-1">使用相同种子可以重现相同的地图形状</p>
-              </div>
-
-              {/* 物种输入卡片 */}
-              <div className="species-inputs-section mb-xl">
-                <div className="section-header mb-md">
-                  <span className="section-title">初始物种设计</span>
-                  <span className="section-hint">点击模板快速填充，或自由描述你的物种</span>
-                </div>
-                
-                <div className="species-cards-list">
-                  {speciesInputs.map((input, index) => (
-                    <SpeciesInputCard
-                      key={index}
-                      index={index}
-                      required={index === 0}
-                      value={input}
-                      onChange={(data) => updateSpeciesInput(index, data)}
-                      onRemove={index > 0 ? () => removeSpeciesSlot(index) : undefined}
-                    />
-                  ))}
-                </div>
-                
-                {speciesInputs.length < 5 && (
-                  <button 
-                    className="add-species-btn"
-                    onClick={addSpeciesSlot}
-                  >
-                    <PlusCircle size={16} />
-                    <span>添加更多物种</span>
-                  </button>
-                )}
-              </div>
-
-              <button
-                className="btn btn-success btn-lg w-full justify-center"
-                onClick={handleCreateBlankSave}
-                disabled={loading}
-                style={{ width: '100%' }}
-              >
-                {loading ? <span className="spinner mr-sm"/> : <Cpu size={20} className="mr-sm" />}
-                {loading ? "AI 正在构思物种..." : "生成并开始"}
-              </button>
-              
-              <style>{`
-                .species-inputs-section {
-                  display: flex;
-                  flex-direction: column;
-                  gap: 12px;
-                }
-                
-                .section-header {
-                  display: flex;
-                  flex-direction: column;
-                  gap: 4px;
-                }
-                
-                .section-title {
-                  font-size: 0.95rem;
-                  font-weight: 500;
-                  color: rgba(255, 255, 255, 0.9);
-                }
-                
-                .section-hint {
-                  font-size: 0.8rem;
-                  color: rgba(255, 255, 255, 0.5);
-                }
-                
-                .species-cards-list {
-                  display: flex;
-                  flex-direction: column;
-                  gap: 12px;
-                }
-                
-                .add-species-btn {
-                  display: flex;
-                  align-items: center;
-                  justify-content: center;
-                  gap: 8px;
-                  padding: 12px;
-                  background: rgba(255, 255, 255, 0.03);
-                  border: 2px dashed rgba(255, 255, 255, 0.15);
-                  border-radius: 12px;
-                  color: rgba(255, 255, 255, 0.5);
-                  font-size: 0.9rem;
-                  cursor: pointer;
-                  transition: all 0.2s;
-                  margin-top: 8px;
-                }
-                
-                .add-species-btn:hover {
-                  background: rgba(168, 85, 247, 0.1);
-                  border-color: rgba(168, 85, 247, 0.3);
-                  color: rgba(255, 255, 255, 0.8);
-                }
-              `}</style>
-            </div>
-          )}
-
-          {/* 读取存档 */}
-          {stage === "load" && (
-            <div className="glass-card fade-in">
-              <div className="saves-header-row">
-                <h2 className="text-xl font-display">编年史记录</h2>
-                <div className="saves-header-right">
-                  <span className="saves-count-badge">
-                    {manualSaves.length} 个存档
-                    {autoSaves.length > 0 && <span className="count-auto"> + {autoSaves.length} 自动</span>}
-                  </span>
-                  <button 
-                    className="refresh-icon-btn"
-                    onClick={() => loadSavesList(true)}
-                    disabled={refreshing}
-                    title="刷新列表"
-                  >
-                    <RefreshCw size={14} className={refreshing ? 'spinning' : ''} />
-                  </button>
-                </div>
-              </div>
-              
-              {saves.length === 0 ? (
-                <div className="empty-saves-state">
-                  <BookOpen size={48} strokeWidth={1.5} />
-                  <p>暂无历史记录</p>
-                  <span>开创新纪元后，您的存档将显示在这里</span>
+              {aiStatus.configured ? (
+                <div className="mm-ai-info">
+                  <div className="mm-ai-provider">{aiStatus.provider}</div>
+                  <div className="mm-ai-model">{aiStatus.model}</div>
                 </div>
               ) : (
-                <div className="saves-sections-wrapper">
-                  {/* 手动存档列表 */}
-                  {manualSaves.length > 0 && (
-                    <div className="saves-grid">
-                      {manualSaves.map((save, idx) => {
-                        const rawName = save.name || save.save_name;
-                        const { displayName } = formatSaveName(rawName);
-                        const scenario = save.scenario || '未知剧本';
-                        const relativeTime = save.last_saved ? formatRelativeTime(save.last_saved) : 
-                          (save.timestamp ? formatRelativeTime(new Date(save.timestamp * 1000).toISOString()) : '未知');
-                        const turnNum = (save.turn ?? save.turn_index ?? 0) + 1;
-                        
-                        return (
-                          <div 
-                            key={rawName} 
-                            className="save-item"
-                            style={{ animationDelay: `${idx * 0.04}s` }}
-                          >
-                            <div className="save-item-main">
-                              <div className="save-item-title">
-                                <span className="save-item-name">{displayName}</span>
-                              </div>
-                              
-                              <div className="save-item-scenario">
-                                <Globe size={11} />
-                                <span>{scenario}</span>
-                              </div>
-                              
-                              <div className="save-item-stats">
-                                <span className="stat">
-                                  <Clock size={11} />
-                                  <strong>T{turnNum}</strong>
-                                </span>
-                                <span className="stat-sep">·</span>
-                                <span className="stat">
-                                  <Users size={11} />
-                                  <strong>{save.species_count}</strong> 物种
-                                </span>
-                                <span className="stat-sep">·</span>
-                                <span className="stat time">{relativeTime}</span>
-                              </div>
-                            </div>
-                            
-                            <div className="save-item-actions">
-                              <button
-                                onClick={() => handleLoadSave(rawName)}
-                                disabled={loading}
-                                className="save-action-btn primary"
-                                title="读取存档"
-                              >
-                                <Play size={15} />
-                              </button>
-                              <button
-                                onClick={(e) => handleDeleteSave(e, rawName)}
-                                disabled={loading}
-                                className="save-action-btn danger"
-                                title="删除存档"
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  
-                  {/* 手动存档为空时的提示 */}
-                  {manualSaves.length === 0 && autoSaves.length > 0 && (
-                    <div className="no-manual-saves-hint">
-                      <FolderOpen size={24} strokeWidth={1.5} />
-                      <span>暂无手动存档</span>
-                    </div>
-                  )}
-                  
-                  {/* 自动存档抽屉 */}
-                  {autoSaves.length > 0 && (
-                    <div className="autosave-drawer-wrapper">
-                      <button
-                        type="button"
-                        className={`autosave-drawer-toggle ${autoSaveDrawerOpen ? 'open' : ''}`}
-                        onClick={() => setAutoSaveDrawerOpen(!autoSaveDrawerOpen)}
-                      >
-                        <div className="drawer-left">
-                          <Archive size={14} />
-                          <span>自动存档</span>
-                          <span className="drawer-badge">{autoSaves.length}</span>
-                        </div>
-                        <ChevronDown size={16} className={`drawer-arrow ${autoSaveDrawerOpen ? 'open' : ''}`} />
-                      </button>
-                      
-                      {autoSaveDrawerOpen && (
-                        <div className="autosave-drawer-content">
-                          {autoSaves.map((save, idx) => {
-                            const rawName = save.name || save.save_name;
-                            const { displayName } = formatSaveName(rawName);
-                            const relativeTime = save.last_saved ? formatRelativeTime(save.last_saved) : 
-                              (save.timestamp ? formatRelativeTime(new Date(save.timestamp * 1000).toISOString()) : '未知');
-                            const turnNum = (save.turn ?? save.turn_index ?? 0) + 1;
-                            
-                            return (
-                              <div 
-                                key={rawName} 
-                                className="autosave-item"
-                                style={{ animationDelay: `${idx * 0.03}s` }}
-                              >
-                                <div className="autosave-item-main">
-                                  <div className="autosave-item-title">
-                                    <Zap size={11} className="zap-icon" />
-                                    <span>{displayName}</span>
-                                  </div>
-                                  
-                                  <div className="autosave-item-meta">
-                                    <span><strong>T{turnNum}</strong></span>
-                                    <span className="sep">·</span>
-                                    <span><strong>{save.species_count}</strong> 物种</span>
-                                    <span className="sep">·</span>
-                                    <span className="time">{relativeTime}</span>
-                                  </div>
-                                </div>
-                                
-                                <div className="autosave-item-actions">
-                                  <button
-                                    onClick={() => handleLoadSave(rawName)}
-                                    disabled={loading}
-                                    className="save-action-btn primary small"
-                                    title="读取存档"
-                                  >
-                                    <Play size={13} />
-                                  </button>
-                                  <button
-                                    onClick={(e) => handleDeleteSave(e, rawName)}
-                                    disabled={loading}
-                                    className="save-action-btn danger small"
-                                    title="删除存档"
-                                  >
-                                    <Trash2 size={11} />
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                <div className="mm-ai-warning">
+                  <span>请先配置 AI 服务</span>
+                  <button onClick={onOpenSettings}>前往设置</button>
                 </div>
               )}
             </div>
-          )}
 
-        </section>
+            {/* 版本信息 */}
+            <div className="mm-version">
+              <span>v0.9.0</span>
+              <a href="https://github.com" target="_blank" rel="noopener noreferrer">
+                <ExternalLink size={12} />
+              </a>
+            </div>
+          </nav>
+
+          {/* 内容区域 */}
+          <section className="mm-panel">
+            
+            {/* 首页：选择模式 */}
+            {stage === "root" && (
+              <div className="mm-cards">
+                <div className="mm-card" onClick={() => setStage("create")}>
+                  <div className="mm-card-bg" />
+                  <div className="mm-card-content">
+                    <div className="mm-card-icon">
+                      <Globe size={28} />
+                    </div>
+                    <div className="mm-card-text">
+                      <h3>原初大陆 · 三族起源</h3>
+                      <p>经典开局。从三个基础物种开始，观察它们如何在标准环境中竞争与演化。</p>
+                    </div>
+                    <div className="mm-card-tag">推荐</div>
+                  </div>
+                  <div className="mm-card-shine" />
+                </div>
+
+                <div className="mm-card variant" onClick={() => setStage("blank")}>
+                  <div className="mm-card-bg" />
+                  <div className="mm-card-content">
+                    <div className="mm-card-icon variant">
+                      <Plus size={28} />
+                    </div>
+                    <div className="mm-card-text">
+                      <h3>空白剧本 · 从零塑造</h3>
+                      <p>完全自由。使用自然语言描述你想要的初始物种，由 AI 为你生成独一无二的开局。</p>
+                    </div>
+                    <div className="mm-card-tag ai">AI 驱动</div>
+                  </div>
+                  <div className="mm-card-shine" />
+                </div>
+              </div>
+            )}
+
+            {/* 创建普通存档 */}
+            {stage === "create" && (
+              <div className="mm-form">
+                <div className="mm-form-header">
+                  <h2>新纪元配置</h2>
+                  <button className="mm-back-btn" onClick={() => setStage("root")}>
+                    <ArrowLeft size={16} />
+                    <span>返回</span>
+                  </button>
+                </div>
+                
+                <div className="mm-form-body">
+                  <div className="mm-field">
+                    <label>存档名称</label>
+                    <input
+                      type="text"
+                      value={saveName}
+                      onChange={(e) => setSaveName(e.target.value)}
+                      placeholder="为这个新世界命名..."
+                      autoFocus
+                    />
+                  </div>
+
+                  <div className="mm-field">
+                    <label>
+                      地图种子
+                      <span className="mm-field-hint">选填，留空则随机生成</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={mapSeed}
+                      onChange={(e) => setMapSeed(e.target.value.replace(/\D/g, ''))}
+                      placeholder="例如: 12345"
+                    />
+                  </div>
+
+                  <div className="mm-scenario-preview">
+                    <div className="mm-scenario-icon"><Globe size={20} /></div>
+                    <div className="mm-scenario-info">
+                      <span className="mm-scenario-title">剧本：原初大陆</span>
+                      <span className="mm-scenario-desc">包含初级生产者、和初级消费者的基本生态平衡</span>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  className="mm-submit-btn"
+                  onClick={() => handleCreateSave("原初大陆 · 三族起源")}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <>
+                      <span className="mm-spinner" />
+                      <span>正在创世纪...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play size={18} />
+                      <span>启动模拟</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* 空白剧本创建 */}
+            {stage === "blank" && (
+              <div className="mm-form">
+                <div className="mm-form-header">
+                  <h2>智能物种生成</h2>
+                  <button className="mm-back-btn" onClick={() => setStage("root")}>
+                    <ArrowLeft size={16} />
+                    <span>返回</span>
+                  </button>
+                </div>
+
+                <div className="mm-form-body">
+                  <div className="mm-field">
+                    <label>存档名称</label>
+                    <input
+                      type="text"
+                      value={saveName}
+                      onChange={(e) => setSaveName(e.target.value)}
+                      placeholder="为这个新世界命名..."
+                    />
+                  </div>
+
+                  <div className="mm-field">
+                    <label>
+                      地图种子
+                      <span className="mm-field-hint">选填</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={mapSeed}
+                      onChange={(e) => setMapSeed(e.target.value.replace(/\D/g, ''))}
+                      placeholder="例如: 12345"
+                    />
+                  </div>
+
+                  <div className="mm-species-section">
+                    <div className="mm-species-header">
+                      <span className="mm-species-title">初始物种设计</span>
+                      <span className="mm-species-hint">点击模板快速填充，或自由描述</span>
+                    </div>
+                    
+                    <div className="mm-species-list">
+                      {speciesInputs.map((input, index) => (
+                        <SpeciesInputCard
+                          key={index}
+                          index={index}
+                          required={index === 0}
+                          value={input}
+                          onChange={(data) => updateSpeciesInput(index, data)}
+                          onRemove={index > 0 ? () => removeSpeciesSlot(index) : undefined}
+                        />
+                      ))}
+                    </div>
+                    
+                    {speciesInputs.length < 5 && (
+                      <button className="mm-add-species" onClick={addSpeciesSlot}>
+                        <PlusCircle size={16} />
+                        <span>添加更多物种</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  className="mm-submit-btn success"
+                  onClick={handleCreateBlankSave}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <>
+                      <span className="mm-spinner" />
+                      <span>AI 正在构思物种...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Cpu size={18} />
+                      <span>生成并开始</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* 读取存档 */}
+            {stage === "load" && (
+              <div className="mm-saves">
+                <div className="mm-saves-header">
+                  <h2>编年史记录</h2>
+                  <div className="mm-saves-actions">
+                    <span className="mm-saves-count">
+                      {manualSaves.length} 个存档
+                      {autoSaves.length > 0 && <span className="mm-saves-auto">+{autoSaves.length}</span>}
+                    </span>
+                    <button 
+                      className="mm-refresh-btn"
+                      onClick={() => loadSavesList(true)}
+                      disabled={refreshing}
+                    >
+                      <RefreshCw size={14} className={refreshing ? "spinning" : ""} />
+                    </button>
+                  </div>
+                </div>
+                
+                {saves.length === 0 ? (
+                  <div className="mm-saves-empty">
+                    <div className="mm-empty-icon">
+                      <BookOpen size={48} strokeWidth={1} />
+                    </div>
+                    <h3>暂无历史记录</h3>
+                    <p>开创新纪元后，您的存档将显示在这里</p>
+                  </div>
+                ) : (
+                  <div className="mm-saves-content">
+                    {/* 手动存档 */}
+                    {manualSaves.length > 0 && (
+                      <div className="mm-saves-list">
+                        {manualSaves.map((save, idx) => {
+                          const rawName = save.name || save.save_name;
+                          const { displayName } = formatSaveName(rawName);
+                          const scenario = save.scenario || '未知剧本';
+                          const relativeTime = save.last_saved ? formatRelativeTime(save.last_saved) : 
+                            (save.timestamp ? formatRelativeTime(new Date(save.timestamp * 1000).toISOString()) : '未知');
+                          const turnNum = (save.turn ?? save.turn_index ?? 0) + 1;
+                          
+                          return (
+                            <div 
+                              key={rawName} 
+                              className="mm-save-item"
+                              style={{ animationDelay: `${idx * 0.05}s` }}
+                              onClick={() => handleLoadSave(rawName)}
+                            >
+                              <div className="mm-save-icon">
+                                <Globe size={18} />
+                              </div>
+                              <div className="mm-save-info">
+                                <span className="mm-save-name">{displayName}</span>
+                                <div className="mm-save-meta">
+                                  <span><Clock size={11} /> T{turnNum}</span>
+                                  <span><Users size={11} /> {save.species_count} 物种</span>
+                                  <span className="mm-save-time">{relativeTime}</span>
+                                </div>
+                                <span className="mm-save-scenario">{scenario}</span>
+                              </div>
+                              <div className="mm-save-actions" onClick={e => e.stopPropagation()}>
+                                <button
+                                  className="mm-save-play"
+                                  onClick={() => handleLoadSave(rawName)}
+                                  disabled={loading}
+                                >
+                                  <Play size={14} />
+                                </button>
+                                <button
+                                  className="mm-save-delete"
+                                  onClick={(e) => handleDeleteSave(e, rawName)}
+                                  disabled={loading}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    
+                    {/* 无手动存档提示 */}
+                    {manualSaves.length === 0 && autoSaves.length > 0 && (
+                      <div className="mm-no-manual">
+                        <FolderOpen size={20} />
+                        <span>暂无手动存档</span>
+                      </div>
+                    )}
+                    
+                    {/* 自动存档折叠区 */}
+                    {autoSaves.length > 0 && (
+                      <div className="mm-autosave-section">
+                        <button
+                          className={`mm-autosave-toggle ${autoSaveDrawerOpen ? "open" : ""}`}
+                          onClick={() => setAutoSaveDrawerOpen(!autoSaveDrawerOpen)}
+                        >
+                          <Archive size={14} />
+                          <span>自动存档</span>
+                          <span className="mm-autosave-badge">{autoSaves.length}</span>
+                          <ChevronDown size={14} className={`mm-toggle-arrow ${autoSaveDrawerOpen ? "open" : ""}`} />
+                        </button>
+                        
+                        {autoSaveDrawerOpen && (
+                          <div className="mm-autosave-list">
+                            {autoSaves.map((save, idx) => {
+                              const rawName = save.name || save.save_name;
+                              const { displayName } = formatSaveName(rawName);
+                              const relativeTime = save.last_saved ? formatRelativeTime(save.last_saved) : 
+                                (save.timestamp ? formatRelativeTime(new Date(save.timestamp * 1000).toISOString()) : '未知');
+                              const turnNum = (save.turn ?? save.turn_index ?? 0) + 1;
+                              
+                              return (
+                                <div 
+                                  key={rawName} 
+                                  className="mm-autosave-item"
+                                  style={{ animationDelay: `${idx * 0.03}s` }}
+                                  onClick={() => handleLoadSave(rawName)}
+                                >
+                                  <div className="mm-autosave-info">
+                                    <div className="mm-autosave-name">
+                                      <Zap size={11} />
+                                      <span>{displayName}</span>
+                                    </div>
+                                    <div className="mm-autosave-meta">
+                                      <span>T{turnNum}</span>
+                                      <span>{save.species_count} 物种</span>
+                                      <span>{relativeTime}</span>
+                                    </div>
+                                  </div>
+                                  <div className="mm-autosave-actions" onClick={e => e.stopPropagation()}>
+                                    <button onClick={() => handleLoadSave(rawName)} disabled={loading}>
+                                      <Play size={12} />
+                                    </button>
+                                    <button onClick={(e) => handleDeleteSave(e, rawName)} disabled={loading}>
+                                      <Trash2 size={10} />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+          </section>
+        </div>
       </div>
     </div>
   );

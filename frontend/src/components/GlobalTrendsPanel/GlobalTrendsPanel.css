@@ -1,0 +1,1245 @@
+/**
+ * GlobalTrendsPanel - 现代化样式 v2
+ * 
+ * 特点：
+ * - 玻璃态设计
+ * - 自定义下拉菜单
+ * - 丰富的动画效果
+ * - 信息密集但清晰
+ */
+
+/* ============ 动画定义 ============ */
+@keyframes gtp-fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes gtp-slide-up {
+  from { opacity: 0; transform: translateY(20px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes gtp-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.1; transform: scale(1.5); }
+}
+
+@keyframes gtp-glow-rotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes gtp-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes gtp-sparkle {
+  0%, 100% { opacity: 0.5; transform: scale(1) rotate(0deg); }
+  50% { opacity: 1; transform: scale(1.2) rotate(180deg); }
+}
+
+@keyframes gtp-card-enter {
+  from { opacity: 0; transform: translateY(15px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes gtp-dropdown-enter {
+  from { opacity: 0; transform: translateY(-8px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes gtp-timeline-dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; }
+  50% { box-shadow: 0 0 0 4px transparent; }
+}
+
+/* ============ 主容器 ============ */
+.gtp-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.25rem;
+  min-height: 520px;
+  max-height: 80vh;
+  overflow: hidden;
+  animation: gtp-fade-in 0.4s ease-out;
+}
+
+/* ============ 标题样式 ============ */
+.gtp-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-family: var(--font-display, 'Cinzel', serif);
+  font-weight: 700;
+}
+
+.gtp-title-icon {
+  color: #2dd4bf;
+  filter: drop-shadow(0 0 8px rgba(45, 212, 191, 0.5));
+  animation: gtp-glow-rotate 20s linear infinite;
+}
+
+.gtp-title-sparkle {
+  color: #fbbf24;
+  animation: gtp-sparkle 2s ease-in-out infinite;
+}
+
+/* ============ 统计卡片网格 - 6列自适应 ============ */
+.gtp-stats-grid-6 {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(140px, 1fr));
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+/* 隐藏滚动条但保留滚动功能 */
+.gtp-stats-grid-6::-webkit-scrollbar {
+  height: 4px;
+}
+
+.gtp-stats-grid-6::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 2px;
+}
+
+.gtp-stats-grid-6::-webkit-scrollbar-thumb {
+  background: rgba(45, 212, 191, 0.3);
+  border-radius: 2px;
+}
+
+@media (max-width: 1100px) {
+  .gtp-stats-grid-6 {
+    grid-template-columns: repeat(3, minmax(140px, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .gtp-stats-grid-6 {
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+  }
+}
+
+/* ============ 统计卡片 ============ */
+.gtp-stat-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem 0.875rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  animation: gtp-card-enter 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: var(--delay, 0ms);
+  min-width: 0;
+}
+
+.gtp-stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 200%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), transparent);
+  transform: skewX(-20deg);
+  transition: left 0.5s ease;
+}
+
+.gtp-stat-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.15);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.gtp-stat-card:hover::before {
+  left: 100%;
+}
+
+.gtp-stat-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+}
+
+.gtp-stat-glow {
+  position: absolute;
+  top: -50%;
+  right: -50%;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  opacity: 0.06;
+  filter: blur(30px);
+  pointer-events: none;
+}
+
+.gtp-stat-icon-wrap {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  flex-shrink: 0;
+  transition: transform 0.3s ease;
+}
+
+.gtp-stat-card:hover .gtp-stat-icon-wrap {
+  transform: scale(1.1) rotate(-5deg);
+}
+
+.gtp-stat-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.gtp-stat-label {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: rgba(226, 236, 255, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.gtp-stat-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.2rem;
+  flex-wrap: nowrap;
+}
+
+.gtp-stat-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  font-family: var(--font-mono, 'Fira Code', monospace);
+  color: rgba(226, 236, 255, 0.95);
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.gtp-stat-unit {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: rgba(226, 236, 255, 0.45);
+  white-space: nowrap;
+}
+
+/* 迷你趋势图 */
+.gtp-stat-sparkline {
+  height: 20px;
+  margin-top: 0.25rem;
+  opacity: 0.8;
+}
+
+.gtp-mini-trend {
+  width: 100%;
+  display: block;
+}
+
+/* 附加信息 */
+.gtp-stat-sub {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.25rem;
+  padding-top: 0.375rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.gtp-stat-sub-label {
+  font-size: 0.6rem;
+  color: rgba(226, 236, 255, 0.4);
+}
+
+.gtp-stat-sub-value {
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: rgba(239, 68, 68, 0.9);
+}
+
+/* ============ 趋势指示器 ============ */
+.gtp-trend-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  margin-top: 0.15rem;
+  width: fit-content;
+}
+
+/* ============ 控制栏 ============ */
+.gtp-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-wrap: wrap;
+}
+
+/* ============ 标签页 ============ */
+.gtp-tabs {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.gtp-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.875rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: rgba(226, 236, 255, 0.6);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+
+.gtp-tab::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, var(--tab-color, #3b82f6) 0%, transparent 100%);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.gtp-tab:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(226, 236, 255, 0.85);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.gtp-tab.active {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--tab-color, #3b82f6);
+}
+
+.gtp-tab.active::before {
+  opacity: 0.1;
+}
+
+.gtp-tab-icon {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  transition: transform 0.2s ease;
+}
+
+.gtp-tab:hover .gtp-tab-icon {
+  transform: scale(1.1);
+}
+
+.gtp-tab-label {
+  position: relative;
+  z-index: 1;
+}
+
+.gtp-tab-indicator {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 50%;
+  height: 2px;
+  background: var(--tab-color, #3b82f6);
+  border-radius: 2px;
+  box-shadow: 0 0 8px var(--tab-color, #3b82f6);
+}
+
+/* ============ 工具栏 ============ */
+.gtp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.gtp-chart-types {
+  display: flex;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.gtp-chart-type-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  color: rgba(226, 236, 255, 0.4);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.gtp-chart-type-btn:hover {
+  color: rgba(226, 236, 255, 0.8);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.gtp-chart-type-btn.active {
+  color: #2dd4bf;
+  background: rgba(45, 212, 191, 0.15);
+}
+
+.gtp-chart-type-btn:not(:last-child) {
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* ============ 自定义下拉菜单 ============ */
+.gtp-custom-select {
+  position: relative;
+  z-index: 100;
+}
+
+.gtp-select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: rgba(226, 236, 255, 0.9);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 140px;
+}
+
+.gtp-select-trigger:hover {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.gtp-custom-select.open .gtp-select-trigger {
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.1), rgba(45, 212, 191, 0.05));
+  border-color: rgba(45, 212, 191, 0.3);
+  box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.1);
+}
+
+.gtp-select-icon {
+  display: flex;
+  color: rgba(45, 212, 191, 0.7);
+}
+
+.gtp-select-text {
+  flex: 1;
+  text-align: left;
+}
+
+.gtp-select-chevron {
+  color: rgba(226, 236, 255, 0.4);
+  transition: transform 0.2s ease;
+}
+
+.gtp-select-chevron.rotated {
+  transform: rotate(180deg);
+}
+
+.gtp-select-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(20, 30, 50, 0.98));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 0.375rem;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  backdrop-filter: blur(16px);
+  animation: gtp-dropdown-enter 0.2s ease;
+}
+
+.gtp-select-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: rgba(226, 236, 255, 0.7);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+
+.gtp-select-option:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(226, 236, 255, 0.95);
+}
+
+.gtp-select-option.selected {
+  background: rgba(45, 212, 191, 0.15);
+  color: #2dd4bf;
+}
+
+.gtp-option-icon {
+  display: flex;
+  color: rgba(226, 236, 255, 0.5);
+}
+
+.gtp-select-option.selected .gtp-option-icon {
+  color: #2dd4bf;
+}
+
+.gtp-option-text {
+  flex: 1;
+}
+
+.gtp-option-check {
+  color: #2dd4bf;
+}
+
+/* 导出按钮 */
+.gtp-export-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.75rem;
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.15), rgba(45, 212, 191, 0.08));
+  border: 1px solid rgba(45, 212, 191, 0.25);
+  border-radius: 8px;
+  color: #2dd4bf;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+
+.gtp-export-btn:hover {
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.25), rgba(45, 212, 191, 0.15));
+  border-color: rgba(45, 212, 191, 0.4);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(45, 212, 191, 0.15);
+}
+
+/* ============ 图表区域 ============ */
+.gtp-chart-area {
+  flex: 1;
+  min-height: 320px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.01) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  overflow: hidden;
+  animation: gtp-slide-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.2s backwards;
+}
+
+.gtp-chart-wrapper {
+  padding: 1rem;
+  height: 100%;
+}
+
+/* ============ 布局样式 ============ */
+
+/* 环境布局 */
+.gtp-env-layout {
+  display: grid;
+  grid-template-columns: 1fr 240px;
+  gap: 1rem;
+  height: 100%;
+}
+
+.gtp-main-chart {
+  min-width: 0;
+}
+
+.gtp-env-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* 生物多样性布局 */
+.gtp-bio-layout {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 1rem;
+  height: 100%;
+}
+
+.gtp-bio-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.gtp-bio-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+/* 进化布局 */
+.gtp-evo-layout {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 1rem;
+  height: 100%;
+}
+
+.gtp-evo-main {
+  min-width: 0;
+}
+
+.gtp-evo-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+/* 健康布局 */
+.gtp-health-layout {
+  display: grid;
+  grid-template-columns: 1fr 200px;
+  gap: 1rem;
+  height: 100%;
+}
+
+.gtp-health-main {
+  min-width: 0;
+}
+
+.gtp-health-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+@media (max-width: 768px) {
+  .gtp-env-layout,
+  .gtp-bio-layout,
+  .gtp-evo-layout,
+  .gtp-health-layout {
+    grid-template-columns: 1fr;
+  }
+  
+  .gtp-env-sidebar,
+  .gtp-bio-sidebar,
+  .gtp-evo-sidebar,
+  .gtp-health-sidebar {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
+/* ============ 信息卡片 ============ */
+.gtp-info-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  padding: 0.75rem;
+  transition: all 0.2s ease;
+}
+
+.gtp-info-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.gtp-info-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.625rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.gtp-info-icon {
+  display: flex;
+}
+
+.gtp-info-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: rgba(226, 236, 255, 0.8);
+}
+
+.gtp-info-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.gtp-info-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.gtp-info-label {
+  font-size: 0.7rem;
+  color: rgba(226, 236, 255, 0.5);
+}
+
+.gtp-info-value {
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: rgba(226, 236, 255, 0.9);
+}
+
+/* ============ Section 样式 ============ */
+.gtp-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.gtp-section-header.small {
+  margin-bottom: 0.5rem;
+}
+
+.gtp-section-icon {
+  display: flex;
+  color: #2dd4bf;
+}
+
+.gtp-section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: rgba(226, 236, 255, 0.8);
+}
+
+.gtp-section-header.small .gtp-section-title,
+.gtp-section-header.small span {
+  font-size: 0.75rem;
+}
+
+.gtp-chart-section {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  padding: 0.875rem;
+}
+
+/* ============ 饼图图例 ============ */
+.gtp-pie-container {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.gtp-pie-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.gtp-pie-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+}
+
+.gtp-pie-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.gtp-pie-legend-label {
+  color: rgba(226, 236, 255, 0.6);
+  flex: 1;
+}
+
+.gtp-pie-legend-value {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: rgba(226, 236, 255, 0.9);
+}
+
+/* ============ 迷你统计网格 ============ */
+.gtp-stats-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+}
+
+.gtp-mini-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.gtp-mini-stat:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.gtp-mini-stat-icon {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.gtp-mini-stat-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.gtp-mini-stat-value {
+  font-size: 0.9rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: rgba(226, 236, 255, 0.95);
+  line-height: 1;
+}
+
+.gtp-mini-stat-label {
+  font-size: 0.6rem;
+  color: rgba(226, 236, 255, 0.5);
+}
+
+/* ============ Top 物种列表 ============ */
+.gtp-top-species {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 0.625rem;
+}
+
+.gtp-species-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.gtp-species-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.gtp-species-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.gtp-species-rank {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: rgba(45, 212, 191, 0.7);
+  min-width: 20px;
+}
+
+.gtp-species-code {
+  flex: 1;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: rgba(226, 236, 255, 0.85);
+}
+
+.gtp-species-pop {
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: rgba(34, 197, 94, 0.9);
+}
+
+/* ============ 时间线 ============ */
+.gtp-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.gtp-timeline::-webkit-scrollbar {
+  width: 4px;
+}
+
+.gtp-timeline::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 2px;
+}
+
+.gtp-timeline::-webkit-scrollbar-thumb {
+  background: rgba(45, 212, 191, 0.3);
+  border-radius: 2px;
+}
+
+.gtp-timeline-item {
+  display: flex;
+  gap: 0.625rem;
+  padding: 0.5rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 8px;
+  transition: all 0.15s ease;
+}
+
+.gtp-timeline-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.gtp-timeline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+  animation: gtp-timeline-dot-pulse 2s ease infinite;
+}
+
+.gtp-timeline-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.gtp-timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.2rem;
+}
+
+.gtp-timeline-turn {
+  font-size: 0.6rem;
+  font-family: var(--font-mono);
+  color: rgba(226, 236, 255, 0.4);
+}
+
+.gtp-timeline-type {
+  font-size: 0.6rem;
+  font-weight: 600;
+}
+
+.gtp-timeline-title {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: rgba(226, 236, 255, 0.9);
+}
+
+.gtp-timeline-detail {
+  font-size: 0.65rem;
+  color: rgba(226, 236, 255, 0.5);
+  margin-top: 0.15rem;
+}
+
+.gtp-timeline-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  color: rgba(226, 236, 255, 0.4);
+  text-align: center;
+}
+
+.gtp-timeline-empty span {
+  font-size: 0.75rem;
+}
+
+/* ============ 进化统计 ============ */
+.gtp-evo-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-top: auto;
+}
+
+.gtp-evo-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.75rem;
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 8px;
+}
+
+.gtp-evo-stat-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: #a78bfa;
+}
+
+.gtp-evo-stat-label {
+  font-size: 0.6rem;
+  color: rgba(226, 236, 255, 0.5);
+  text-align: center;
+}
+
+/* ============ 健康仪表盘 ============ */
+.gtp-health-gauges {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.gtp-gauge-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.gtp-gauge-ring {
+  position: relative;
+  width: 70px;
+  height: 70px;
+}
+
+.gtp-gauge-svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.gtp-gauge-value {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 0.95rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.gtp-gauge-label {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: rgba(226, 236, 255, 0.6);
+}
+
+/* 健康状态 */
+.gtp-health-status {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.gtp-status-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.7rem;
+  color: rgba(226, 236, 255, 0.6);
+}
+
+.gtp-status-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* ============ Tooltip ============ */
+.gtp-tooltip {
+  background: rgba(15, 23, 42, 0.98) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 10px !important;
+  padding: 0 !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4) !important;
+  overflow: hidden;
+}
+
+.gtp-tooltip-header {
+  padding: 0.5rem 0.75rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: rgba(226, 236, 255, 0.8);
+}
+
+.gtp-tooltip-content {
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.gtp-tooltip-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+}
+
+.gtp-tooltip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.gtp-tooltip-label {
+  flex: 1;
+  color: rgba(226, 236, 255, 0.6);
+}
+
+.gtp-tooltip-value {
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: rgba(226, 236, 255, 0.95);
+}
+
+/* ============ 空状态 ============ */
+.gtp-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 280px;
+  padding: 2rem;
+  text-align: center;
+}
+
+.gtp-empty-icon-wrap {
+  position: relative;
+  margin-bottom: 1.5rem;
+}
+
+.gtp-empty-icon {
+  color: rgba(45, 212, 191, 0.4);
+  animation: gtp-fade-in 1s ease infinite alternate;
+}
+
+.gtp-empty-pulse {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 80px;
+  height: 80px;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(45, 212, 191, 0.3);
+  border-radius: 50%;
+  animation: gtp-pulse 2s ease-out infinite;
+}
+
+.gtp-empty-pulse.delay {
+  animation-delay: 1s;
+}
+
+.gtp-empty-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: rgba(226, 236, 255, 0.8);
+  margin: 0 0 0.5rem;
+}
+
+.gtp-empty-hint {
+  font-size: 0.85rem;
+  color: rgba(226, 236, 255, 0.45);
+  margin: 0;
+  max-width: 300px;
+}
+
+/* ============ 底部信息 ============ */
+.gtp-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1.25rem;
+  padding-top: 0.625rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.gtp-footer-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: rgba(226, 236, 255, 0.45);
+}
+
+.gtp-footer-stat strong {
+  color: rgba(226, 236, 255, 0.7);
+  font-weight: 600;
+}
+
+.gtp-footer-stat svg {
+  color: rgba(45, 212, 191, 0.6);
+}
+
+/* ============ Recharts 自定义 ============ */
+.recharts-legend-item-text {
+  color: rgba(226, 236, 255, 0.7) !important;
+  font-size: 0.7rem !important;
+}
+
+.recharts-cartesian-axis-tick-value {
+  fill: rgba(226, 236, 255, 0.5) !important;
+}
+
+.recharts-tooltip-cursor {
+  stroke: rgba(45, 212, 191, 0.2) !important;
+}
+
+/* ============ 滚动条美化 ============ */
+.gtp-container::-webkit-scrollbar {
+  width: 5px;
+}
+
+.gtp-container::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.gtp-container::-webkit-scrollbar-thumb {
+  background: rgba(45, 212, 191, 0.3);
+  border-radius: 3px;
+}
+
+.gtp-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(45, 212, 191, 0.5);
+}

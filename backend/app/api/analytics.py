@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..schemas.responses import ExportRecord
 from .dependencies import get_container, get_history_repository, get_session
 from ..core.ai_router_config import configure_model_router
+from ..simulation.constants import get_time_config
 
 if TYPE_CHECKING:
     from ..core.container import ServiceContainer
@@ -118,6 +119,9 @@ def get_game_state(
     
     map_state = env_repo.get_state()
     
+    # 【动态时间流】获取当前时间配置
+    time_config = get_time_config(engine.turn_counter)
+    
     # 前端期望的顶层字段
     return {
         "turn_index": engine.turn_counter,
@@ -126,6 +130,10 @@ def get_game_state(
         "sea_level": map_state.sea_level if map_state else 0.0,  # 前端期望的顶层字段
         "global_temperature": map_state.global_avg_temperature if map_state else 15.0,  # 前端期望的顶层字段
         "tectonic_stage": map_state.stage_name if map_state else "稳定期",  # 前端期望的顶层字段
+        # 【动态时间流】年份信息
+        "current_year": time_config["current_year"],
+        "years_per_turn": time_config["years_per_turn"],
+        "era_name": time_config["era_name"],
         # 额外字段（保持兼容）
         "running": session.is_running,
         "current_save": session.current_save_name,

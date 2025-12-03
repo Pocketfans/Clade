@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 from ...models.environment import HabitatPopulation, MapTile
 from ...repositories.environment_repository import environment_repository
 from ...simulation.constants import LOGIC_RES_X, LOGIC_RES_Y
+from scipy.ndimage import label as scipy_label
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,10 @@ class DispersalEngine:
         self._tile_ids: list[int] = []               # 地块ID列表
         self._tile_map: dict[int, int] = {}          # tile_id -> matrix_index
         
+        # 【新增】连通性缓存
+        self._tile_land_labels: np.ndarray | None = None   # (n_tiles,) 陆地连通区域ID
+        self._tile_water_labels: np.ndarray | None = None  # (n_tiles,) 水域连通区域ID
+        
         # 物种冷却
         self._last_dispersal: dict[str, int] = {}    # {lineage_code: last_turn}
         self._last_migration: dict[str, int] = {}    # {lineage_code: last_turn}
@@ -74,6 +79,7 @@ class DispersalEngine:
         """更新地块矩阵缓存
         
         将地块信息转换为numpy矩阵，便于批量计算
+        【改进】计算并缓存地块连通性（陆地/水域区域）
         """
         n_tiles = len(tiles)
         if n_tiles == 0:
@@ -85,12 +91,23 @@ class DispersalEngine:
         self._tile_ids = []
         self._tile_map = {}
         
+        # 临时网格用于计算连通性
+        grid_elev = np.zeros((LOGIC_RES_Y, LOGIC_RES_X), dtype=np.float32)
+        grid_indices = np.full((LOGIC_RES_Y, LOGIC_RES_X), -1, dtype=int)
+        
         for i, tile in enumerate(tiles):
             tile_id = tile.id or i
             self._tile_ids.append(tile_id)
             self._tile_map[tile_id] = i
             
             coords[i] = [tile.x, tile.y]
+            
+            # 填充网格（假设 x, y 是基于 0 到 LOGIC_RES 的）
+            tx, ty = int(tile.x), int(tile.y)
+            if 0 <= tx < LOGIC_RES_X and 0 <= ty < LOGIC_RES_Y:
+                grid_elev[ty, tx] = tile.elevation
+                grid_indices[ty, tx] = i
+                
             biome = tile.biome.lower()
             
             features[i] = [
@@ -106,7 +123,27 @@ class DispersalEngine:
         self._tile_matrix = features
         self._tile_coords = coords
         
-        logger.debug(f"[扩散引擎] 已缓存 {n_tiles} 个地块的特征矩阵")
+        # === 计算连通性 ===
+        # 1. 陆地连通性 (elevation >= 0)
+        land_mask = grid_elev >= 0
+        land_labels, _ = scipy_label(land_mask, structure=np.ones((3,3)))
+        
+        # 2. 水域连通性 (elevation < 0)
+        water_mask = grid_elev < 0
+        water_labels, _ = scipy_label(water_mask, structure=np.ones((3,3)))
+        
+        # 映射回一维数组
+        self._tile_land_labels = np.zeros(n_tiles, dtype=int)
+        self._tile_water_labels = np.zeros(n_tiles, dtype=int)
+        
+        # 只需要遍历有效网格点
+        valid_y, valid_x = np.where(grid_indices >= 0)
+        for y, x in zip(valid_y, valid_x):
+            idx = grid_indices[y, x]
+            self._tile_land_labels[idx] = land_labels[y, x]
+            self._tile_water_labels[idx] = water_labels[y, x]
+            
+        logger.debug(f"[扩散引擎] 已缓存 {n_tiles} 个地块的特征矩阵与连通性数据")
     
     def _get_species_preference_vector(self, species: 'Species') -> np.ndarray:
         """将物种偏好转换为特征向量
@@ -183,22 +220,26 @@ class DispersalEngine:
         n_tiles = len(self._tile_ids)
         pref = self._get_species_preference_vector(species)
         
-        # === 温度匹配（更宽容）===
+        # === 温度匹配（严格物理限制）===
         # tile_matrix[:, 0] 是归一化温度 [-1, 1]
         # pref[0] 是温度偏好 [-1, 1]
+        # 修复：移除0.3保底，超出耐受范围直接降为0
         temp_diff = np.abs(self._tile_matrix[:, 0] - pref[0])
-        temp_match = np.maximum(0.3, 1.0 - temp_diff * 0.7)  # 差距1.0 -> 0.3
+        # 差异 > 0.5 (即25度温差) 时归零
+        temp_match = np.maximum(0.0, 1.0 - temp_diff * 2.0)
         
-        # === 湿度匹配（更宽容）===
+        # === 湿度匹配（严格物理限制）===
+        # 修复：移除0.3保底
         humidity_diff = np.abs(self._tile_matrix[:, 1] - pref[1])
-        humidity_match = np.maximum(0.3, 1.0 - humidity_diff * 0.8)
+        humidity_match = np.maximum(0.0, 1.0 - humidity_diff * 2.0)
         
         # === 资源匹配 ===
-        # 资源越多越好，但保证最低值
-        resource_match = np.maximum(0.3, self._tile_matrix[:, 3] * 0.7 + 0.3)
+        # 资源作为加分项，而非生存必需项（生存必需项由carrying capacity决定）
+        resource_match = self._tile_matrix[:, 3]
         
         # === 栖息地类型匹配（硬约束）===
         # 【修复v8】水生物种不能到陆地，陆生物种不能到深海
+        # pref[4]=陆地, pref[5]=海洋, pref[6]=海岸
         habitat_match = (
             self._tile_matrix[:, 4] * pref[4] +  # 陆地
             self._tile_matrix[:, 5] * pref[5] +  # 海洋
@@ -208,33 +249,41 @@ class DispersalEngine:
         if pref[4] + pref[5] + pref[6] < 0.1:
             habitat_match = self._tile_matrix[:, 4]
         
-        # 【修复v8】硬约束：栖息地类型完全不匹配时，适宜度为0
-        # 水生物种（海洋偏好 > 0.5）不能去陆地
-        is_aquatic = pref[5] > 0.5  # 海洋偏好
-        is_terrestrial = pref[4] > 0.5  # 陆地偏好
-        is_land_tile = self._tile_matrix[:, 4] > 0.5  # 是陆地地块
-        is_sea_tile = self._tile_matrix[:, 5] > 0.5   # 是海洋地块
+        # 【重要】硬约束：物理介质不符直接为0
+        is_aquatic_species = pref[5] > 0.5 or pref[6] > 0.5  # 海洋或海岸生物
+        is_strict_terrestrial = pref[4] > 0.5 and not is_aquatic_species # 纯陆生
         
-        # 水生物种到陆地 = 0
-        if is_aquatic:
-            habitat_match = np.where(is_land_tile, 0.0, habitat_match)
-        # 陆生物种到深海 = 0
-        if is_terrestrial:
+        is_land_tile = self._tile_matrix[:, 4] > 0.5
+        is_sea_tile = self._tile_matrix[:, 5] > 0.5
+        
+        # 1. 纯陆生生物不能下海
+        if is_strict_terrestrial:
             habitat_match = np.where(is_sea_tile, 0.0, habitat_match)
-        
-        # 【修复v8】栖息地不匹配时严格惩罚
-        habitat_match = np.where(habitat_match > 0.3, habitat_match, 0.0)
-        
+            
+        # 2. 水生生物不能上岸（两栖除外）
+        # 注意：海岸生物(pref[6])通常可以容忍沿海陆地，这里主要限制纯水生
+        is_strict_aquatic = pref[5] > 0.5 and pref[4] < 0.1 and pref[6] < 0.5
+        if is_strict_aquatic:
+            habitat_match = np.where(is_land_tile, 0.0, habitat_match)
+
         # === 综合适宜度 ===
-        suitability = (
-            temp_match * 0.25 +
-            humidity_match * 0.20 +
-            resource_match * 0.20 +
-            habitat_match * 0.35  # 栖息地类型权重提高
+        # 任何一项为0则整体为0（木桶效应）
+        # 使用几何平均或乘法逻辑，而不是加权求和
+        # 这里先保留加权求和结构，但加入强惩罚
+        
+        base_score = (
+            temp_match * 0.3 +
+            humidity_match * 0.2 +
+            resource_match * 0.2 +
+            habitat_match * 0.3
         )
         
-        # 【修复v8】栖息地完全不匹配时，整体适宜度为0
-        suitability = np.where(habitat_match == 0.0, 0.0, suitability)
+        # 硬性门槛：如果关键环境完全不匹配，适宜度归零
+        suitability = np.where(
+            (temp_match < 0.05) | (habitat_match < 0.01),
+            0.0,
+            base_score
+        )
         
         # 排除指定地块
         if exclude_tiles:
@@ -253,16 +302,17 @@ class DispersalEngine:
         self,
         origin_tiles: list[int],
         max_distance: int = 15,
-        is_aquatic: bool = False
+        connectivity_mode: str = 'air'  # 'land', 'water', 'air'
     ) -> np.ndarray:
         """计算从原点地块到所有地块的距离权重
         
         【大浪淘沙v3】添加水域物种距离优惠
+        【修复v11】添加连通性检查
         
         Args:
             origin_tiles: 起点地块ID列表
             max_distance: 最大考虑距离
-            is_aquatic: 是否为水域物种（享受距离优惠）
+            connectivity_mode: 连通性模式 ('land', 'water', 'air')
             
         Returns:
             (n_tiles,) 距离权重向量，近=1，远=0
@@ -276,10 +326,12 @@ class DispersalEngine:
         if not origin_tiles:
             return np.ones(n_tiles)
         
+        origin_indices = []
         origin_coords = []
         for tid in origin_tiles:
             if tid in self._tile_map:
                 idx = self._tile_map[tid]
+                origin_indices.append(idx)
                 origin_coords.append(self._tile_coords[idx])
         
         if not origin_coords:
@@ -292,19 +344,84 @@ class DispersalEngine:
         
         # 【大浪淘沙v3】水域物种距离成本打折
         effective_max_distance = max_distance
-        if is_aquatic:
+        if connectivity_mode == 'water':
             # 水域物种可以更远距离扩散
             effective_max_distance = int(max_distance / self.AQUATIC_DISTANCE_FACTOR)
         
         # 转换为权重（近=1，远=0）
         weights = np.maximum(0.0, 1.0 - distances / effective_max_distance)
         
-        # 【大浪淘沙v3】超出范围的地块也有概率被选中（远距离扩散）
-        # 水域物种远跳概率更高
+        # === 连通性检查 ===
+        # 只有同一个连通区域的地块才可达（除非是飞行/空气传播）
+        if connectivity_mode == 'land' and self._tile_land_labels is not None:
+            # 获取起点的陆地连通ID集合 (忽略0，0通常是背景/无效)
+            origin_labels = set()
+            for idx in origin_indices:
+                lbl = self._tile_land_labels[idx]
+                if lbl > 0:
+                    origin_labels.add(lbl)
+            
+            if origin_labels:
+                # 目标必须在相同连通区域
+                reachable_mask = np.isin(self._tile_land_labels, list(origin_labels))
+                weights *= reachable_mask
+            else:
+                # 起点都在海里（错误情况），可能无法扩散到陆地
+                pass
+                
+        elif connectivity_mode == 'water' and self._tile_water_labels is not None:
+            origin_labels = set()
+            for idx in origin_indices:
+                lbl = self._tile_water_labels[idx]
+                if lbl > 0:
+                    origin_labels.add(lbl)
+            
+            if origin_labels:
+                reachable_mask = np.isin(self._tile_water_labels, list(origin_labels))
+                weights *= reachable_mask
+
+        # 【大浪淘沙v3】超出范围的地块也有概率被选中（远距离跳跃/漂流）
+        # 注意：跳跃仍然受限于连通性吗？
+        # 解释：跳跃代表偶发事件（如漂流木），通常可以跨越障碍。
+        # 因此我们将 long_jump 加在 connectivity mask 之后？
+        # 不，漂流木可以跨海，所以 long_jump 应该绕过连通性检查。
+        # 但为了严谨，陆生生物不能轻易跨海。
+        # 让我们设定：连通性检查是硬约束，但 long_jump 是特例。
+        
         long_jump = self.LONG_JUMP_PROB
-        if is_aquatic:
+        if connectivity_mode == 'water':
             long_jump += self.AQUATIC_JUMP_BONUS
-        weights = np.maximum(weights, long_jump)
+        
+        # 只有当 connectivity_mode 为 air 时，或者发生了 rare event，才能跨越
+        # 但在此函数中很难模拟 rare event per tile。
+        # 妥协：保留 long_jump 但仅限于距离，不突破连通性？
+        # 不，这会导致岛屿生物永远无法出去。
+        # 方案：给 long_jump 一个极低的概率突破连通性 (0.01)
+        
+        # 基础权重（受连通性限制）
+        base_weights = weights
+        
+        # 跳跃权重（不受连通性限制，但值很低）
+        jump_weights = np.full(n_tiles, long_jump * 0.1) # 降低跳跃权重
+        
+        # 最终权重取最大值？不，这样连通性就失效了（因为 0 vs 0.01）
+        # 正确做法：大部分情况下受连通性限制。
+        # 只有在 compute_distance_matrix 之外的逻辑处理跳跃？
+        # 让我们保持简单：连通性是绝对的，除非是飞行生物。
+        # 漂流事件应该由特殊事件系统处理，而不是常规扩散。
+        
+        # 恢复 long_jump 逻辑，但受限于 masked weights
+        # 如果被 mask 为 0，则保持为 0
+        # weights = np.maximum(weights, long_jump) # 这会破坏mask
+        
+        # 正确逻辑：先加 long_jump，再乘 mask
+        # weights = np.maximum(0.0, 1.0 - distances / effective_max_distance)
+        # weights = np.maximum(weights, long_jump)
+        # weights *= mask
+        
+        # 但这样就无法跨海了。
+        # 用户抱怨的是"很容易跨越很大距离"，所以我们应该严格限制。
+        # 想要跨海，必须进化出飞行或游泳。
         
         return weights
     
@@ -371,10 +488,32 @@ class DispersalEngine:
             exclude_tiles=set(current_tiles)
         )
         
+        # 确定连通性模式
+        connectivity_mode = 'land'  # 默认陆地
+        
+        habitat_type = (getattr(species, 'habitat_type', '') or 'terrestrial').lower()
+        organs = getattr(species, 'organs', {})
+        locomotion = organs.get('locomotion', {})
+        loc_type = locomotion.get('type', '')
+        
+        if loc_type in ('wings', 'flight') or habitat_type == 'aerial':
+            connectivity_mode = 'air'  # 飞行生物不受地形阻隔
+        elif habitat_type in ('marine', 'deep_sea', 'freshwater', 'hydrothermal'):
+            connectivity_mode = 'water' # 水生生物受陆地阻隔
+        elif habitat_type in ('amphibious', 'coastal'):
+             # 两栖/海岸生物通常沿海岸线移动，视为陆地连通但允许一定的越水能力
+             # 这里简化为 'land'，因为 compute_distance_matrix 会检查陆地连通性
+             # 如果想让它们跨海，需要 loc_type='swimming'
+             if loc_type in ('fins', 'swimming'):
+                 connectivity_mode = 'water'
+             else:
+                 connectivity_mode = 'land'
+        
         # 计算距离权重
         distance_weights = self.compute_distance_matrix(
             current_tiles,
-            max_distance=migration_range
+            max_distance=migration_range,
+            connectivity_mode=connectivity_mode
         )
         
         # 【新增】尝试使用embedding获取相似物种的分布提示
@@ -607,6 +746,52 @@ class DispersalEngine:
         
         return max(2, min(20, base_range))  # 限制在2-20范围
     
+    def check_isolation_status(
+        self,
+        species: 'Species',
+        current_tiles: list[int]
+    ) -> dict[str, any]:
+        """检查物种的地理隔离状态
+        
+        返回:
+            {
+                "is_isolated": bool,
+                "isolation_regions": int, # 占据的连通区域数量
+                "isolation_score": float  # 隔离程度 0-1
+            }
+        """
+        if not current_tiles:
+            return {"is_isolated": False, "isolation_regions": 0, "isolation_score": 0.0}
+            
+        # 获取当前占据地块的连通性标签
+        current_indices = [self._tile_map[tid] for tid in current_tiles if tid in self._tile_map]
+        if not current_indices:
+            return {"is_isolated": False, "isolation_regions": 0, "isolation_score": 0.0}
+            
+        # 根据物种类型选择连通性地图
+        habitat_type = (getattr(species, 'habitat_type', '') or 'terrestrial').lower()
+        labels = self._tile_land_labels if 'marine' not in habitat_type and 'sea' not in habitat_type else self._tile_water_labels
+        
+        if labels is None:
+            return {"is_isolated": False, "isolation_regions": 1, "isolation_score": 0.0}
+            
+        occupied_labels = set()
+        for idx in current_indices:
+            lbl = labels[idx]
+            if lbl > 0: # 0是背景
+                occupied_labels.add(lbl)
+                
+        num_regions = len(occupied_labels)
+        
+        # 隔离判断：如果占据了超过1个不连通的区域
+        is_isolated = num_regions > 1
+        
+        return {
+            "is_isolated": is_isolated,
+            "isolation_regions": num_regions,
+            "isolation_score": 1.0 if num_regions > 1 else 0.0
+        }
+
     def clear_caches(self) -> None:
         """清空所有缓存"""
         self._tile_matrix = None

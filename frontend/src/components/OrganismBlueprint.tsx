@@ -6,6 +6,7 @@ interface Props {
 }
 
 const organIcons: Record<string, string> = {
+  // 动物器官
   metabolic: "⚡",
   locomotion: "🦶",
   sensory: "👁️",
@@ -16,9 +17,17 @@ const organIcons: Record<string, string> = {
   circulatory: "❤️",
   reproductive: "🥚",
   excretory: "🚽",
+  // 植物器官
+  photosynthetic: "🌿",
+  root_system: "🌱",
+  stem: "🌾",
+  protection: "🛡️",
+  vascular: "🔗",
+  storage: "📦",
 };
 
 const organLabels: Record<string, string> = {
+  // 动物器官
   metabolic: "代谢系统",
   locomotion: "运动系统",
   sensory: "感官系统",
@@ -29,12 +38,32 @@ const organLabels: Record<string, string> = {
   circulatory: "循环系统",
   reproductive: "繁殖系统",
   excretory: "排泄系统",
+  // 植物器官
+  photosynthetic: "光合器官",
+  root_system: "根系",
+  stem: "茎",
+  protection: "保护结构",
+  vascular: "维管系统",
+  storage: "储存器官",
 };
 
+// 动物器官类别
+const animalOrganKeys = ["metabolic", "locomotion", "sensory", "digestive", "defense", "respiratory", "nervous", "circulatory", "reproductive", "excretory"];
+// 植物器官类别
+const plantOrganKeys = ["photosynthetic", "root_system", "stem", "protection", "vascular", "storage", "reproductive"];
+
 export function OrganismBlueprint({ species }: Props) {
-  // 整理器官数据
+  // 整理器官数据（过滤内部字段）
   const organs = species.organs || {};
-  const organKeys = Object.keys(organs);
+  const filteredOrgans = Object.fromEntries(
+    Object.entries(organs).filter(([k]) => !k.startsWith("_"))
+  );
+
+  // 判断是否为植物（生产者或营养级=1）
+  const isPlant = species.ecological_role === "producer" || (species.trophic_level && species.trophic_level <= 1.0);
+  
+  // 选择对应的器官类别
+  const relevantOrganKeys = isPlant ? plantOrganKeys : animalOrganKeys;
 
   // 整理能力标签
   const capabilities = species.capabilities || [];
@@ -87,10 +116,11 @@ export function OrganismBlueprint({ species }: Props) {
 
       {/* 中部：解剖结构 (Organ Systems) */}
       <div className="blueprint-section">
-        <h4 className="section-title">解剖结构 (Anatomy)</h4>
+        <h4 className="section-title">解剖结构 (Anatomy) {isPlant ? "🌿" : "🦴"}</h4>
         <div className="organs-grid-visual">
-          {Object.entries(organLabels).map(([key, label]) => {
-            const organ = organs[key];
+          {relevantOrganKeys.map((key) => {
+            const organ = filteredOrgans[key];
+            const label = organLabels[key] || key;
             const isActive = organ?.is_active !== false;
             
             return (

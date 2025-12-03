@@ -915,21 +915,48 @@ class TileBasedMortalityEngine:
         """构建地块环境特征矩阵
         
         特征包括：
-        - 温度 (0)
-        - 湿度 (1)
-        - 资源 (2)
-        - 海拔 (3)
-        - 盐度 (4)
+        - 0: 温度 (Temperature)
+        - 1: 湿度 (Humidity)
+        - 2: 资源 (Resources)
+        - 3: 海拔 (Elevation)
+        - 4: 盐度 (Salinity)
+        - 5: 湿球温度因子 (Wet Bulb Factor) - 协同压力
+        - 6: 紫外线强度 (UV Radiation) - 协同压力
+        - 7: 阴冷指数 (Cold & Humid) - 协同压力
         """
         n_tiles = len(self._tiles)
-        self._tile_env_matrix = np.zeros((n_tiles, 5), dtype=np.float64)
+        self._tile_env_matrix = np.zeros((n_tiles, 8), dtype=np.float64)
         
         for idx, tile in enumerate(self._tiles):
-            self._tile_env_matrix[idx, 0] = tile.temperature
-            self._tile_env_matrix[idx, 1] = tile.humidity
+            temp = tile.temperature
+            humid = tile.humidity
+            elev = tile.elevation
+            
+            self._tile_env_matrix[idx, 0] = temp
+            self._tile_env_matrix[idx, 1] = humid
             self._tile_env_matrix[idx, 2] = tile.resources
-            self._tile_env_matrix[idx, 3] = tile.elevation
+            self._tile_env_matrix[idx, 3] = elev
             self._tile_env_matrix[idx, 4] = getattr(tile, 'salinity', 35.0)
+            
+            # 【新增】协同压力计算
+            # 1. 湿球温度因子 (高温高湿)
+            # 简单启发式：当温度>20度时，湿度每增加，压力指数增长
+            heat_stress = 0.0
+            if temp > 20:
+                heat_stress = (temp - 20) * (humid / 100.0) * 0.5
+            self._tile_env_matrix[idx, 5] = heat_stress
+            
+            # 2. 紫外线强度 (高海拔)
+            # 每上升1000米，UV显著增加
+            uv_index = max(0.0, elev / 1000.0)
+            self._tile_env_matrix[idx, 6] = uv_index
+            
+            # 3. 阴冷指数 (低温高湿)
+            # "湿冷"效应：当温度<10度且高湿时，体感温度更低
+            cold_stress = 0.0
+            if temp < 10:
+                cold_stress = (10 - temp) * (humid / 100.0) * 0.5
+            self._tile_env_matrix[idx, 7] = cold_stress
     
     def evaluate(
         self,
@@ -1307,14 +1334,23 @@ class TileBasedMortalityEngine:
         cold_mask = cold_deviation > 0
         heat_mask = heat_deviation > 0
         
+        # 【新增】协同压力叠加
+        # 1. 湿热协同 (Wet Bulb Synergy): 高温高湿会显著增加散热难度，放大高温压力
+        wet_bulb_factor = self._tile_env_matrix[:, 5][:, np.newaxis] # (n_tiles, 1)
+        heat_synergy = np.where(heat_mask, wet_bulb_factor * 0.15, 0.0)
+        
+        # 2. 湿冷协同 (Cold & Humid Synergy): 湿冷会加速热量流失，放大低温压力
+        cold_humid_factor = self._tile_env_matrix[:, 7][:, np.newaxis] # (n_tiles, 1)
+        cold_synergy = np.where(cold_mask, cold_humid_factor * 0.15, 0.0)
+        
         temp_pressure = np.where(
             cold_mask,
-            (cold_base_pressure + extreme_cold_penalty) * cold_resistance_factor,
+            (cold_base_pressure + extreme_cold_penalty + cold_synergy) * cold_resistance_factor,
             temp_pressure
         )
         temp_pressure = np.where(
             heat_mask,
-            (heat_base_pressure + extreme_heat_penalty) * heat_resistance_factor,
+            (heat_base_pressure + extreme_heat_penalty + heat_synergy) * heat_resistance_factor,
             temp_pressure
         )
         
@@ -1397,6 +1433,60 @@ class TileBasedMortalityEngine:
             special_pressure += mortality_spike * 0.03  # 直接增加基础死亡率
         
         # ========== 基础环境敏感度 ==========
+            
+        # 【协同压力 v1.0】
+        # 引入环境压力的交互作用（乘法放大效应）
+        
+        # 【修复v2】确保温度和湿度是真正的一维数组 (n_tiles,)
+        # 避免之前的广播操作意外改变形状
+        temps_1d = np.asarray(adjusted_temps).ravel()  # 强制一维 (n_tiles,)
+        humidity_1d = np.asarray(tile_humidity).ravel()  # 强制一维 (n_tiles,)
+        
+        # 1. 热湿压力 (Heat Stress)
+        # 高温 + 高湿 = 湿球温度压力 (难以散热)
+        # 当温度>25且湿度>0.7时，产生协同压力
+        heat_cond = (temps_1d > 25.0) & (humidity_1d > 0.7)  # (n_tiles,)
+        heat_index_base = np.where(heat_cond, 0.15, 0.0)  # (n_tiles,)
+        # 广播到 (n_tiles, n_species) 并应用耐热性
+        heat_index_pressure = heat_index_base[:, np.newaxis] * (1.0 - heat_res[np.newaxis, :])
+        
+        # 2. 高原缺氧压力 (Hypoxia)
+        # 高海拔(>2000m) -> 氧气稀薄 -> 大型动物代谢压力
+        tile_elevation = self._tile_env_matrix[:, 2] * 5000.0 # 还原海拔
+        hypoxia_cond = tile_elevation > 2000.0  # (n_tiles,)
+        # 体型越大压力越大
+        body_size = species_arrays['body_size']
+        # 基础压力 (n_tiles,) 广播到 (n_tiles, n_species)
+        hypoxia_base = np.where(hypoxia_cond, 1.0, 0.0)  # (n_tiles,)
+        hypoxia_pressure = hypoxia_base[:, np.newaxis] * body_size[np.newaxis, :] * 0.2
+        # 适应性：如果有"高山适应"特性(暂时用耐寒性代理或作为隐含属性)
+        # 这里假设耐寒性高的一般适应高山
+        hypoxia_pressure *= (1.0 - cold_res[np.newaxis, :] * 0.5)
+        
+        # 3. 紫外辐射协同 (UV Synergy)
+        # 高海拔 + 缺乏覆盖(低湿度/荒漠) = 高UV
+        uv_risk_cond = (tile_elevation > 1000.0) & (humidity_1d < 0.3)  # (n_tiles,)
+        # 软体动物/两栖类受害严重 (假设耐旱性差的皮肤保护差)
+        soft_skin_vulnerability = (1.0 - drought_res)  # (n_species,)
+        uv_base = np.where(uv_risk_cond, 0.1, 0.0)  # (n_tiles,)
+        uv_synergy_pressure = uv_base[:, np.newaxis] * soft_skin_vulnerability[np.newaxis, :]
+        
+        # 4. 寒冷潮湿协同 (Cold Damp)
+        # 低温(<5度) + 高湿(>0.8) = 失温风险 (比干冷更致命)
+        cold_damp_cond = (temps_1d < 5.0) & (humidity_1d > 0.8)  # (n_tiles,)
+        cold_damp_base = np.where(cold_damp_cond, 0.1, 0.0)  # (n_tiles,)
+        cold_damp_pressure = cold_damp_base[:, np.newaxis] * (1.0 - cold_res[np.newaxis, :])
+
+        synergistic_pressure = (
+            heat_index_pressure + 
+            hypoxia_pressure + 
+            uv_synergy_pressure +
+            cold_damp_pressure
+        )
+        
+        if np.any(synergistic_pressure > 0.05):
+            logger.debug(f"[协同压力] 检测到环境交互压力，最大值={np.max(synergistic_pressure):.2f}")
+
         # 计算剩余未特化处理的压力的综合影响
         handled_modifiers = {
             'temperature', 'drought', 'flood', 'disease', 'wildfire', 
@@ -1472,7 +1562,8 @@ class TileBasedMortalityEngine:
                 drought_pressure * 0.15 +   # 水分次之
                 flood_pressure * 0.10 +     # 洪水影响较小
                 special_pressure * 0.28 +   # 特殊事件影响显著
-                global_pressure * 0.17      # 其他综合影响
+                global_pressure * 0.17 +    # 其他综合影响
+                synergistic_pressure * 0.25 # 【新增】协同压力权重
             )
         
         # 【新增】应用正面压力减免
@@ -1647,6 +1738,11 @@ class TileBasedMortalityEngine:
         # 修改为1.0，让稀缺压力更温和
         SCARCITY_MAX = 1.0  # 从2.0降到1.0
         
+        # 【严重饥饿判定】
+        # 如果有种群但几乎没有猎物，强制设置为极高死亡率（0.9）
+        # 这是一个硬约束，防止消费者在无食物地块苟活
+        SEVERE_STARVATION_PENALTY = 0.9
+        
         # === T1 受 T2 采食 ===
         req_t1 = np.where(t2 > 0, t2 / EFFICIENCY, 0)
         grazing_ratio = np.divide(req_t1, safe_t1, out=np.zeros_like(req_t1), where=t1 > MIN_BIOMASS)
@@ -1654,6 +1750,8 @@ class TileBasedMortalityEngine:
         scarcity_t2 = np.where(t1 > MIN_BIOMASS, 
                                np.clip(grazing_ratio - 1.0, 0, SCARCITY_MAX),
                                np.where(t2 > 0, SCARCITY_MAX, 0.0))
+        # T2 严重饥饿检查: T2存在但T1几乎为0
+        starvation_mask_t2 = (t2 > MIN_BIOMASS) & (t1 <= MIN_BIOMASS)
         
         # === T2 受 T3 捕食 ===
         req_t2 = np.where(t3 > 0, t3 / EFFICIENCY, 0)
@@ -1662,6 +1760,8 @@ class TileBasedMortalityEngine:
         scarcity_t3 = np.where(t2 > MIN_BIOMASS,
                                np.clip(ratio_t2 - 1.0, 0, SCARCITY_MAX),
                                np.where(t3 > 0, SCARCITY_MAX, 0.0))
+        # T3 严重饥饿检查
+        starvation_mask_t3 = (t3 > MIN_BIOMASS) & (t2 <= MIN_BIOMASS)
         
         # === T3 受 T4 捕食 ===
         req_t3 = np.where(t4 > 0, t4 / EFFICIENCY, 0)
@@ -1670,6 +1770,8 @@ class TileBasedMortalityEngine:
         scarcity_t4 = np.where(t3 > MIN_BIOMASS,
                                np.clip(ratio_t3 - 1.0, 0, SCARCITY_MAX),
                                np.where(t4 > 0, SCARCITY_MAX, 0.0))
+        # T4 严重饥饿检查
+        starvation_mask_t4 = (t4 > MIN_BIOMASS) & (t3 <= MIN_BIOMASS)
         
         # === T4 受 T5 捕食 ===
         req_t4 = np.where(t5 > 0, t5 / EFFICIENCY, 0)
@@ -1678,6 +1780,8 @@ class TileBasedMortalityEngine:
         scarcity_t5 = np.where(t4 > MIN_BIOMASS,
                                np.clip(ratio_t4 - 1.0, 0, SCARCITY_MAX),
                                np.where(t5 > 0, SCARCITY_MAX, 0.0))
+        # T5 严重饥饿检查
+        starvation_mask_t5 = (t5 > MIN_BIOMASS) & (t4 <= MIN_BIOMASS)
         
         # 【改进v5】使用注入的生态配置
         # 消费者猎物稀缺时，死亡率显著上升
@@ -1695,20 +1799,30 @@ class TileBasedMortalityEngine:
                 # T2消费者：受T3捕食 + 猎物(T1)稀缺惩罚
                 pred_component = pred_t3
                 scarcity_component = scarcity_t2 * SCARCITY_WEIGHT
-                trophic_pressure[:, sp_idx] = pred_component + scarcity_component
+                # 应用严重饥饿惩罚
+                final_pressure = pred_component + scarcity_component
+                final_pressure = np.where(starvation_mask_t2, SEVERE_STARVATION_PENALTY, final_pressure)
+                trophic_pressure[:, sp_idx] = final_pressure
             elif t_level == 3:
-                # T3消费者：受T4捕食 + 猎物(T2)稀缺惩罚
+                # T3消费者
                 pred_component = pred_t4
                 scarcity_component = scarcity_t3 * SCARCITY_WEIGHT
-                trophic_pressure[:, sp_idx] = pred_component + scarcity_component
+                final_pressure = pred_component + scarcity_component
+                final_pressure = np.where(starvation_mask_t3, SEVERE_STARVATION_PENALTY, final_pressure)
+                trophic_pressure[:, sp_idx] = final_pressure
             elif t_level == 4:
-                # T4消费者：受T5捕食 + 猎物(T3)稀缺惩罚
+                # T4消费者
                 pred_component = pred_t5
                 scarcity_component = scarcity_t4 * SCARCITY_WEIGHT
-                trophic_pressure[:, sp_idx] = pred_component + scarcity_component
+                final_pressure = pred_component + scarcity_component
+                final_pressure = np.where(starvation_mask_t4, SEVERE_STARVATION_PENALTY, final_pressure)
+                trophic_pressure[:, sp_idx] = final_pressure
             elif t_level >= 5:
-                # 顶级捕食者：只有猎物(T4)稀缺惩罚
-                trophic_pressure[:, sp_idx] = scarcity_t5 * SCARCITY_WEIGHT
+                # 顶级捕食者
+                scarcity_component = scarcity_t5 * SCARCITY_WEIGHT
+                final_pressure = scarcity_component
+                final_pressure = np.where(starvation_mask_t5, SEVERE_STARVATION_PENALTY, final_pressure)
+                trophic_pressure[:, sp_idx] = final_pressure
         
         # 【关键修复】使用batch_population_matrix而不是self._population_matrix
         trophic_pressure = np.where(batch_population_matrix > 0, trophic_pressure, 0)
@@ -1835,12 +1949,27 @@ class TileBasedMortalityEngine:
             demand_ratio = np.nan_to_num(demand_ratio, 0.0)
         
         # 资源压力 = 短缺比例 × min(需求占比 × 2, 1.0)
-        resource_pressure = shortage_ratio[:, np.newaxis] * np.minimum(demand_ratio * 2.0, 1.0)
+        # shortage_ratio 是 (demand - supply) / demand，范围 [0, 1]
+        base_pressure = shortage_ratio[:, np.newaxis] * np.minimum(demand_ratio * 2.0, 1.0)
+        
+        # 【严重超载判定】
+        # 如果短缺比例非常高（例如 > 0.8），说明资源严重不足，死亡率应接近1.0
+        # 此时应该突破 pressure_cap
+        severe_shortage_mask = shortage_ratio[:, np.newaxis] > 0.8
+        
+        resource_pressure = np.where(
+            severe_shortage_mask, 
+            base_pressure * 1.5,  # 放大压力
+            base_pressure
+        )
         
         # 【关键修复】使用batch_population_matrix
         resource_pressure = np.where(batch_population_matrix > 0, resource_pressure, 0.0)
         
-        return np.clip(resource_pressure, 0.0, pressure_cap)
+        # 应用上限，但在严重短缺时允许更高
+        final_cap = np.where(severe_shortage_mask, 1.0, pressure_cap)
+        
+        return np.clip(resource_pressure, 0.0, final_cap)
     
     def _compute_predation_network_pressure(
         self,

@@ -654,11 +654,21 @@ class ModelRouter:
             yield self._stream_error_event(capability, "Streaming not supported for local provider")
             return
 
-        req["body"]["stream"] = True
+        provider_type = req.get("provider_type", PROVIDER_TYPE_OPENAI)
+        
+        # 【修复】针对不同服务商调整流式参数
+        if provider_type == PROVIDER_TYPE_GOOGLE:
+            # Gemini: 切换 endpoint，不需要 stream=True 参数
+            req["url"] = req["url"].replace(":generateContent", ":streamGenerateContent")
+            logger.info(f"[ModelRouter] Gemini Stream URL: {req['url'].split('?')[0]}")
+        else:
+            # OpenAI/Anthropic: 需要 stream=True 参数
+            req["body"]["stream"] = True
+
         yield self._stream_status_event(capability, "connecting")
 
         async with self._semaphore:
-            logger.info(f"[ModelRouter] Async stream {capability} start")
+            logger.info(f"[ModelRouter] Async stream {capability} start (type={provider_type})")
             timeout = req.get("timeout") or self.timeout
             headers = {**req["headers"], "Connection": "close"}
             
@@ -671,30 +681,175 @@ class ModelRouter:
                         json=req["body"],
                         headers=headers,
                     ) as response:
-                        response.raise_for_status()
+                        try:
+                            response.raise_for_status()
+                        except httpx.HTTPStatusError as e:
+                            # 尝试读取错误响应体
+                            try:
+                                error_body = await response.aread()
+                                logger.error(f"[ModelRouter] Stream HTTP error body: {error_body.decode('utf-8', errors='ignore')[:500]}")
+                            except:
+                                pass
+                            raise
+                            
                         yield self._stream_status_event(capability, "connected")
                         first_chunk = True
                         
-                        # 逐行读取，带超时保护
-                        # 使用较长的超时（120秒），让上层的智能空闲超时来控制
-                        iterator = response.aiter_lines()
-                        chunk_read_timeout = 120.0  # 单个 chunk 读取超时
-                        while True:
-                            try:
-                                line = await asyncio.wait_for(iterator.__anext__(), timeout=chunk_read_timeout)
-                            except StopAsyncIteration:
-                                break
-                            except asyncio.TimeoutError:
-                                logger.error(f"[ModelRouter] Stream read timeout ({chunk_read_timeout}s) for {capability}")
-                                yield self._stream_error_event(capability, f"Read timeout ({chunk_read_timeout}s)")
-                                break
+                        # Gemini 解析逻辑
+                        if provider_type == PROVIDER_TYPE_GOOGLE:
+                            buffer = ""
+                            async for line in response.aiter_lines():
+                                if not line:
+                                    continue
+                                buffer += line
                                 
-                            if line.startswith("data: "):
-                                data = line[6:]
-                                if data.strip() == "[DONE]":
+                                # 尝试处理缓冲区
+                                while True:
+                                    buffer = buffer.strip()
+                                    # 移除根级数组标记
+                                    if buffer.startswith("["): buffer = buffer[1:].strip()
+                                    if buffer.startswith(","): buffer = buffer[1:].strip()
+                                    
+                                    if not buffer:
+                                        break
+                                        
+                                    # 使用正则分割对象 (查找 `},` 模式)
+                                    # 模式：`}` 后跟可选空白，然后是逗号，然后是可选空白，然后是 `{`
+                                    # 使用 lookbehind/lookahead 保留大括号
+                                    import re
+                                    parts = re.split(r'(?<=\})\s*,\s*(?=\{)', buffer)
+                                    
+                                    processed_count = 0
+                                    
+                                    for i, part in enumerate(parts):
+                                        is_last = (i == len(parts) - 1)
+                                        candidate = part.strip()
+                                        
+                                        # 如果是最后一部分，尝试移除末尾的 `]` (根数组结束符)
+                                        if is_last and candidate.endswith("]"):
+                                            candidate = candidate[:-1].strip()
+                                            
+                                        try:
+                                            chunk = json.loads(candidate)
+                                            
+                                            # --- 处理单个 Chunk ---
+                                            if "error" in chunk:
+                                                yield self._stream_error_event(capability, str(chunk["error"]))
+                                                # 遇到错误通常意味着流结束或中断
+                                                return
+                                            
+                                            candidates_list = chunk.get("candidates", [])
+                                            for candidate_obj in candidates_list:
+                                                content_obj = candidate_obj.get("content", {})
+                                                content_parts = content_obj.get("parts", [])
+                                                for p in content_parts:
+                                                    text = p.get("text", "")
+                                                    if text:
+                                                        if first_chunk:
+                                                            yield self._stream_status_event(capability, "receiving")
+                                                            first_chunk = False
+                                                        yield text
+                                            
+                                            if chunk.get("finishReason") == "STOP" or chunk.get("finish_reason") == "STOP":
+                                                pass # 正常结束
+                                            # ---------------------
+                                            
+                                            processed_count += 1
+                                            
+                                        except json.JSONDecodeError:
+                                            # 解析失败
+                                            if is_last:
+                                                # 最后一部分如果不完整，保留在buffer中等待更多数据
+                                                # 注意：这里我们需要保留原始的 part (包含可能的末尾 `]`)
+                                                # 因为如果它真的是不完整的，下次拼接后可能才是完整 JSON
+                                                buffer = part
+                                            else:
+                                                logger.warning(f"[ModelRouter] Gemini 中间分块解析失败: {candidate[:50]}...")
+                                                # 中间部分解析失败通常是致命的，但我们尝试继续
+                                    
+                                    # 缓冲区管理
+                                    if processed_count == len(parts):
+                                        buffer = "" # 全部成功处理
+                                        break # 退出 while，读取下一行
+                                    elif processed_count > 0:
+                                        # 处理了部分，最后一部分保留在 buffer 中
+                                        # while 循环会再次尝试（但通常应该 break 等待更多数据）
+                                        break 
+                                    else:
+                                        # 一个都没处理成功（通常是因为只有一个不完整的部分）
+                                        break
+                                        
+                        # Anthropic 解析逻辑
+                        elif provider_type == PROVIDER_TYPE_ANTHROPIC:
+                            async for line in response.aiter_lines():
+                                if not line.startswith("data:"):
+                                    continue
+                                    
+                                # 移除可能的空格
+                                data = line[5:].strip()
+                                if not data or data == "[DONE]":
                                     break
+                                    
+                                try:
+                                    event = json.loads(data)
+                                    
+                                    # 处理错误消息
+                                    if event.get("type") == "error":
+                                        error_msg = event.get("error", {}).get("message", "Unknown error")
+                                        yield self._stream_error_event(capability, error_msg)
+                                        break
+                                        
+                                    if event.get("type") == "content_block_delta":
+                                        delta = event.get("delta", {})
+                                        text = delta.get("text", "")
+                                        if text:
+                                            if first_chunk:
+                                                yield self._stream_status_event(capability, "receiving")
+                                                first_chunk = False
+                                            yield text
+                                except json.JSONDecodeError:
+                                    continue
+
+                        # OpenAI 解析逻辑 (默认)
+                        else:
+                            # 逐行读取，带超时保护
+                            iterator = response.aiter_lines()
+                            chunk_read_timeout = 120.0
+                            while True:
+                                try:
+                                    line = await asyncio.wait_for(iterator.__anext__(), timeout=chunk_read_timeout)
+                                except StopAsyncIteration:
+                                    break
+                                except asyncio.TimeoutError:
+                                    logger.error(f"[ModelRouter] Stream read timeout ({chunk_read_timeout}s) for {capability}")
+                                    yield self._stream_error_event(capability, f"Read timeout ({chunk_read_timeout}s)")
+                                    break
+                                    
+                                # 宽松检查 data: 前缀（有些兼容API可能没有空格）
+                                if not line.startswith("data:"):
+                                    continue
+                                    
+                                data = line[5:].strip()
+                                if not data or data == "[DONE]":
+                                    break
+                                    
                                 try:
                                     chunk = json.loads(data)
+                                    
+                                    # 处理错误消息 (有些兼容 OpenAI 的 API 会在这里返回 error)
+                                    if "error" in chunk:
+                                        # 如果 error 是字符串
+                                        if isinstance(chunk["error"], str):
+                                            error_msg = chunk["error"]
+                                        # 如果 error 是字典
+                                        elif isinstance(chunk["error"], dict):
+                                            error_msg = chunk["error"].get("message", str(chunk["error"]))
+                                        else:
+                                            error_msg = str(chunk["error"])
+                                            
+                                        yield self._stream_error_event(capability, error_msg)
+                                        break
+                                        
                                     delta = chunk.get("choices", [{}])[0].get("delta", {})
                                     content = delta.get("content", "")
                                     if content:
@@ -704,6 +859,8 @@ class ModelRouter:
                                         yield content
                                 except json.JSONDecodeError:
                                     continue
+
+                                        
                         yield self._stream_status_event(capability, "completed")
             except Exception as e:
                 logger.error(f"[ModelRouter] Async stream error {capability}: {e}")
@@ -1250,36 +1407,76 @@ class ModelRouter:
                             text_chunk_count = 0
                             total_text_len = 0
                         
+                        buffer = ""
                         async for line in response.aiter_lines():
                             if not line:
                                 continue
-                            try:
-                                chunk = json.loads(line)
-                            except json.JSONDecodeError:
-                                logger.debug(f"[astream_capability] Gemini chunk解析失败: {line[:120]}")
-                                continue
+                            buffer += line
                             
-                            if "error" in chunk:
-                                logger.error(f"[astream_capability] Gemini 错误: {chunk['error']}")
-                                yield self._stream_error_event(capability, str(chunk["error"]))
-                                break
-                            
-                            candidates = chunk.get("candidates", [])
-                            for candidate in candidates:
-                                content = candidate.get("content", {})
-                                parts = content.get("parts", [])
-                                for part in parts:
-                                    text = part.get("text", "")
-                                    if text:
-                                        text_chunk_count += 1
-                                        total_text_len += len(text)
-                                        if first_chunk:
-                                            yield self._stream_status_event(capability, "receiving")
-                                            first_chunk = False
-                                        yield text
-                            
-                            if chunk.get("finishReason") == "STOP" or chunk.get("finish_reason") == "STOP":
-                                break
+                            # 尝试处理缓冲区
+                            while True:
+                                buffer = buffer.strip()
+                                # 移除根级数组标记
+                                if buffer.startswith("["): buffer = buffer[1:].strip()
+                                if buffer.startswith(","): buffer = buffer[1:].strip()
+                                
+                                if not buffer:
+                                    break
+                                    
+                                # 使用正则分割对象 (查找 `},` 模式)
+                                import re
+                                parts = re.split(r'(?<=\})\s*,\s*(?=\{)', buffer)
+                                
+                                processed_count = 0
+                                
+                                for i, part in enumerate(parts):
+                                    is_last = (i == len(parts) - 1)
+                                    candidate = part.strip()
+                                    
+                                    # 如果是最后一部分，尝试移除末尾的 `]` (根数组结束符)
+                                    if is_last and candidate.endswith("]"):
+                                        candidate = candidate[:-1].strip()
+                                        
+                                    try:
+                                        chunk = json.loads(candidate)
+                                        
+                                        if "error" in chunk:
+                                            logger.error(f"[astream_capability] Gemini 错误: {chunk['error']}")
+                                            yield self._stream_error_event(capability, str(chunk["error"]))
+                                            return
+                                        
+                                        candidates = chunk.get("candidates", [])
+                                        for candidate_obj in candidates:
+                                            content = candidate_obj.get("content", {})
+                                            parts = content.get("parts", [])
+                                            for p in parts:
+                                                text = p.get("text", "")
+                                                if text:
+                                                    text_chunk_count += 1
+                                                    total_text_len += len(text)
+                                                    if first_chunk:
+                                                        yield self._stream_status_event(capability, "receiving")
+                                                        first_chunk = False
+                                                    yield text
+                                        
+                                        if chunk.get("finishReason") == "STOP" or chunk.get("finish_reason") == "STOP":
+                                            pass
+                                            
+                                        processed_count += 1
+                                        
+                                    except json.JSONDecodeError:
+                                        if is_last:
+                                            buffer = part
+                                        else:
+                                            logger.warning(f"[astream_capability] Gemini 中间分块解析失败: {candidate[:50]}...")
+                                
+                                if processed_count == len(parts):
+                                    buffer = ""
+                                    break
+                                elif processed_count > 0:
+                                    break
+                                else:
+                                    break
                         
                         logger.info(f"[astream_capability] Gemini 完成: {text_chunk_count} 文本chunks, {total_text_len} 字符")
                         yield self._stream_status_event(capability, "completed")
@@ -1331,13 +1528,23 @@ class ModelRouter:
                             first_chunk = True
                             
                             async for line in response.aiter_lines():
-                                if not line.startswith("data: "):
+                                if not line.startswith("data:"):
                                     continue
-                                data = line[6:]
-                                if data.strip() == "[DONE]":
+                                    
+                                # 宽松检查 data: 前缀
+                                data = line[5:].strip()
+                                if not data or data == "[DONE]":
                                     break
+                                    
                                 try:
                                     event = json.loads(data)
+                                    
+                                    # 处理错误消息
+                                    if event.get("type") == "error":
+                                        error_msg = event.get("error", {}).get("message", "Unknown error")
+                                        yield self._stream_error_event(capability, error_msg)
+                                        break
+                                        
                                     if event.get("type") == "content_block_delta":
                                         delta = event.get("delta", {})
                                         text = delta.get("text", "")
@@ -1398,21 +1605,36 @@ class ModelRouter:
                                 yield self._stream_error_event(capability, f"Read timeout ({chunk_read_timeout}s)")
                                 break
                             
-                            if line.startswith("data: "):
-                                data = line[6:]
-                                if data.strip() == "[DONE]":
+                            if not line.startswith("data:"):
+                                continue
+                                
+                            data = line[5:].strip()
+                            if not data or data == "[DONE]":
+                                break
+                                
+                            try:
+                                chunk = json.loads(data)
+                                
+                                # 处理错误消息
+                                if "error" in chunk:
+                                    if isinstance(chunk["error"], str):
+                                        error_msg = chunk["error"]
+                                    elif isinstance(chunk["error"], dict):
+                                        error_msg = chunk["error"].get("message", str(chunk["error"]))
+                                    else:
+                                        error_msg = str(chunk["error"])
+                                    yield self._stream_error_event(capability, error_msg)
                                     break
-                                try:
-                                    chunk = json.loads(data)
-                                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                                    content = delta.get("content", "")
-                                    if content:
-                                        if first_chunk:
-                                            yield self._stream_status_event(capability, "receiving")
-                                            first_chunk = False
-                                        yield content
-                                except json.JSONDecodeError:
-                                    continue
+                                
+                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    if first_chunk:
+                                        yield self._stream_status_event(capability, "receiving")
+                                        first_chunk = False
+                                    yield content
+                            except json.JSONDecodeError:
+                                continue
                         yield self._stream_status_event(capability, "completed")
             except Exception as e:
                 logger.error(f"[ModelRouter] Async capability stream error {capability}: {e}")

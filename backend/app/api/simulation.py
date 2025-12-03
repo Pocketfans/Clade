@@ -101,6 +101,10 @@ def _perform_autosave(
     
     Returns:
         是否成功保存
+    
+    【健壮性改进】
+    - 使用 engine.turn_counter 作为权威回合数源
+    - 传入的 turn_index 作为备选，但优先使用引擎状态
     """
     save_name = session.current_save_name
     if not save_name:
@@ -117,10 +121,20 @@ def _perform_autosave(
         return False
     
     try:
+        # 【关键】使用 engine.turn_counter 作为权威回合数，确保一致性
+        engine = container.simulation_engine
+        authoritative_turn = engine.turn_counter
+        
+        # 如果传入的 turn_index 与引擎状态不一致，记录警告
+        if turn_index != authoritative_turn:
+            logger.warning(
+                f"[自动保存] 回合数不一致: 传入={turn_index}, 引擎={authoritative_turn}，使用引擎值"
+            )
+        
         # 执行保存
         autosave_name = f"{save_name}_autosave_{counter // config.autosave_interval}"
-        container.save_manager.save_game(autosave_name, turn_index=turn_index)
-        logger.info(f"[自动保存] 成功保存: {autosave_name}")
+        container.save_manager.save_game(autosave_name, turn_index=authoritative_turn)
+        logger.info(f"[自动保存] 成功保存: {autosave_name}, 回合={authoritative_turn}")
         
         # 清理旧的自动保存
         _cleanup_old_autosaves(save_name, config.autosave_max_slots, container)

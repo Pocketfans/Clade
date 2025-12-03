@@ -1453,6 +1453,9 @@ class SpeciationService:
         - 如果批次全是植物，使用 plant_speciation prompt
         - 否则使用通用 speciation_batch prompt
         
+        【内共生检测】
+        - 并发尝试触发内共生事件（极低概率）
+        
         Args:
             payload: 请求参数
             stream_callback: 流式回调（用于心跳）
@@ -1461,6 +1464,27 @@ class SpeciationService:
         from ...ai.streaming_helper import stream_invoke_with_heartbeat
         import asyncio
         
+        # === 【新增】内共生并发检测 ===
+        endosymbiosis_tasks = []
+        endosymbiosis_indices = []  # 记录对应的 entries 索引
+        
+        if entries:
+            pressure = payload.get("average_pressure", 0.0)
+            pressure_context = payload.get("pressure_summary", "")
+            
+            for i, entry in enumerate(entries):
+                parent = entry["ctx"]["parent"]
+                turn_index = entry["ctx"].get("turn_index", 0)
+                
+                # 并发启动内共生尝试（不阻塞主流程）
+                task = asyncio.create_task(
+                    self._attempt_endosymbiosis_async(
+                        parent, pressure, pressure_context, turn_index
+                    )
+                )
+                endosymbiosis_tasks.append(task)
+                endosymbiosis_indices.append(i)
+
         # 【植物混合模式】检测是否为纯植物批次
         prompt_name = "speciation_batch"  # 默认
         batch_type = "动物"
@@ -1489,9 +1513,11 @@ class SpeciationService:
                 except Exception:
                     pass
         
-        try:
-            batch_size = len(entries) if entries else 0
-            response = await stream_invoke_with_heartbeat(
+        batch_size = len(entries) if entries else 0
+        
+        # 启动 Batch AI Task
+        batch_ai_task = asyncio.create_task(
+            stream_invoke_with_heartbeat(
                 router=self.router,
                 capability=prompt_name,
                 payload=payload,
@@ -1500,18 +1526,48 @@ class SpeciationService:
                 heartbeat_interval=2.0,
                 event_callback=heartbeat_callback if stream_callback else None,
             )
-        except asyncio.TimeoutError:
-            logger.warning("[分化批量] AI请求空闲超时（90秒无输出），将使用规则fallback")
-            return {"_timeout": True, "_use_fallback": True}
-        except Exception as e:
-            logger.error(f"[分化批量] 请求异常: {e}，将使用规则fallback")
-            return {"_error": str(e), "_use_fallback": True}
+        )
         
-        content = response.get("content") if isinstance(response, dict) else {}
-        if not content or not isinstance(content, dict):
-            logger.warning(f"[分化批量] AI返回内容为空或格式错误，将使用规则fallback")
-            return {"_empty": True, "_use_fallback": True}
-        return content
+        # 等待所有任务 (Batch + Endosymbiosis)
+        # 注意：我们允许内共生失败（返回None），也允许Batch失败（异常）
+        all_tasks = [batch_ai_task] + endosymbiosis_tasks
+        results = await asyncio.gather(*all_tasks, return_exceptions=True)
+        
+        batch_result = results[0]
+        endo_results = results[1:]
+        
+        # 处理 Batch 结果
+        final_content = {}
+        if isinstance(batch_result, dict):
+            # 正常的 invoke_with_heartbeat 返回包含 content 的 dict
+            final_content = batch_result.get("content", {}) if "content" in batch_result else batch_result
+        elif isinstance(batch_result, Exception):
+            # Batch 失败处理
+            if isinstance(batch_result, asyncio.TimeoutError):
+                logger.warning("[分化批量] AI请求空闲超时（90秒无输出），将使用规则fallback")
+                final_content = {"_timeout": True, "_use_fallback": True}
+            else:
+                logger.error(f"[分化批量] 请求异常: {batch_result}，将使用规则fallback")
+                final_content = {"_error": str(batch_result), "_use_fallback": True}
+        
+        if not isinstance(final_content, dict):
+            final_content = {}
+
+        # === 注入内共生结果 ===
+        # 将成功的内共生结果暂存到 _endo_overrides 字段
+        # 后续 _parse_batch_results 会优先使用这些结果
+        
+        valid_endo_overrides = {}
+        for idx, res in zip(endosymbiosis_indices, endo_results):
+            if isinstance(res, dict) and res.get("is_endosymbiosis"):
+                res["request_id"] = idx # 确保 ID 匹配
+                valid_endo_overrides[idx] = res
+        
+        if valid_endo_overrides:
+             final_content["_endo_overrides"] = valid_endo_overrides
+             logger.info(f"[内共生] 成功捕获 {len(valid_endo_overrides)} 个内共生事件，准备注入")
+
+        return final_content
     
     def _parse_batch_results(
         self, 
@@ -1520,14 +1576,25 @@ class SpeciationService:
     ) -> list[dict | Exception]:
         """解析批量响应，返回与 entries 对应的结果列表
         
+        【内共生支持】优先使用 _endo_overrides 中的结果
         【重要修复】如果响应包含 _use_fallback 标记，立即为所有entry生成规则fallback结果
         """
         results = []
         
+        # 【新增】提取内共生覆盖结果
+        endo_overrides = {}
+        if isinstance(batch_response, dict):
+             endo_overrides = batch_response.pop("_endo_overrides", {})
+        
         # 【修复】检测是否需要使用fallback（AI超时或错误）
         if isinstance(batch_response, dict) and batch_response.get("_use_fallback"):
             logger.info(f"[分化批量] 检测到fallback标记，为 {len(entries)} 个物种生成规则fallback")
-            for entry in entries:
+            for idx, entry in enumerate(entries):
+                # 【新增】即使是 fallback，如果内共生成功了，也优先使用内共生
+                if idx in endo_overrides:
+                    results.append(endo_overrides[idx])
+                    continue
+                    
                 ctx = entry["ctx"]
                 fallback_result = self._generate_rule_based_fallback(
                     parent=ctx["parent"],
@@ -1544,7 +1611,11 @@ class SpeciationService:
         if not isinstance(batch_response, dict):
             logger.warning(f"[分化批量] 响应不是字典类型: {type(batch_response)}")
             # 【修复】改为生成fallback而不是返回异常
-            for entry in entries:
+            for idx, entry in enumerate(entries):
+                if idx in endo_overrides:
+                    results.append(endo_overrides[idx])
+                    continue
+                    
                 ctx = entry["ctx"]
                 fallback_result = self._generate_rule_based_fallback(
                     parent=ctx["parent"],
@@ -1592,6 +1663,11 @@ class SpeciationService:
         
         # 按顺序匹配结果
         for idx, entry in enumerate(entries):
+            # 【新增】检查是否有内共生覆盖（优先使用）
+            if idx in endo_overrides:
+                results.append(endo_overrides[idx])
+                continue
+
             # 尝试多种方式匹配
             matched_result = result_map.get(idx) or result_map.get(str(idx))
             
@@ -4536,4 +4612,106 @@ class SpeciationService:
         
         return True, valid_evolutions
 
+
+    async def _attempt_endosymbiosis_async(
+        self,
+        host: Species,
+        average_pressure: float,
+        pressure_context: str,
+        turn_index: int
+    ) -> dict | None:
+        """【内共生】尝试触发罕见的内共生事件
+        
+        触发条件（必须全部满足）：
+        1. 宿主是捕食者 (prey_species 不为空)
+        2. 宿主面临高代谢压力 (speciation_pressure > 0.15 或 随机极低概率)
+        3. 随机判定通过 (基础概率 2%)
+        4. 成功找到合适的共生候选者（猎物）
+        """
+        import random
+        
+        # 1. 基础概率检查 (2%)
+        # 如果压力极大，概率提升到 5%
+        base_chance = 0.02
+        if average_pressure > 6.0:
+            base_chance = 0.05
+            
+        if random.random() > base_chance:
+            return None
+            
+        # 2. 检查是否有猎物
+        if not host.prey_species:
+            return None
+            
+        # 3. 寻找合适的共生体（从猎物中选）
+        # 优先选择有特殊能力的猎物（如光合作用、化能合成）
+        candidates = []
+        for prey_code in host.prey_species:
+            prey = species_repository.get_by_code(prey_code)
+            if not prey:
+                continue
+            
+            # 评分：有特殊能力加分，体型小加分
+            score = 1.0
+            caps = set(prey.capabilities)
+            if "photosynthesis" in caps or "光合作用" in caps:
+                score += 5.0
+            if "chemosynthesis" in caps or "化能合成" in caps:
+                score += 5.0
+            if "aerobic_respiration" in caps or "有氧呼吸" in caps:
+                score += 3.0
+                
+            # 只有营养级比宿主低的才行
+            if prey.trophic_level >= host.trophic_level:
+                continue
+                
+            candidates.append((prey, score))
+            
+        if not candidates:
+            return None
+            
+        # 按分数加权随机选择
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        symbiont = candidates[0][0] # 选分最高的
+        
+        logger.info(f"[内共生尝试] 宿主 {host.common_name} 试图吞噬共生 {symbiont.common_name}")
+        
+        # 4. 调用 AI 生成内共生结果
+        from ...ai.streaming_helper import invoke_with_heartbeat
+        
+        prompt = SPECIES_PROMPTS["endosymbiosis"].format(
+            host_name=f"{host.latin_name} ({host.common_name})",
+            symbiont_name=f"{symbiont.latin_name} ({symbiont.common_name})",
+            pressure_context=pressure_context
+        )
+        
+        try:
+            response = await invoke_with_heartbeat(
+                router=self.router,
+                capability="speciation", # 复用 capability
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                task_name=f"内共生[{host.common_name}+{symbiont.common_name}]",
+                timeout=45
+            )
+            
+            content = self.router._parse_content(response)
+            if not content:
+                return None
+                
+            # 标记为内共生类型，以便后续处理
+            content["speciation_type"] = "内共生突变"
+            content["is_endosymbiosis"] = True
+            
+            # 记录共生来源，供后续逻辑使用
+            content["symbiont_code"] = symbiont.lineage_code
+            content["symbiont_name"] = symbiont.common_name
+            
+            logger.info(f"[内共生成功] 生成了基于 {symbiont.common_name} 的新器官")
+            
+            return content
+            
+        except Exception as e:
+            logger.error(f"[内共生失败] AI调用出错: {e}")
+            return None
 

@@ -798,172 +798,98 @@ class HabitatManager:
         return filtered if filtered else tiles[:10]  # 如果没有合适的，返回前10个作为备选
     
     def _calculate_suitability(self, species: Species, tile: MapTile) -> float:
-        """计算物种在地块的适宜度
+        """计算物种在地块的适宜度 (严格物理约束版)
         
-        【修复v10】使用多维度判断，不仅仅依赖关键词：
-        1. 主要依赖 habitat_type 和 growth_form 字段
-        2. 使用海拔判断水域/陆地（海拔<0 = 水域）
-        3. 综合多个属性判断物种类型
+        【修复v11】
+        1. 物理介质如果不匹配（如陆生在深海），直接返回 0.0
+        2. 温度/湿度如果不适宜，分数会迅速下降到 0.0
+        3. 移除不明朗的"语义乘区"，回归纯数值计算
         """
-        # === 提取物种属性 ===
-        habitat_type = (getattr(species, 'habitat_type', '') or '').lower()
-        biome = (tile.biome or '').lower()
-        growth_form = (getattr(species, 'growth_form', '') or '').lower()
-        trophic = getattr(species, 'trophic_level', 1.0) or 1.0
-        caps = getattr(species, 'capabilities', []) or []
-        caps_set = set(c.lower() for c in caps) | set(caps)
+        # === 1. 物理介质检查 (Hard Constraints) ===
+        habitat_type = (getattr(species, 'habitat_type', '') or 'terrestrial').lower()
         elevation = getattr(tile, 'elevation', 0)
-        volcanic = getattr(tile, 'volcanic_potential', 0)
-        salinity = getattr(tile, 'salinity', 35)
-        is_lake = getattr(tile, 'is_lake', False)
         
-        # === 判断地块类型（多维度判断）===
-        # 方法1: 从海拔判断（最可靠）
-        is_underwater = elevation < 0
+        # 定义地块物理属性
+        is_water = elevation < 0
         is_deep_water = elevation < -1000
+        is_land = not is_water
         
-        # 方法2: 从 biome 名称判断（辅助）
-        water_in_biome = any(w in biome for w in ['海', '深海', '浅海', '中层', '湖', '河', '洋'])
+        # 定义物种属性
+        is_aquatic = habitat_type in {'marine', 'deep_sea', 'freshwater', 'hydrothermal'}
+        is_terrestrial = habitat_type in {'terrestrial', 'aerial'}
+        is_amphibious = habitat_type in {'amphibious', 'coastal'}
         
-        # 综合判断
-        is_water_tile = is_underwater or water_in_biome or is_lake
-        is_land_tile = not is_water_tile
-        is_deep_sea = is_deep_water or '深海' in biome or '海沟' in biome
-        is_coastal = (0 <= elevation < 50) or '海岸' in biome or '浅海' in biome
-        is_volcanic_area = volcanic > 0.3
-        is_freshwater_tile = is_lake or (is_water_tile and salinity < 10)
-        
-        # === 判断物种类型（多维度判断）===
-        # 水生栖息地类型
-        AQUATIC_HABITATS = {'marine', 'deep_sea', 'freshwater', 'hydrothermal', 'coastal'}
-        TERRESTRIAL_HABITATS = {'terrestrial', 'aerial'}
-        AMPHIBIOUS_HABITATS = {'amphibious', 'coastal'}
-        
-        is_aquatic_species = habitat_type in AQUATIC_HABITATS
-        is_terrestrial_species = habitat_type in TERRESTRIAL_HABITATS
-        is_amphibious = habitat_type in AMPHIBIOUS_HABITATS
-        is_hydrothermal = habitat_type == 'hydrothermal'
-        is_deep_sea_species = habitat_type in {'deep_sea', 'hydrothermal'}
-        
-        # 从 growth_form 判断（水生植物/藻类）
-        if growth_form == 'aquatic':
-            is_aquatic_species = True
-            is_terrestrial_species = False
-        
-        # 从能力判断（化能合成 = 热泉生物）
-        if 'chemosynthesis' in caps_set or '化能合成' in caps_set:
-            is_aquatic_species = True
-            is_hydrothermal = True
-            is_deep_sea_species = True
-            is_terrestrial_species = False
-        
-        # 从能力判断（光合作用但在水中 = 水生植物）
-        if ('photosynthesis' in caps_set or '光合作用' in caps_set) and growth_form == 'aquatic':
-            is_aquatic_species = True
-            is_terrestrial_species = False
-        
-        # 如果 habitat_type 未设置或是默认值，从其他属性推断
-        if not habitat_type or habitat_type == 'unknown':
-            # 使用 growth_form 和 trophic_level 推断
-            if growth_form == 'aquatic':
-                is_aquatic_species = True
-            elif growth_form in {'moss', 'herb', 'shrub', 'tree'}:
-                is_terrestrial_species = True
-        
-        # === 应用硬约束 ===
-        
-        # 规则1: 水生物种不能在陆地生存
-        if is_aquatic_species and is_land_tile:
-            # 两栖/海岸物种在陆地有一定适应性
+        # 规则1: 纯陆生生物不能下海
+        if is_terrestrial and is_water:
+            # 仅在极浅水域(0 to -10m)给予极低生存率(0.05)，否则为0
+            if elevation > -10:
+                return 0.05
+            return 0.0
+            
+        # 规则2: 纯水生生物不能上岸
+        if is_aquatic and is_land:
+            # 两栖类除外
             if is_amphibious:
-                return 0.3
-            # 海岸物种在沿海陆地勉强可以
-            if habitat_type == 'coastal' and is_coastal:
-                return 0.4
-            # 深海/热泉物种完全无法在陆地生存
-            if is_deep_sea_species or is_hydrothermal:
+                pass
+            # 海岸生物勉强可以在低海拔陆地生存
+            elif habitat_type == 'coastal' and elevation < 50:
+                pass
+            else:
                 return 0.0
-            # 一般水生物种
-            return 0.05
-        
-        # 规则2: 陆生物种不能在水中生存
-        if is_terrestrial_species and is_water_tile:
-            # 浅水区有一点点机会
-            if not is_deep_sea and elevation > -50:
-                return 0.15
-            # 深水区完全无法生存
+                
+        # 规则3: 深海生物不能到浅海/陆地
+        if habitat_type == 'deep_sea' and elevation > -500:
             return 0.0
+            
+        # === 2. 环境耐受性检查 (Tolerance Check) ===
+        # 温度评分
+        # 假设标准适宜温度范围根据耐热/耐寒性决定
+        # 耐寒性(1-10): 越高越能适应低温。 基准低温 = 15 - 耐寒性*3
+        # 耐热性(1-10): 越高越能适应高温。 基准高温 = 15 + 耐热性*3
+        cold_res = species.abstract_traits.get("耐寒性", 5)
+        heat_res = species.abstract_traits.get("耐热性", 5)
         
-        # 规则3: 深海物种需要深水环境
-        if is_deep_sea_species and is_water_tile and not is_deep_sea:
-            # 热泉物种需要火山活动区
-            if is_hydrothermal and not is_volcanic_area:
-                return 0.1
-            # 深海物种在浅水受限但不是完全无法生存
-            return 0.25
+        min_temp = 15 - (cold_res * 4) # range: 11 (res=1) to -25 (res=10)
+        max_temp = 15 + (heat_res * 4) # range: 19 (res=1) to 55 (res=10)
         
-        # 规则4: 热泉物种在陆地无法生存
-        if is_hydrothermal and is_land_tile:
-            return 0.0
+        tile_temp = tile.temperature
         
-        # 规则5: 淡水物种不能在高盐度环境
-        if habitat_type == 'freshwater' and is_water_tile and salinity > 20:
-            return 0.1
-        
-        # 规则6: 海洋物种不能在淡水环境
-        if habitat_type == 'marine' and is_freshwater_tile:
-            return 0.15
-        
-        # === 环境因素评分 ===
-        # 温度适应性
-        temp_pref = species.abstract_traits.get("耐热性", 5)
-        cold_pref = species.abstract_traits.get("耐寒性", 5)
-        
-        if tile.temperature > 20:
-            temp_score = temp_pref / 10.0
-        elif tile.temperature < 5:
-            temp_score = cold_pref / 10.0
+        if min_temp <= tile_temp <= max_temp:
+            temp_score = 1.0
         else:
-            temp_score = 0.8
-        
-        # 湿度适应性
-        drought_pref = species.abstract_traits.get("耐旱性", 5)
-        humidity_score = 1.0 - abs(tile.humidity - (1.0 - drought_pref / 10.0))
-        
-        # 资源可用性
+            # 超出范围，分数迅速衰减
+            diff = min(abs(tile_temp - min_temp), abs(tile_temp - max_temp))
+            # 每超出1度扣减0.1，超过10度直接死亡
+            temp_score = max(0.0, 1.0 - diff * 0.1)
+            
+        if temp_score == 0.0:
+            return 0.0
+            
+        # 湿度评分 (仅陆地生物相关)
+        humidity_score = 1.0
+        if is_land:
+            drought_tol = species.abstract_traits.get("耐旱性", 5)
+            # 耐旱性越高，最佳湿度越低
+            # best_humidity: 10 -> 0.1, 1 -> 0.9
+            best_humidity = 1.0 - (drought_tol * 0.09) 
+            hum_diff = abs(tile.humidity - best_humidity)
+            # 湿度不匹配不像温度那么致命，比较宽容
+            humidity_score = max(0.1, 1.0 - hum_diff * 1.5)
+            
+        # === 3. 综合评分 ===
+        # 资源作为软上限
         resource_score = min(1.0, tile.resources / 500.0)
         
-        # === 栖息地类型匹配加成/惩罚 ===
-        habitat_bonus = 1.0
+        # 最终得分：环境分 * 资源分
+        # 只有环境适宜(temp_score高)，资源(resource_score)才有意义
+        final_score = temp_score * 0.4 + humidity_score * 0.3 + resource_score * 0.3
         
-        if is_aquatic_species:
-            if is_water_tile:
-                habitat_bonus = 1.2  # 水生物种在水中有加成
-            elif is_coastal:
-                habitat_bonus = 0.5  # 海岸区域勉强可以
-            else:
-                habitat_bonus = 0.0  # 不应该到这里，但保险起见
-        
-        elif is_terrestrial_species:
-            if is_land_tile:
-                habitat_bonus = 1.0  # 正常
-            elif is_coastal:
-                habitat_bonus = 0.3  # 海岸区域降低
-            else:
-                habitat_bonus = 0.0  # 不应该到这里
-        
-        elif is_coastal_species:
-            if is_coastal or (is_land_tile and tile.humidity > 0.5):
-                habitat_bonus = 1.0
-            elif is_water_tile:
-                habitat_bonus = 0.6
-            else:
-                habitat_bonus = 0.4
-        
-        # 综合评分
-        base_score = (temp_score * 0.35 + humidity_score * 0.25 + resource_score * 0.25 + 0.15)
-        final_score = base_score * habitat_bonus
-        
+        # 再次应用物理介质惩罚(针对两栖/海岸边缘情况)
+        if is_amphibious:
+            # 两栖生物在水陆交界处(海拔 -50 到 50)获得加成
+            if -50 < elevation < 50:
+                final_score *= 1.2
+                
         return max(0.0, min(1.0, final_score))
     
     def _calculate_migration_ratio(self, migration_event: MigrationEvent) -> float:

@@ -8,7 +8,7 @@
  * - 覆盖层（族谱、年鉴、生态位、食物网）
  */
 
-import { lazy, Suspense, useState, useCallback } from "react";
+import { lazy, Suspense, useState, useCallback, useMemo } from "react";
 import type {
   TurnReport,
   LineageTree,
@@ -154,7 +154,13 @@ export function ModalsLayer({
   onLoadGame,
   onDismissAchievement,
 }: ModalsLayerProps) {
-  const previousReport = reports.length > 1 ? reports[reports.length - 2] : null;
+  // 根据最新报告的 turn_index 找到上一回合的报告
+  // 这样即使报告数组顺序有问题也能正确找到
+  const previousReport = useMemo(() => {
+    if (reports.length < 2 || !latestReport) return null;
+    const targetTurn = latestReport.turn_index - 1;
+    return reports.find(r => r.turn_index === targetTurn) ?? null;
+  }, [reports, latestReport]);
 
   // 压力列表状态管理
   const [pendingPressures, setPendingPressures] = useState<PressureDraft[]>([]);

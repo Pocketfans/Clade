@@ -152,7 +152,16 @@ class SaveManager:
         
         Returns:
             存档目录路径
+        
+        【健壮性改进】
+        - 校验 turn_index 与历史记录的一致性
+        - 确保 metadata 和 game_state 的回合数同步
         """
+        # 校验回合数有效性
+        if turn_index < 0:
+            logger.warning(f"[存档管理器] 回合数异常: {turn_index}，修正为 0")
+            turn_index = 0
+        
         logger.info(f"[存档管理器] 保存游戏: {save_name}, 回合={turn_index}")
         
         # 查找或创建存档目录
@@ -276,8 +285,89 @@ class SaveManager:
             encoding="utf-8"
         )
         
+        # 【优化】只在 DEBUG 模式下验证一致性，避免阻塞 I/O
+        # 正常保存流程已确保数据一致，无需重复读取大文件
+        if logger.isEnabledFor(logging.DEBUG):
+            self._verify_save_integrity(save_dir, turn_index, len(species_list))
+        
         logger.info(f"[存档管理器] 游戏保存成功: {save_dir.name}")
         return save_dir
+    
+    def _verify_save_integrity(
+        self, 
+        save_dir: Path, 
+        expected_turn: int, 
+        expected_species_count: int
+    ) -> bool:
+        """验证存档完整性（轻量级检查）
+        
+        【优化】只验证 metadata.json，不读取大文件 game_state.json
+        完整验证应在加载时通过 _validate_and_fix_turn_index 进行
+        
+        Returns:
+            bool: 验证是否通过
+        """
+        issues: list[str] = []
+        
+        # 检查必需文件是否存在（不读取内容）
+        required_files = ["metadata.json", "game_state.json"]
+        for fname in required_files:
+            if not (save_dir / fname).exists():
+                issues.append(f"缺少必需文件: {fname}")
+        
+        if issues:
+            for issue in issues:
+                logger.error(f"[存档验证] {issue}")
+            return False
+        
+        try:
+            # 【优化】只验证 metadata（文件小）
+            metadata = json.loads((save_dir / "metadata.json").read_text(encoding="utf-8"))
+            meta_turn = metadata.get("turn_index")
+            
+            # 检查 metadata 回合数
+            if meta_turn != expected_turn:
+                issues.append(f"metadata 回合数不匹配: 预期={expected_turn}, 实际={meta_turn}")
+                self._fix_save_inconsistency(save_dir, expected_turn)
+            
+            if issues:
+                for issue in issues:
+                    logger.warning(f"[存档验证] {issue}")
+                return False
+            
+            logger.debug(f"[存档验证] 验证通过: 回合={expected_turn}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"[存档验证] 验证过程出错: {e}")
+            return False
+    
+    def _fix_save_inconsistency(self, save_dir: Path, correct_turn: int) -> None:
+        """修复存档不一致问题
+        
+        【优化】只修复 metadata.json（文件小，I/O 快）
+        game_state.json 在加载时会通过 _validate_and_fix_turn_index 校验
+        避免读写可能很大的 game_state.json 文件（100MB+）
+        """
+        try:
+            # 只修复 metadata（文件很小）
+            metadata_path = save_dir / "metadata.json"
+            if metadata_path.exists():
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if metadata.get("turn_index") != correct_turn:
+                    metadata["turn_index"] = correct_turn
+                    metadata_path.write_text(
+                        json.dumps(metadata, ensure_ascii=False, indent=2),
+                        encoding="utf-8"
+                    )
+                    logger.info(f"[存档修复] 已修正 metadata 回合数为 {correct_turn}")
+            
+            # 【优化】不再修复 game_state.json
+            # 原因：game_state 文件可能非常大（100MB+），读写会阻塞 I/O
+            # 加载时 _validate_and_fix_turn_index 会从多来源校验回合数
+                    
+        except Exception as e:
+            logger.error(f"[存档修复] 修复失败: {e}")
 
     def load_game(self, save_name: str) -> dict[str, Any]:
         """加载游戏存档
@@ -288,6 +378,10 @@ class SaveManager:
             - embeddings_loaded: bool - 是否成功加载了 embedding
             - taxonomy: dict | None - 分类学数据
             - event_embeddings: dict | None - 事件 embedding 数据
+        
+        【健壮性改进】
+        - 校验并修复 metadata 和 game_state 的回合数一致性
+        - 支持从历史记录推断正确的回合数
         """
         logger.info(f"[存档管理器] 加载游戏: {save_name}")
         
@@ -296,13 +390,19 @@ class SaveManager:
             raise FileNotFoundError(f"存档不存在: {save_name}")
         
         game_state_path = save_dir / "game_state.json"
+        metadata_path = save_dir / "metadata.json"
+        
         if not game_state_path.exists():
             raise FileNotFoundError(f"存档数据文件不存在: {save_name}")
         
         # 读取存档数据
         save_data = json.loads(game_state_path.read_text(encoding="utf-8"))
         
-        logger.info(f"[存档管理器] 加载数据: {len(save_data.get('species', []))} 物种, {len(save_data.get('map_tiles', []))} 地块")
+        # 【关键】校验并修复回合数一致性
+        turn_index = self._validate_and_fix_turn_index(save_dir, save_data)
+        save_data["turn_index"] = turn_index
+        
+        logger.info(f"[存档管理器] 加载数据: {len(save_data.get('species', []))} 物种, {len(save_data.get('map_tiles', []))} 地块, 回合={turn_index}")
         
         # 1. 清除当前运行时数据
         logger.info("[存档管理器] 清除当前运行时状态...")
@@ -482,6 +582,96 @@ class SaveManager:
         logger.info(f"[存档管理器] 存档已删除: {save_name}")
         return True
 
+    def _validate_and_fix_turn_index(
+        self, 
+        save_dir: Path, 
+        save_data: dict[str, Any]
+    ) -> int:
+        """校验并修复回合数一致性
+        
+        【健壮性检查】
+        从多个来源获取回合数并选择最可靠的值：
+        1. game_state.json 中的 turn_index
+        2. metadata.json 中的 turn_index  
+        3. map_state 中的 turn_index
+        4. history_logs 中推断的最大回合数
+        
+        返回最可靠的回合数，并在检测到不一致时记录警告。
+        """
+        metadata_path = save_dir / "metadata.json"
+        
+        # 收集所有来源的回合数
+        sources: dict[str, int] = {}
+        
+        # 1. game_state.json 中的 turn_index
+        game_state_turn = save_data.get("turn_index")
+        if game_state_turn is not None:
+            sources["game_state"] = int(game_state_turn)
+        
+        # 2. metadata.json 中的 turn_index
+        if metadata_path.exists():
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                meta_turn = metadata.get("turn_index")
+                if meta_turn is not None:
+                    sources["metadata"] = int(meta_turn)
+            except Exception as e:
+                logger.warning(f"[存档管理器] 读取 metadata 失败: {e}")
+        
+        # 3. map_state 中的 turn_index
+        map_state = save_data.get("map_state")
+        if map_state and "turn_index" in map_state:
+            sources["map_state"] = int(map_state["turn_index"])
+        
+        # 4. 从 history_logs 推断（最大的 turn_index）
+        history_logs = save_data.get("history_logs", [])
+        if history_logs:
+            max_history_turn = max(
+                (log.get("turn_index", 0) for log in history_logs),
+                default=0
+            )
+            # history 记录的是完成的回合，所以下一回合是 max + 1
+            # 但如果存档是在回合结束后保存的，turn_counter 已经是 max + 1
+            sources["history_inferred"] = max_history_turn + 1
+        
+        # 如果没有任何来源，返回 0
+        if not sources:
+            logger.warning(f"[存档管理器] 无法确定回合数，使用默认值 0")
+            return 0
+        
+        # 检查一致性
+        unique_values = set(sources.values())
+        if len(unique_values) == 1:
+            # 所有来源一致
+            return list(unique_values)[0]
+        
+        # 存在不一致，记录详细信息
+        logger.warning(f"[存档管理器] 检测到回合数不一致: {sources}")
+        
+        # 选择策略：优先使用 game_state，其次是 history_inferred
+        # 因为 game_state 是最直接保存的值，history 可以验证
+        if "game_state" in sources and "history_inferred" in sources:
+            gs_turn = sources["game_state"]
+            hist_turn = sources["history_inferred"]
+            
+            # 如果 game_state 与 history 推断相差太大，可能有问题
+            if abs(gs_turn - hist_turn) <= 1:
+                # 相差不超过1，使用较大的值
+                chosen = max(gs_turn, hist_turn)
+                logger.info(f"[存档管理器] 选择回合数: {chosen} (game_state={gs_turn}, history={hist_turn})")
+                return chosen
+            else:
+                # 相差太大，优先信任 history（因为它是实际发生的记录）
+                logger.warning(
+                    f"[存档管理器] 回合数差异过大，使用历史推断值: {hist_turn}"
+                )
+                return hist_turn
+        
+        # 回退：使用所有来源中的最大值
+        chosen = max(sources.values())
+        logger.info(f"[存档管理器] 使用最大回合数: {chosen}")
+        return chosen
+
     def _find_save_dir(self, save_name: str) -> Path | None:
         """查找存档目录"""
         # 如果是完整的文件夹名称
@@ -518,3 +708,73 @@ class SaveManager:
     def get_save_dir(self, save_name: str) -> Path | None:
         """获取存档目录路径（公开方法）"""
         return self._find_save_dir(save_name)
+    
+    def check_save_integrity(self, save_name: str) -> dict[str, Any]:
+        """检查存档完整性（公开方法）
+        
+        用于在UI中显示存档健康状态。
+        
+        Returns:
+            包含以下键的字典:
+            - valid: bool - 存档是否有效
+            - issues: list[str] - 发现的问题列表
+            - turn_index: int | None - 检测到的回合数
+            - fixed: bool - 是否自动修复了问题
+        """
+        result = {
+            "valid": True,
+            "issues": [],
+            "turn_index": None,
+            "fixed": False,
+        }
+        
+        save_dir = self._find_save_dir(save_name)
+        if not save_dir:
+            result["valid"] = False
+            result["issues"].append("存档目录不存在")
+            return result
+        
+        # 检查必需文件
+        required_files = ["metadata.json", "game_state.json"]
+        for fname in required_files:
+            if not (save_dir / fname).exists():
+                result["valid"] = False
+                result["issues"].append(f"缺少必需文件: {fname}")
+        
+        if not result["valid"]:
+            return result
+        
+        try:
+            # 读取并验证数据
+            metadata = json.loads((save_dir / "metadata.json").read_text(encoding="utf-8"))
+            game_state = json.loads((save_dir / "game_state.json").read_text(encoding="utf-8"))
+            
+            meta_turn = metadata.get("turn_index")
+            gs_turn = game_state.get("turn_index")
+            
+            # 使用校验方法获取正确的回合数
+            correct_turn = self._validate_and_fix_turn_index(save_dir, game_state)
+            result["turn_index"] = correct_turn
+            
+            # 检查不一致
+            if meta_turn != gs_turn:
+                result["issues"].append(f"回合数不一致: metadata={meta_turn}, game_state={gs_turn}")
+                result["valid"] = False
+                
+                # 尝试自动修复
+                self._fix_save_inconsistency(save_dir, correct_turn)
+                result["fixed"] = True
+                result["valid"] = True  # 修复后认为有效
+            
+            # 检查 map_state 一致性
+            map_state = game_state.get("map_state")
+            if map_state and map_state.get("turn_index") != correct_turn:
+                result["issues"].append(
+                    f"map_state 回合数不一致: {map_state.get('turn_index')} vs {correct_turn}"
+                )
+            
+        except Exception as e:
+            result["valid"] = False
+            result["issues"].append(f"读取存档数据失败: {e}")
+        
+        return result

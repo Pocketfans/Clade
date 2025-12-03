@@ -398,20 +398,44 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
             last_activity: Date.now()
           });
         } else if (event.type === 'ai_parallel_batch_start') {
-          setAIProgress(prev => prev ? {
-            ...prev,
-            current_task: event.message || "开始并行批次",
-            last_activity: Date.now()
-          } : {
-            total: 1,
+          // 尝试从消息中提取总数 "开始 N 个"
+          const match = (event.message || "").match(/开始\s*(\d+)\s*个/);
+          const total = match ? parseInt(match[1], 10) : (event.total || 1);
+          
+          setAIProgress({
+            total: total,
             completed: 0,
             current_task: event.message || "开始并行批次",
             last_activity: Date.now()
           });
+        } else if (event.type === 'ai_parallel_task_start') {
+          // 单个任务开始
+          setAIProgress(prev => prev ? {
+            ...prev,
+            current_task: event.message || "任务开始",
+            last_activity: Date.now()
+          } : null);
+        } else if (event.type === 'ai_parallel_task_complete') {
+          // 单个任务完成
+          setAIProgress(prev => prev ? {
+            ...prev,
+            completed: Math.min(prev.total, prev.completed + 1),
+            // 如果有消息则更新，否则保持，避免闪烁
+            current_task: event.message || prev.current_task, 
+            last_activity: Date.now()
+          } : null);
+        } else if (event.type === 'ai_parallel_task_error' || event.type === 'ai_parallel_task_timeout') {
+          // 任务失败或超时也算完成（进度+1）
+          setAIProgress(prev => prev ? {
+            ...prev,
+            completed: Math.min(prev.total, prev.completed + 1),
+            current_task: event.message || "任务异常",
+            last_activity: Date.now()
+          } : null);
         } else if (event.type === 'ai_parallel_batch_complete') {
           setAIProgress(prev => prev ? {
             ...prev,
-            completed: prev.completed + 1,
+            completed: prev.total, // 确保满格
             current_task: event.message || "批次完成",
             last_activity: Date.now()
           } : null);

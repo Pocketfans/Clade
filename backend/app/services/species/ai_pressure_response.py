@@ -803,6 +803,7 @@ class AIPressureResponseService:
             max_concurrent=4,  # 最多同时4个批次（即12个并发评估）
             task_name="状态评估批次",
             task_timeout=60.0,  # 单批次超时60秒
+            event_callback=self._emit_event if self._event_callback else None,  # 【新增】传递心跳回调
         )
         
         # 合并结果
@@ -1117,6 +1118,7 @@ class AIPressureResponseService:
             max_concurrent=4,  
             task_name="叙事批次",
             task_timeout=60.0,  # 单批次超时60秒
+            event_callback=self._emit_event if self._event_callback else None,  # 【新增】传递心跳回调
         )
         
         # 合并结果

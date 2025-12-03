@@ -16,6 +16,10 @@ export interface GameState {
   global_temperature: number;
   tectonic_stage: string;
   backend_session_id?: string;
+  // 动态时间流
+  current_year?: number;      // 当前年份（负数表示公元前）
+  years_per_turn?: number;    // 每回合年数
+  era_name?: string;          // 地质时代名称
 }
 
 /**
@@ -64,6 +68,7 @@ export async function loadGame(saveName: string): Promise<{ success: boolean; me
 export async function deleteSave(saveName: string): Promise<{ success: boolean }> {
   return http.delete(`/api/saves/${encodeURIComponent(saveName)}`);
 }
+
 
 
 

@@ -20,6 +20,7 @@ from .trait_config import TraitConfig, PlantTraitConfig
 from ...ai.model_router import ModelRouter, staggered_gather
 from ...ai.prompts.species import SPECIES_PROMPTS
 from ...core.config import get_settings
+from ...simulation.constants import get_time_config
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,16 @@ _settings = get_settings()
 HIGH_PRESSURE_THRESHOLD = 5.0
 
 
+import numpy as np
+
 class AdaptationService:
-    """处理物种的渐进演化和器官退化"""
+    """处理物种的渐进演化和器官退化
+    
+    【核心重构 v2.0】矩阵驱动的能量守恒演化系统
+    1. 使用 Numpy 批量计算适应方向
+    2. 引入 L2 范数归一化强制能量守恒 (Trade-off)
+    3. 支持地质时代模长限制 (Era Cap)
+    """
     
     def __init__(self, router: ModelRouter):
         self.router = router
@@ -54,6 +63,141 @@ class AdaptationService:
         self.max_llm_adaptations_per_turn = 15
         self.max_description_updates_per_turn = 10
         
+        # 【新增】地质时代模长上限配置 (Era Cap)
+        self.era_trait_caps = {
+            "Hadean": 20.0,      # 冥古宙：极简生物
+            "Archean": 30.0,     # 太古宙：原核生物
+            "Proterozoic": 45.0, # 元古宙：真核/多细胞
+            "Paleozoic": 60.0,   # 古生代：复杂生命爆发
+            "Mesozoic": 80.0,    # 中生代：巨型生物
+            "Cenozoic": 100.0,   # 新生代：当前水平
+        }
+        
+    def _normalize_traits(self, traits: dict[str, float], era: str = "Cenozoic") -> dict[str, float]:
+        """执行特征向量归一化，强制能量守恒
+        
+        Args:
+            traits: 特征字典
+            era: 地质时代
+            
+        Returns:
+            归一化后的特征字典
+        """
+        if not traits:
+            return {}
+            
+        # 1. 转换为向量
+        keys = list(traits.keys())
+        values = np.array([traits[k] for k in keys], dtype=np.float64)
+        
+        # 2. 计算当前模长 (L2 Norm)
+        current_magnitude = np.linalg.norm(values)
+        
+        # 3. 获取时代上限
+        cap = self.era_trait_caps.get(era, 100.0)
+        
+        # 4. 归一化逻辑
+        # 如果模长超过上限，强制缩放回上限
+        # 这样新属性增加时，旧属性会被迫减少
+        if current_magnitude > cap:
+            scale_factor = cap / current_magnitude
+            normalized_values = values * scale_factor
+            
+            # 更新字典
+            new_traits = {}
+            for k, v in zip(keys, normalized_values):
+                new_traits[k] = round(float(v), 2)
+            return new_traits
+            
+        return traits.copy()
+
+    def _calculate_adaptation_vector(
+        self, 
+        species: Species, 
+        env_pressure_matrix: np.ndarray, # (n_tiles, n_features)
+        tile_indices: list[int],
+        feature_map: dict[str, int] # pressure_name -> matrix_col_index
+    ) -> dict[str, float]:
+        """计算物种在特定区域的理想适应向量 (Numpy加速)
+        
+        基于区域内的环境压力，计算每个特征的理想调整方向和幅度。
+        """
+        if not tile_indices or env_pressure_matrix is None:
+            return {}
+            
+        # 1. 提取区域子矩阵
+        # region_pressures: (n_tiles_in_region, n_features)
+        region_pressures = env_pressure_matrix[tile_indices]
+        
+        # 2. 计算区域平均压力 (简单的算术平均，后续可改为种群加权平均)
+        # avg_pressures: (n_features,)
+        avg_pressures = np.mean(region_pressures, axis=0)
+        
+        adaptation_vector = {}
+        
+        # 3. 遍历特征，计算适应方向
+        # feature_map 示例: {"temperature": 0, "humidity": 1, "salinity": 2}
+        for pressure_name, col_idx in feature_map.items():
+            if col_idx >= len(avg_pressures):
+                continue
+                
+            pressure_val = avg_pressures[col_idx]
+            
+            # 根据压力值推断需要的特征变化
+            # 这里复用 PlantTraitConfig 或 TraitConfig 的映射逻辑
+            # 但为了性能，最好将其预计算为矩阵运算
+            
+            # 简化示例：假设压力值直接对应需要的特征值偏移
+            # 例如：温度压力 +5 -> 耐热性 +0.5
+            
+            # 获取关联的特征
+            related_traits = self._get_traits_for_pressure(pressure_name, species)
+            
+            for trait in related_traits:
+                # 简单的线性映射：压力 * 系数
+                # 系数通常较小，表示渐进演化
+                delta = pressure_val * 0.1 
+                
+                if trait not in adaptation_vector:
+                    adaptation_vector[trait] = 0.0
+                adaptation_vector[trait] += delta
+                
+        return adaptation_vector
+
+    def _get_traits_for_pressure(self, pressure_name: str, species: Species) -> list[str]:
+        """获取受特定压力影响的特征列表"""
+        # 判断是否为植物
+        is_plant = PlantTraitConfig.is_plant(species)
+        
+        # 简单的硬编码映射，后续应从配置加载
+        # 注意：这里需要与 _apply_gradual_evolution 中的映射保持一致或更优
+        if is_plant:
+            mapping = {
+                "temperature": ["耐热性", "耐寒性"],
+                "drought": ["耐旱性", "保水能力"],
+                "humidity": ["耐旱性"], # 负相关
+                "light": ["光照需求", "光合效率"],
+                "nutrient": ["耐贫瘠", "根系发达度"],
+                "herbivory": ["物理防御", "化学防御", "再生能力"],
+                "competition": ["生长速度", "高度"],
+            }
+        else:
+            mapping = {
+                "temperature": ["耐热性", "耐寒性"],
+                "drought": ["耐旱性"],
+                "predation": ["运动能力", "感知能力", "防御力"],
+                "competition": ["攻击力", "体型"],
+                "scarcity": ["代谢率", "消化效率"],
+            }
+            
+        # 模糊匹配
+        related = []
+        for key, traits in mapping.items():
+            if key in pressure_name.lower():
+                related.extend(traits)
+                
+        return list(set(related))
+
     async def apply_adaptations_async(
         self,
         species_list: Sequence[Species],
@@ -62,6 +206,7 @@ class AdaptationService:
         pressures: Sequence = None,  # 新增：ParsedPressure 列表
         stream_callback: Callable[[str], Awaitable[None] | None] | None = None,
         mortality_results: Sequence = None,  # 【新增】死亡率结果，用于提取植物压力
+        event_callback: Callable[[str, str, str], None] | None = None,  # 【新增】事件回调
     ) -> list[dict]:
         """应用适应性变化（渐进演化+退化+描述同步+LLM智能适应）(Async)
         
@@ -70,22 +215,34 @@ class AdaptationService:
             environment_pressure: 当前环境压力
             turn_index: 当前回合数
             pressures: ParsedPressure 列表，用于提供上下文
+            stream_callback: (已废弃) 流式内容回调
             mortality_results: 死亡率结果列表，用于提取植物竞争压力等
+            event_callback: 事件回调函数 (type, message, category)
             
         Returns:
             变化记录列表
         """
+        # 【新增】获取时间配置
+        time_config = get_time_config(turn_index)
+        years_per_turn = time_config["years_per_turn"]
+        scaling_factor = time_config["scaling_factor"]
+        
         # 【新增】构建物种压力映射（从死亡率结果中提取）
         species_pressure_cache: dict[str, dict] = {}
         if mortality_results:
             for result in mortality_results:
-                if hasattr(result, 'plant_competition_pressure'):
-                    species_pressure_cache[result.species.lineage_code] = {
-                        "plant_competition": getattr(result, 'plant_competition_pressure', 0.0),
-                        "herbivory": getattr(result, 'herbivory_pressure', 0.0),
-                        "light_competition": getattr(result, 'light_competition', 0.0),
-                        "nutrient_competition": getattr(result, 'nutrient_competition', 0.0),
-                    }
+                pressure_data = {
+                    "plant_competition": getattr(result, 'plant_competition_pressure', 0.0),
+                    "herbivory": getattr(result, 'herbivory_pressure', 0.0),
+                    "light_competition": getattr(result, 'light_competition', 0.0),
+                    "nutrient_competition": getattr(result, 'nutrient_competition', 0.0),
+                    # 动物压力
+                    "predation": getattr(result, 'predation_pressure', 0.0),
+                    "grazing": getattr(result, 'grazing_pressure', 0.0),
+                    "competition": getattr(result, 'niche_overlap', 0.0) * 10.0, # 归一化到0-10
+                }
+                species_pressure_cache[result.species.lineage_code] = pressure_data
+                
         self._species_pressure_cache = species_pressure_cache
         adaptation_events = []
         description_update_tasks = []
@@ -111,13 +268,31 @@ class AdaptationService:
             logger.info(f"[适应性] 检测到高压力环境 ({total_pressure:.1f})，启用LLM智能适应")
         
         for species in species_list:
-            # 计算经历了多少代
+            # 计算经历了多少代 (使用动态年份)
             generation_time = species.morphology_stats.get("generation_time_days", 365)
-            generations = (500_000 * 365) / max(1.0, generation_time)
+            generations = (years_per_turn * 365) / max(1.0, generation_time)
             
+            # 0. 应用表型可塑性缓冲 (Phenotypic Plasticity)
+            # 必须在基因演化之前执行，因为缓冲状态会影响演化紧迫性
+            plasticity_changes, urgency_score = self._apply_plasticity_buffer(
+                species, environment_pressure, turn_index
+            )
+            species.accumulated_adaptation_score += urgency_score
+            
+            if plasticity_changes:
+                # 记录但不作为主要演化事件，除非非常紧急
+                if urgency_score > 1.0:
+                    adaptation_events.append({
+                        "lineage_code": species.lineage_code,
+                        "common_name": species.common_name,
+                        "changes": {"buffer": "critical_low"},
+                        "type": "stress_response"
+                    })
+
             # 1. 渐进演化
+            # 传入 scaling_factor 调整演化速率
             gradual_changes, drift_score = self._apply_gradual_evolution(
-                species, environment_pressure, turn_index, generations
+                species, environment_pressure, turn_index, generations, scaling_factor
             )
             
             # 更新累积漂移分数
@@ -133,7 +308,7 @@ class AdaptationService:
             
             # 2. 器官参数漂移 (Organ Parameter Drift)
             organ_drift_changes, organ_drift_score = self._apply_organ_drift(
-                species, environment_pressure
+                species, environment_pressure, scaling_factor
             )
             species.accumulated_adaptation_score += organ_drift_score
             
@@ -148,7 +323,7 @@ class AdaptationService:
             # 2.5 器官进度累积 (Organ Progress Accumulation)
             # 让发展中的器官逐渐成熟
             organ_progress_changes, organ_progress_score = self._apply_organ_progress_accumulation(
-                species, environment_pressure, turn_index
+                species, environment_pressure, turn_index, scaling_factor
             )
             species.accumulated_adaptation_score += organ_progress_score
             
@@ -172,7 +347,7 @@ class AdaptationService:
             
             if is_regression_turn or force_regression:
                 regression_changes, reg_drift = self._apply_regressive_evolution(
-                    species, environment_pressure, turn_index, force_regression
+                    species, environment_pressure, turn_index, force_regression, scaling_factor
                 )
                 species.accumulated_adaptation_score += reg_drift
                 
@@ -194,7 +369,7 @@ class AdaptationService:
                 )
                 if should_use_llm:
                     task = self._create_llm_adaptation_task(
-                        species, environment_pressure, pressure_context, stream_callback
+                        species, environment_pressure, pressure_context, stream_callback, time_config
                     )
                     llm_adaptation_tasks.append(task)
                     llm_species_list.append(species)
@@ -232,7 +407,8 @@ class AdaptationService:
                 description_update_tasks,
                 interval=2.0,
                 max_concurrent=3,
-                task_name="描述更新"
+                task_name="描述更新",
+                event_callback=event_callback,  # 【新增】传递心跳回调
             )
             
             for idx, (species, res) in enumerate(zip(species_to_update, results)):
@@ -270,7 +446,8 @@ class AdaptationService:
                 llm_adaptation_tasks,
                 interval=2.0,
                 max_concurrent=3,
-                task_name="LLM适应"
+                task_name="LLM适应",
+                event_callback=event_callback,  # 【新增】传递心跳回调
             )
             
             for idx, (species, res) in enumerate(zip(llm_species_list, results)):
@@ -398,141 +575,187 @@ class AdaptationService:
         
         return self.router._parse_content(full_content)
 
+    def _apply_plasticity_buffer(
+        self,
+        species: Species,
+        environment_pressure: dict[str, float],
+        turn_index: int
+    ) -> tuple[dict, float]:
+        """应用表型可塑性缓冲 (Phenotypic Plasticity Buffer)
+        
+        【新机制 v2.0】
+        生物面对压力时，首先通过生理调节（消耗缓冲）来应对，
+        只有当缓冲耗尽时，才会面临真正的死亡或被迫进行基因演化。
+        
+        - 压力高 -> 消耗缓冲
+        - 压力低 -> 恢复缓冲
+        - 缓冲低 -> 增加演化紧迫性 (Evolutionary Urgency)
+        
+        Returns:
+            (changes_dict, urgency_score)
+        """
+        changes = {}
+        urgency_score = 0.0
+        
+        # 1. 计算当前环境总压力
+        # 忽略一些常规压力，关注极端值
+        extreme_pressures = [abs(v) for k, v in environment_pressure.items() if abs(v) > 3.0]
+        total_stress = sum(extreme_pressures)
+        
+        current_buffer = getattr(species, 'plasticity_buffer', 1.0)
+        
+        # 2. 缓冲动态变化
+        if total_stress > 5.0:
+            # 高压环境：消耗缓冲
+            # 压力越大，消耗越快
+            consumption = min(0.2, total_stress * 0.01)
+            new_buffer = max(0.0, current_buffer - consumption)
+            
+            if new_buffer < current_buffer:
+                species.plasticity_buffer = round(new_buffer, 3)
+                # 缓冲下降不记录为显性Trait变化，但会影响演化紧迫性
+                if new_buffer < 0.3:
+                    changes["plasticity"] = "critical_low"
+                    urgency_score += 2.0  # 增加演化紧迫性
+                elif new_buffer < 0.6:
+                    urgency_score += 0.5
+                    
+                logger.debug(f"[可塑性] {species.common_name} 缓冲消耗: {current_buffer:.2f} -> {new_buffer:.2f} (压力 {total_stress:.1f})")
+        
+        elif total_stress < 2.0:
+            # 低压环境：恢复缓冲
+            recovery = 0.05
+            new_buffer = min(1.0, current_buffer + recovery)
+            
+            if new_buffer > current_buffer:
+                species.plasticity_buffer = round(new_buffer, 3)
+                logger.debug(f"[可塑性] {species.common_name} 缓冲恢复: {current_buffer:.2f} -> {new_buffer:.2f}")
+                
+        return changes, urgency_score
+
     def _apply_gradual_evolution(
         self,
         species: Species,
         environment_pressure: dict[str, float],
         turn_index: int,
         generations: float = 1000.0,
+        scaling_factor: float = 1.0,
     ) -> tuple[dict, float]:
         """渐进演化（支持动物和植物）
         
-        【改进】
-        - 区分动物和植物使用不同的特质-压力映射
-        - 植物使用 PlantTraitConfig.PLANT_TRAIT_PRESSURE_MAPPING
-        - 动物使用 TraitConfig.TRAIT_PRESSURE_MAPPING
-        
-        Returns: (changes_dict, drift_score)
+        【改进 v2.0】矩阵驱动 + 能量守恒 + 动态时间缩放
         """
         changes = {}
         drift_score = 0.0
-        limits = TraitConfig.get_trophic_limits(species.trophic_level)
-        current_total = sum(species.abstract_traits.values())
         
         # 【新增】判断是否为植物
         is_plant = PlantTraitConfig.is_plant(species)
         
-        # ========== 【世代感知模型】增强突变强度计算 ==========
-        generation_factor = math.log10(max(10, generations)) / _settings.generation_scale_factor
-        pressure_intensity = sum(abs(p) for p in environment_pressure.values()) / max(1, len(environment_pressure))
-        selection_factor = 1.0 + (min(pressure_intensity / 10.0, 1.0) * 0.5)
-        mutation_strength = generation_factor * selection_factor
+        # 0. 准备压力数据（合并环境压力和生物压力）
+        # 复制一份，以免修改原字典
+        combined_pressure = environment_pressure.copy()
         
-        logger.debug(
-            f"[突变强度] {'🌱' if is_plant else '🦎'} {species.common_name}: {generations:.0f}代, "
-            f"突变强度={mutation_strength:.3f}"
-        )
-        
-        # 【新增】植物额外压力：优先从死亡率结果缓存获取，否则从环境压力推断
-        plant_extra_pressures = {}
-        if is_plant:
-            # 优先使用缓存的植物压力信息（来自死亡率计算）
-            cached_pressures = getattr(self, '_species_pressure_cache', {}).get(species.lineage_code, {})
-            if cached_pressures:
-                # 将缓存的压力值转换为触发阈值格式
-                if cached_pressures.get("plant_competition", 0) > 0.1:
-                    plant_extra_pressures["competition"] = cached_pressures["plant_competition"] * 20  # 转换为0-10尺度
-                if cached_pressures.get("herbivory", 0) > 0.1:
-                    plant_extra_pressures["herbivory"] = cached_pressures["herbivory"] * 15
-                if cached_pressures.get("light_competition", 0) > 0.1:
-                    plant_extra_pressures["light_reduction"] = cached_pressures["light_competition"] * 15
-                if cached_pressures.get("nutrient_competition", 0) > 0.1:
-                    plant_extra_pressures["nutrient_poor"] = cached_pressures["nutrient_competition"] * 15
-            
-            # 从环境压力补充推断（回退方案）
-            for env_key, env_value in environment_pressure.items():
-                if "drought" in env_key.lower() or (env_key == "humidity" and env_value < -3):
-                    if "drought" not in plant_extra_pressures:
-                        plant_extra_pressures["drought"] = abs(env_value)
-                if "light" in env_key.lower():
-                    if "light_reduction" not in plant_extra_pressures:
-                        plant_extra_pressures["light_reduction"] = abs(env_value)
-                if "nutrient" in env_key.lower() or "resource" in env_key.lower():
-                    if "nutrient_poor" not in plant_extra_pressures:
-                        plant_extra_pressures["nutrient_poor"] = abs(env_value)
-                if "predator" in env_key.lower() or "herbiv" in env_key.lower():
-                    if "herbivory" not in plant_extra_pressures:
-                        plant_extra_pressures["herbivory"] = abs(env_value)
-                if "competition" in env_key.lower():
-                    if "competition" not in plant_extra_pressures:
-                        plant_extra_pressures["competition"] = abs(env_value)
-        
-        for trait_name, current_value in species.abstract_traits.items():
-            # 【改进】根据物种类型选择不同的映射
+        # 从缓存获取额外的生物压力 (Predation, Competition, Herbivory)
+        cached_pressures = getattr(self, '_species_pressure_cache', {}).get(species.lineage_code, {})
+        if cached_pressures:
             if is_plant:
-                mapping = PlantTraitConfig.get_plant_pressure_mapping(trait_name)
-                if not mapping:
-                    # 回退到共享特质的通用映射
-                    mapping = TraitConfig.get_pressure_mapping(trait_name)
+                # 植物压力转换
+                if cached_pressures.get("plant_competition", 0) > 0.1:
+                    combined_pressure["competition"] = cached_pressures["plant_competition"] * 20
+                if cached_pressures.get("herbivory", 0) > 0.1:
+                    combined_pressure["herbivory"] = cached_pressures["herbivory"] * 15
+                if cached_pressures.get("light_competition", 0) > 0.1:
+                    combined_pressure["light_reduction"] = cached_pressures["light_competition"] * 15
+                if cached_pressures.get("nutrient_competition", 0) > 0.1:
+                    combined_pressure["nutrient_poor"] = cached_pressures["nutrient_competition"] * 15
             else:
-                mapping = TraitConfig.get_pressure_mapping(trait_name)
+                # 动物压力转换
+                if cached_pressures.get("predation", 0) > 0.05:
+                    # 捕食压力直接映射到 predation
+                    combined_pressure["predation"] = cached_pressures["predation"] * 20 
+                if cached_pressures.get("competition", 0) > 2.0:
+                    combined_pressure["competition"] = cached_pressures["competition"]
+        
+        # 1. 提取当前特征向量
+        # 过滤掉非数值特征
+        trait_keys = list(species.abstract_traits.keys())
+        if not trait_keys:
+            return {}, 0.0
             
+        V_traits = np.array([species.abstract_traits[k] for k in trait_keys], dtype=np.float64)
+        
+        # 2. 构建目标梯度向量 (Gradient)
+        # 理想情况下，特质应该向抵抗压力的方向移动
+        G_evo = np.zeros_like(V_traits)
+        
+        # 获取压力映射
+        if is_plant:
+            pressure_map_func = PlantTraitConfig.get_plant_pressure_mapping
+        else:
+            pressure_map_func = TraitConfig.get_pressure_mapping
+            
+        # 遍历每个特质，计算其受到的环境“拉力”
+        for idx, trait_name in enumerate(trait_keys):
+            mapping = pressure_map_func(trait_name)
             if not mapping:
                 continue
-            
-            pressure_type, pressure_direction = mapping
-            
-            # 【改进】对植物，优先使用植物额外压力
-            if is_plant and pressure_type in plant_extra_pressures:
-                pressure_value = plant_extra_pressures[pressure_type]
-            else:
-                pressure_value = environment_pressure.get(pressure_type, 0.0)
-            
-            should_evolve = False
-            if pressure_direction == "hot" and pressure_value > 6.0:
-                should_evolve = True
-            elif pressure_direction == "cold" and pressure_value < -6.0:
-                should_evolve = True
-            elif pressure_direction == "high" and pressure_value > 5.0:
-                should_evolve = True
-            elif pressure_direction == "low" and pressure_value < -5.0:
-                should_evolve = True
-            
-            if should_evolve and random.random() < self.gradual_evolution_rate:
-                base_delta = random.uniform(0.1, 0.3)
-                delta = min(3.0, base_delta * mutation_strength)
-                new_value = current_value + delta
                 
-                if new_value <= limits["specialized"] and current_total + delta <= limits["total"]:
-                    species.abstract_traits[trait_name] = round(new_value, 2)
-                    changes[trait_name] = f"+{delta:.2f}"
-                    current_total += delta
-                    drift_score += abs(delta)
-                    
-                    # 【新增】植物特质变化的权衡代价
-                    if is_plant:
-                        tradeoff_traits = PlantTraitConfig.get_trait_tradeoffs(trait_name)
-                        if tradeoff_traits and random.random() < 0.5:  # 50%概率触发权衡
-                            tradeoff_trait = random.choice(tradeoff_traits)
-                            if tradeoff_trait in species.abstract_traits:
-                                tradeoff_delta = delta * random.uniform(0.3, 0.6)
-                                old_val = species.abstract_traits[tradeoff_trait]
-                                new_val = max(0.0, old_val - tradeoff_delta)
-                                species.abstract_traits[tradeoff_trait] = round(new_val, 2)
-                                changes[tradeoff_trait] = f"-{tradeoff_delta:.2f}"
-                                current_total -= tradeoff_delta
-                                logger.debug(
-                                    f"[植物权衡] {species.common_name}: {trait_name}↑ → {tradeoff_trait}↓"
-                                )
-                    
-                    logger.debug(f"[渐进演化] {species.common_name} {trait_name} +{delta:.2f} (压力{pressure_value:.1f})")
-                    
-                    if trait_name in ["耐热性", "耐极寒"]:
-                        species.morphology_stats["metabolic_rate"] = species.morphology_stats.get("metabolic_rate", 1.0) * 1.02
+            pressure_type, pressure_direction = mapping
+            pressure_val = combined_pressure.get(pressure_type, 0.0)
+            
+            # 计算该特质的理想改变量
+            force = 0.0
+            
+            if pressure_direction == "hot" and pressure_val > 0:
+                force = pressure_val * 0.1
+            elif pressure_direction == "cold" and pressure_val < 0:
+                force = abs(pressure_val) * 0.1
+            elif pressure_direction == "high" and pressure_val > 0:
+                force = pressure_val * 0.1
+            elif pressure_direction == "low" and pressure_val < 0:
+                force = abs(pressure_val) * 0.1
+            elif pressure_direction in ["drought", "dry"]: 
+                 if pressure_val > 0: force = pressure_val * 0.1
+            # 新增：捕食/竞争压力正向拉动
+            elif pressure_type in ["predation", "competition", "herbivory", "light_reduction", "nutrient_poor"]:
+                if pressure_val > 0: force = pressure_val * 0.1
+                 
+            G_evo[idx] = force
+
+        # 3. 应用演化步长
+        # 演化速率受世代数、可塑性缓冲和时间缩放因子影响
+        buffer_val = getattr(species, 'plasticity_buffer', 1.0)
+        urgency_factor = 1.0 + (1.0 - buffer_val) * 2.0  # 最多3倍速
         
-        # 【新增】植物阶段进度累积
-        if is_plant and changes:
-            self._accumulate_plant_stage_progress(species, changes, turn_index)
+        # 基础学习率 * 紧迫性 * 时间缩放 * 矩阵系数
+        learning_rate = self.gradual_evolution_rate * urgency_factor * scaling_factor * 0.1 
+        
+        # V_new = V_traits + G_evo * lr
+        # 添加随机噪音模拟基因漂变 (噪音也随时间尺度放大，但系数较小)
+        noise_scale = 0.05 * max(1.0, scaling_factor * 0.5)
+        noise = np.random.normal(0, noise_scale, size=len(V_traits))
+        V_new = V_traits + (G_evo * learning_rate) + noise
+        
+        # 4. 能量守恒归一化 (Trade-off)
+        # 将新向量映射回特征字典进行归一化
+        temp_traits = {k: v for k, v in zip(trait_keys, V_new)}
+        
+        # 使用地质时代限制
+        # 假设当前是 Cenozoic (需从某处获取，这里暂时硬编码或从 settings 获取)
+        current_era = "Cenozoic" 
+        normalized_traits = self._normalize_traits(temp_traits, era=current_era)
+        
+        # 5. 应用变化并记录
+        for k, new_v in normalized_traits.items():
+            old_v = species.abstract_traits[k]
+            # 确保数值非负且在合理范围
+            new_v = max(0.0, min(15.0, new_v))
+            
+            if abs(new_v - old_v) > 0.05:
+                species.abstract_traits[k] = round(new_v, 2)
+                delta = new_v - old_v
+                changes[k] = f"{delta:+.2f}"
+                drift_score += abs(delta)
         
         return changes, drift_score
     
@@ -584,12 +807,11 @@ class AdaptationService:
         self,
         species: Species,
         environment_pressure: dict[str, float],
+        scaling_factor: float = 1.0,
     ) -> tuple[dict, float]:
         """器官参数漂移：纯数值的微调
         
-        【改进】支持植物专用的器官压力映射
-        
-        不改变器官类型，只改变 parameters 中的数值 (efficiency, speed, range, strength等)。
+        【改进】支持植物专用的器官压力映射，支持时间缩放
         
         Returns: (changes_dict, drift_score)
         """
@@ -662,9 +884,9 @@ class AdaptationService:
                 # 否则，微小随机波动
                 delta = 0.0
                 if param_name in target_params and random.random() < 0.3: # 30% 概率适应性增强
-                    delta = random.uniform(0.01, 0.05)
+                    delta = random.uniform(0.01, 0.05) * scaling_factor
                 elif random.random() < 0.05: # 5% 概率随机波动 (中性漂移)
-                    delta = random.uniform(-0.02, 0.02)
+                    delta = random.uniform(-0.02, 0.02) * scaling_factor
                 
                 if delta != 0.0:
                     new_val = max(0.1, param_value + delta) # 保持为正数
@@ -683,13 +905,9 @@ class AdaptationService:
         species: Species,
         environment_pressure: dict[str, float],
         turn_index: int,
+        scaling_factor: float = 1.0,
     ) -> tuple[dict, float]:
         """器官进度累积：让发展中的器官逐渐成熟
-        
-        这是渐进式器官进化的核心机制：
-        - 每回合，处于中间阶段（1-3）的器官有机会累积进度
-        - 当进度达到下一阶段阈值时，器官升级
-        - 进度累积受环境压力影响：高压力环境下演化更快
         
         Returns: (changes_dict, drift_score)
         """
@@ -702,8 +920,8 @@ class AdaptationService:
         
         # 世代时间影响：繁殖快的物种进化快
         generation_time = species.morphology_stats.get("generation_time_days", 365)
-        # 50万年 = 1.825亿天
-        total_days = 500_000 * 365
+        # 使用 scaling_factor 调整回合年数
+        total_days = 500_000 * scaling_factor * 365
         generations = total_days / max(1.0, generation_time)
         # 世代加成：log10(代数) * 0.01
         generation_multiplier = 1.0 + math.log10(max(10, generations)) * 0.01
@@ -716,9 +934,9 @@ class AdaptationService:
             if current_stage >= 4:
                 continue
             
-            # 基础进度增益（每回合=50万年）
-            # 从原基到完善需要大约8-15回合（400-750万年）
-            base_progress_gain = random.uniform(0.02, 0.06)
+            # 基础进度增益（经过 scaling_factor 调整）
+            # 基准: 0.02-0.06 per 500k years
+            base_progress_gain = random.uniform(0.02, 0.06) * scaling_factor
             
             # 应用倍率
             actual_gain = base_progress_gain * pressure_multiplier * generation_multiplier
@@ -783,7 +1001,8 @@ class AdaptationService:
         species: Species,
         environment_pressure: dict[str, float],
         turn_index: int,
-        force_mode: bool = False
+        force_mode: bool = False,
+        scaling_factor: float = 1.0,
     ) -> tuple[dict, float]:
         """退化演化 (Use it or Lose it & Entropy)
         
@@ -791,7 +1010,8 @@ class AdaptationService:
             species: 目标物种
             environment_pressure: 环境压力
             turn_index: 当前回合
-            force_mode: 是否强制执行（用于高熵状态）
+            force_mode: 是否强制执行
+            scaling_factor: 时间缩放因子
             
         Returns: (changes_dict, drift_score)
         """
@@ -800,14 +1020,16 @@ class AdaptationService:
         
         # A. 随机熵增退化 (Maintenance Cost)
         # 当总属性过高时，随机降低某些属性以模拟能量守恒
-        if force_mode or random.random() < 0.1: # 即使非强制模式，也有10%概率发生熵增
+        # 概率受 scaling_factor 影响 (时间越长，发生熵增概率越高)
+        entropy_prob = 0.1 * scaling_factor
+        if force_mode or random.random() < entropy_prob: 
             # 选择一个较高的属性进行削弱
             high_traits = [k for k, v in species.abstract_traits.items() if v > 3.0]
             if high_traits:
                 trait_to_regress = random.choice(high_traits)
                 current_val = species.abstract_traits[trait_to_regress]
-                # 削弱幅度：越高削弱越狠
-                delta = random.uniform(0.1, 0.4) * (current_val / 5.0)
+                # 削弱幅度：越高削弱越狠，受时间缩放影响
+                delta = random.uniform(0.1, 0.4) * (current_val / 5.0) * scaling_factor
                 new_value = max(1.0, current_val - delta)
                 
                 species.abstract_traits[trait_to_regress] = round(new_value, 2)
@@ -823,7 +1045,7 @@ class AdaptationService:
             current_light_need = species.abstract_traits.get("光照需求", 5.0)
             if current_light_need > 1.0:
                 # 每5回合降低0.2
-                delta = random.uniform(0.15, 0.25)
+                delta = random.uniform(0.15, 0.25) * scaling_factor
                 new_value = max(0.0, current_light_need - delta)
                 species.abstract_traits["光照需求"] = round(new_value, 2)
                 changes["光照需求"] = f"-{delta:.2f} (长期黑暗退化)"
@@ -835,7 +1057,7 @@ class AdaptationService:
         if any(kw in desc_lower for kw in ["附着", "固着", "sessile", "attached"]):
             current_movement = species.abstract_traits.get("运动能力", 5.0)
             if current_movement > 0.5:
-                delta = random.uniform(0.1, 0.2)
+                delta = random.uniform(0.1, 0.2) * scaling_factor
                 new_value = max(0.0, current_movement - delta)
                 species.abstract_traits["运动能力"] = round(new_value, 2)
                 changes["运动能力"] = f"-{delta:.2f} (附着生活退化)"
@@ -845,8 +1067,9 @@ class AdaptationService:
                 # 同时检查运动器官是否需要退化
                 if "locomotion" in species.organs:
                     if species.organs["locomotion"].get("is_active", True):
-                        # 30%概率使器官失活
-                        if random.random() < 0.3:
+                        # 概率使器官失活，受时间缩放影响
+                        deactivate_prob = 0.3 * min(1.0, scaling_factor)
+                        if random.random() < deactivate_prob:
                             species.organs["locomotion"]["is_active"] = False
                             species.organs["locomotion"]["deactivated_turn"] = turn_index
                             changes["器官退化"] = f"{species.organs['locomotion']['type']}失活"
@@ -860,7 +1083,7 @@ class AdaptationService:
                 if sensory_organ.get("is_active", True):
                     # 判断退化概率：取决于在黑暗环境中的时间
                     turns_in_darkness = turn_index - species.created_turn
-                    regression_prob = min(0.5, turns_in_darkness * 0.01)  # 最多50%
+                    regression_prob = min(0.5, turns_in_darkness * 0.01 * scaling_factor)  # 最多50%
                     
                     if random.random() < regression_prob:
                         species.organs["sensory"]["is_active"] = False
@@ -874,7 +1097,7 @@ class AdaptationService:
             if "digestive" in species.organs:
                 if species.organs["digestive"].get("is_active", True):
                     # 寄生生物有40%概率退化消化系统
-                    if random.random() < 0.4:
+                    if random.random() < 0.4 * min(1.0, scaling_factor):
                         species.organs["digestive"]["is_active"] = False
                         species.organs["digestive"]["deactivated_turn"] = turn_index
                         changes["器官退化"] = "消化系统退化（寄生生活）"
@@ -898,8 +1121,8 @@ class AdaptationService:
             elif pressure_direction == "high" and pressure_value < 2.0 and current_value > 8.0:
                 is_mismatched = True
             
-            if is_mismatched and random.random() < 0.2:
-                delta = random.uniform(0.05, 0.15)
+            if is_mismatched and random.random() < 0.2 * scaling_factor:
+                delta = random.uniform(0.05, 0.15) * scaling_factor
                 new_value = max(5.0, current_value - delta)
                 species.abstract_traits[trait_name] = round(new_value, 2)
                 changes[trait_name] = f"-{delta:.2f} (环境不需要)"
@@ -945,7 +1168,8 @@ class AdaptationService:
         species: Species,
         environment_pressure: dict[str, float],
         pressure_context: str,
-        stream_callback: Callable[[str], Awaitable[None] | None] | None
+        stream_callback: Callable[[str], Awaitable[None] | None] | None,
+        time_config: dict = None,
     ) -> dict:
         """创建LLM驱动的适应性演化任务（非流式，更稳定）
         
@@ -954,6 +1178,7 @@ class AdaptationService:
             environment_pressure: 环境压力字典
             pressure_context: 压力描述上下文
             stream_callback: 流式回调函数（已停用）
+            time_config: 时间配置 (years_per_turn, era_name 等)
             
         Returns:
             LLM返回的适应建议
@@ -976,6 +1201,23 @@ class AdaptationService:
         if not organs_summary:
             organs_summary = "无已记录器官"
         
+        # 准备时间上下文
+        era_name = "Unknown"
+        years_per_turn = 500000
+        evolution_guide = "Standard"
+        
+        if time_config:
+            era_name = time_config.get("era_name", era_name)
+            years_per_turn = time_config.get("years_per_turn", years_per_turn)
+            evolution_guide = time_config.get("evolution_guide", evolution_guide)
+        
+        time_context = f"""
+=== ⏳ 时间尺度上下文 (Chronos Flow) ===
+当前地质年代：{era_name}
+时间流逝速度：{years_per_turn:,} 年/回合
+演化指导原则：{evolution_guide}
+"""
+
         # 构建prompt
         prompt = SPECIES_PROMPTS["pressure_adaptation"].format(
             pressure_context=pressure_context,
@@ -986,6 +1228,7 @@ class AdaptationService:
             description=species.description,
             traits_summary=traits_summary,
             organs_summary=organs_summary,
+            time_context=time_context,  # 注入时间上下文
         )
         
         # 【优化】使用带心跳的调用

@@ -18,6 +18,7 @@ import {
   useEffect,
   useState,
   useMemo,
+  useRef,
   type ReactNode,
 } from "react";
 import type {
@@ -83,7 +84,10 @@ interface GameProviderProps {
 }
 
 export function GameProvider({ children, viewMode, onViewModeChange }: GameProviderProps) {
-  const { scene } = useSession();
+  const { scene, currentSaveName } = useSession();
+  
+  // 追踪上一个存档名称，用于检测存档变化
+  const lastSaveNameRef = useRef<string | null>(null);
 
   // ============ 状态 ============
   const [mapData, setMapData] = useState<MapOverview | null>(null);
@@ -227,6 +231,48 @@ export function GameProvider({ children, viewMode, onViewModeChange }: GameProvi
 
   // ============ 初始化 Effects ============
 
+  // 【关键修复】监听存档变化，重置游戏数据
+  // 这解决了创建新存档后旧数据残留的问题
+  useEffect(() => {
+    // 当回到主菜单时，重置追踪的存档名称
+    // 这样下次进入任何存档时都会触发数据刷新
+    if (scene === "menu") {
+      lastSaveNameRef.current = null;
+      return;
+    }
+    
+    if (scene !== "game") return;
+    
+    const lastSaveName = lastSaveNameRef.current;
+    
+    // 检测是否是新存档（存档名称变化或首次进入）
+    if (lastSaveName !== currentSaveName) {
+      if (lastSaveName !== null) {
+        console.log(`[Game] 检测到存档变化: "${lastSaveName}" -> "${currentSaveName}"，重置游戏数据`);
+      } else {
+        console.log(`[Game] 首次进入存档: "${currentSaveName}"，初始化游戏数据`);
+      }
+      
+      // 重置所有游戏数据
+      setReports([]);
+      setFreshSpeciesList([]);
+      setCurrentTurnIndex(0);
+      setLineageTree(null);
+      setLineageError(null);
+      setMapData(null);
+      setError(null);
+      
+      // 重新获取数据
+      refreshMap();
+      refreshSpeciesList();
+      refreshQueue();
+      invalidateLineageCache();
+    }
+    
+    // 更新追踪的存档名称
+    lastSaveNameRef.current = currentSaveName;
+  }, [scene, currentSaveName, refreshMap, refreshSpeciesList, refreshQueue]);
+
   // 加载全局配置（无论场景）
   useEffect(() => {
     fetchUIConfig()
@@ -246,11 +292,12 @@ export function GameProvider({ children, viewMode, onViewModeChange }: GameProvi
     if (scene !== "game") return;
     refreshMap();
     refreshQueue();
+    refreshSpeciesList(); // 【修复】确保物种列表也被刷新
 
     // 队列轮询（间隔延长到 10 秒，减少推演期间的超时错误）
     const interval = setInterval(refreshQueue, 10000);
     return () => clearInterval(interval);
-  }, [scene, refreshMap, refreshQueue]);
+  }, [scene, refreshMap, refreshQueue, refreshSpeciesList]);
 
   // ============ Context Value ============
   const value: GameContextValue = {

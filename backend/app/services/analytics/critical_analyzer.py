@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from typing import Callable
+
 from ...ai.model_router import ModelRouter, staggered_gather
 from ...simulation.species import MortalityResult
 
@@ -51,7 +53,11 @@ class CriticalAnalyzer:
             logger.error(f"[Critical] {item.species.common_name} AI调用超时")
             return {"error": "timeout", "content": {"summary": "分析超时，请稍后重试"}}
 
-    async def enhance_async(self, results: list[MortalityResult]) -> None:
+    async def enhance_async(
+        self, 
+        results: list[MortalityResult],
+        event_callback: Callable[[str, str, str], None] | None = None
+    ) -> None:
         """为 critical 层物种的死亡率结果添加 AI 生成的详细叙事（间隔并行执行）。"""
         if not results:
             return
@@ -64,7 +70,8 @@ class CriticalAnalyzer:
             coroutines,
             interval=1.0,  # Critical 物种较少，间隔1秒即可
             max_concurrent=2,
-            task_name="Critical分析"
+            task_name="Critical分析",
+            event_callback=event_callback  # 【新增】传递心跳回调
         )
         
         # 处理结果

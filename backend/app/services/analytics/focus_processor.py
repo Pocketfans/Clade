@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, Callable
 
 from ...ai.model_router import ModelRouter, staggered_gather
 from ...simulation.species import MortalityResult
@@ -59,7 +59,11 @@ class FocusBatchProcessor:
         
         return details if isinstance(details, list) else []
 
-    async def enhance_async(self, results: list[MortalityResult]) -> None:
+    async def enhance_async(
+        self, 
+        results: list[MortalityResult],
+        event_callback: Callable[[str, str, str], None] | None = None
+    ) -> None:
         """异步批量增强（间隔并行执行）"""
         if not results:
             return
@@ -73,7 +77,8 @@ class FocusBatchProcessor:
             coroutines, 
             interval=1.5,  # 每1.5秒启动一个
             max_concurrent=4,  # 最多同时4个
-            task_name="Focus批次"
+            task_name="Focus批次",
+            event_callback=event_callback  # 【新增】传递心跳回调
         )
         
         # 处理结果

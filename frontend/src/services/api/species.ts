@@ -15,7 +15,8 @@ import type {
  * 获取物种列表
  */
 export async function fetchSpeciesList(): Promise<SpeciesListItem[]> {
-  const data = await http.get<{ species: SpeciesListItem[] }>("/api/species/list");
+  // 增加超时到 60 秒
+  const data = await http.get<{ species: SpeciesListItem[] }>("/api/species/list", { timeout: 60000 });
   return data.species;
 }
 
@@ -134,6 +135,7 @@ export function invalidateLineageCache(): void {
 export async function updateWatchlist(lineageCodes: string[]): Promise<void> {
   await http.post("/api/watchlist", { lineage_codes: lineageCodes });
 }
+
 
 
 

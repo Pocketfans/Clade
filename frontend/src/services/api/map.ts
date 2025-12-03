@@ -16,7 +16,8 @@ export async function fetchMapOverview(
   if (speciesCode) {
     url += `&species_code=${speciesCode}`;
   }
-  return http.get<MapOverview>(url);
+  // 增加超时到 60 秒，因为地图数据可能很大
+  return http.get<MapOverview>(url, { timeout: 60000 });
 }
 
 /**
@@ -42,6 +43,7 @@ export async function fetchErosionMap(): Promise<Float32Array> {
   const buffer = await http.getBinary("/api/render/erosionmap");
   return new Float32Array(buffer);
 }
+
 
 
 

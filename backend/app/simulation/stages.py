@@ -2115,6 +2115,9 @@ class AINarrativeStage(BaseStage):
             if not hasattr(engine, 'ai_pressure_service') or not engine.ai_pressure_service:
                 return
             
+            # 【新增】设置事件回调，确保并行任务能发送心跳
+            engine.ai_pressure_service.set_event_callback(ctx.emit_event)
+            
             # 准备物种数据
             species_data = []
             for result in ctx.critical_results + ctx.focus_results:
@@ -2204,7 +2207,8 @@ class AdaptationStage(BaseStage):
                     ctx.modifiers,
                     ctx.turn_index,
                     ctx.pressures,
-                    mortality_results=ctx.combined_results
+                    mortality_results=ctx.combined_results,
+                    event_callback=ctx.emit_event,  # 【新增】传递事件回调
                 ),
                 timeout=300
             )

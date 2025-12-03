@@ -59,6 +59,11 @@ class Species(SQLModel, table=True):
     # 上次描述更新的回合
     last_description_update_turn: int = 0
     
+    # 表型可塑性缓冲 (0.0 - 1.0)
+    # 用于抵消突发环境压力的死亡率。
+    # 当环境压力过大时，先消耗缓冲值。缓冲值为0时，完全承担死亡率。
+    plasticity_buffer: float = Field(default=1.0)
+    
     # ========== 捕食关系系统 ==========
     # 该物种捕食的物种代码列表 (prey_species)
     # 示例: ["A1", "B2"] 表示该物种以A1和B2为食

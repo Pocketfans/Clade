@@ -318,79 +318,96 @@ export function SpeciesInputCard({ index, required, value, onChange, onRemove }:
 
       <style>{`
         .species-input-card {
-          background: rgba(255, 255, 255, 0.03);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 12px;
-          padding: 16px;
-          transition: all 0.2s;
+          background: rgba(8, 16, 12, 0.5);
+          border: 1px solid rgba(139, 92, 246, 0.12);
+          border-radius: 14px;
+          padding: 1.125rem;
+          transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .species-input-card:hover {
+          border-color: rgba(139, 92, 246, 0.25);
+          box-shadow: 0 4px 20px rgba(139, 92, 246, 0.08);
         }
 
         .species-input-card.filled {
-          background: rgba(255, 255, 255, 0.05);
-          border-color: rgba(255, 255, 255, 0.12);
+          background: rgba(8, 16, 12, 0.7);
+          border-color: rgba(139, 92, 246, 0.2);
         }
 
         .card-header {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 12px;
+          margin-bottom: 14px;
         }
 
         .card-title {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 10px;
           font-size: 0.9rem;
-          color: rgba(255, 255, 255, 0.8);
+          font-weight: 500;
+          color: rgba(240, 244, 232, 0.85);
         }
 
         .card-number {
           display: flex;
           align-items: center;
           justify-content: center;
-          width: 22px;
-          height: 22px;
-          background: rgba(168, 85, 247, 0.2);
-          border-radius: 6px;
-          font-size: 0.8rem;
-          font-weight: 600;
+          width: 26px;
+          height: 26px;
+          background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(168, 85, 247, 0.15));
+          border: 1px solid rgba(139, 92, 246, 0.3);
+          border-radius: 8px;
+          font-size: 0.85rem;
+          font-weight: 700;
           color: #c4b5fd;
+          font-family: var(--font-mono, monospace);
         }
 
         .required-badge {
-          font-size: 0.7rem;
-          padding: 2px 6px;
+          font-size: 0.65rem;
+          font-weight: 600;
+          padding: 3px 8px;
           background: rgba(239, 68, 68, 0.15);
-          border-radius: 4px;
+          border: 1px solid rgba(239, 68, 68, 0.25);
+          border-radius: 6px;
           color: #fca5a5;
+          letter-spacing: 0.03em;
         }
 
         .card-actions {
           display: flex;
-          gap: 6px;
+          gap: 8px;
         }
 
         .clear-btn, .remove-btn {
-          padding: 4px 8px;
-          background: rgba(255, 255, 255, 0.05);
-          border: none;
-          border-radius: 4px;
-          color: rgba(255, 255, 255, 0.5);
+          padding: 5px 10px;
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 6px;
+          color: rgba(240, 244, 232, 0.5);
           cursor: pointer;
           font-size: 0.75rem;
           display: flex;
           align-items: center;
+          transition: all 0.2s;
         }
 
         .clear-btn:hover, .remove-btn:hover {
-          background: rgba(255, 255, 255, 0.1);
-          color: rgba(255, 255, 255, 0.8);
+          background: rgba(255, 255, 255, 0.08);
+          border-color: rgba(255, 255, 255, 0.15);
+          color: rgba(240, 244, 232, 0.85);
         }
 
         /* 快速模板 */
         .quick-templates {
-          margin-bottom: 12px;
+          margin-bottom: 14px;
+          padding: 12px;
+          background: rgba(139, 92, 246, 0.04);
+          border: 1px solid rgba(139, 92, 246, 0.1);
+          border-radius: 10px;
         }
 
         .templates-label {
@@ -398,13 +415,14 @@ export function SpeciesInputCard({ index, required, value, onChange, onRemove }:
           align-items: center;
           gap: 6px;
           font-size: 0.75rem;
-          color: rgba(255, 255, 255, 0.5);
-          margin-bottom: 8px;
+          font-weight: 500;
+          color: rgba(168, 85, 247, 0.8);
+          margin-bottom: 10px;
         }
 
         .templates-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(95px, 1fr));
           gap: 8px;
         }
 
@@ -413,21 +431,23 @@ export function SpeciesInputCard({ index, required, value, onChange, onRemove }:
           align-items: center;
           justify-content: center;
           gap: 6px;
-          padding: 8px 12px;
-          background: rgba(255, 255, 255, 0.05);
+          padding: 9px 12px;
+          background: rgba(8, 16, 12, 0.5);
           border: 1px solid rgba(255, 255, 255, 0.08);
           border-radius: 8px;
-          color: rgba(255, 255, 255, 0.7);
-          font-size: 0.8rem;
+          color: rgba(240, 244, 232, 0.7);
+          font-size: 0.78rem;
           cursor: pointer;
-          transition: all 0.15s;
+          transition: all 0.2s;
           white-space: nowrap;
         }
 
         .template-btn:hover {
-          background: color-mix(in srgb, var(--t-color) 15%, transparent);
+          background: color-mix(in srgb, var(--t-color) 12%, rgba(8, 16, 12, 0.8));
           border-color: var(--t-color);
           color: #fff;
+          transform: translateY(-1px);
+          box-shadow: 0 3px 10px color-mix(in srgb, var(--t-color) 25%, transparent);
         }
 
         .template-btn svg {
@@ -437,6 +457,11 @@ export function SpeciesInputCard({ index, required, value, onChange, onRemove }:
 
         .template-btn.randomize {
           border-style: dashed;
+          border-color: rgba(168, 85, 247, 0.25);
+        }
+
+        .template-btn.randomize:hover {
+          border-style: solid;
         }
 
         /* 描述输入 */
@@ -446,75 +471,84 @@ export function SpeciesInputCard({ index, required, value, onChange, onRemove }:
 
         .prompt-wrapper textarea {
           width: 100%;
-          padding: 12px;
-          background: rgba(0, 0, 0, 0.3);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 8px;
-          color: #f1f5f9;
+          padding: 14px;
+          background: rgba(8, 16, 12, 0.6);
+          border: 1px solid rgba(139, 92, 246, 0.15);
+          border-radius: 10px;
+          color: rgba(240, 244, 232, 0.95);
           font-size: 0.9rem;
-          line-height: 1.5;
+          line-height: 1.6;
           resize: vertical;
-          min-height: 70px;
+          min-height: 80px;
           font-family: inherit;
           transition: all 0.2s;
         }
 
+        .prompt-wrapper textarea:hover {
+          border-color: rgba(139, 92, 246, 0.25);
+        }
+
         .prompt-wrapper textarea:focus {
           outline: none;
-          border-color: rgba(168, 85, 247, 0.4);
-          box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.1);
+          border-color: #8b5cf6;
+          background: rgba(8, 16, 12, 0.8);
+          box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
         }
 
         .prompt-wrapper textarea::placeholder {
-          color: rgba(255, 255, 255, 0.3);
+          color: rgba(240, 244, 232, 0.3);
         }
 
         .expand-toggle {
           position: absolute;
-          bottom: 8px;
-          right: 8px;
+          bottom: 10px;
+          right: 10px;
           display: flex;
           align-items: center;
-          gap: 4px;
-          padding: 4px 8px;
-          background: rgba(0, 0, 0, 0.5);
-          border: none;
-          border-radius: 4px;
-          color: rgba(255, 255, 255, 0.5);
+          gap: 5px;
+          padding: 5px 10px;
+          background: rgba(139, 92, 246, 0.15);
+          border: 1px solid rgba(139, 92, 246, 0.2);
+          border-radius: 6px;
+          color: rgba(168, 85, 247, 0.8);
           font-size: 0.7rem;
+          font-weight: 500;
           cursor: pointer;
+          transition: all 0.2s;
         }
 
         .expand-toggle:hover {
-          color: rgba(255, 255, 255, 0.8);
+          background: rgba(139, 92, 246, 0.25);
+          color: #a78bfa;
         }
 
         /* 高级选项 */
         .advanced-options {
-          margin-top: 12px;
-          padding-top: 12px;
-          border-top: 1px solid rgba(255, 255, 255, 0.06);
+          margin-top: 14px;
+          padding-top: 14px;
+          border-top: 1px solid rgba(139, 92, 246, 0.12);
           display: flex;
           flex-direction: column;
-          gap: 12px;
+          gap: 14px;
         }
 
         .option-row {
           display: flex;
           flex-direction: column;
-          gap: 6px;
+          gap: 8px;
         }
 
         .option-row label {
-          font-size: 0.75rem;
-          color: rgba(255, 255, 255, 0.5);
+          font-size: 0.72rem;
+          font-weight: 600;
+          color: rgba(240, 244, 232, 0.5);
           text-transform: uppercase;
-          letter-spacing: 0.05em;
+          letter-spacing: 0.08em;
         }
 
         .option-chips {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+          display: flex;
+          flex-wrap: wrap;
           gap: 8px;
         }
 
@@ -523,61 +557,66 @@ export function SpeciesInputCard({ index, required, value, onChange, onRemove }:
           align-items: center;
           justify-content: center;
           gap: 5px;
-          padding: 8px 10px;
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(255, 255, 255, 0.08);
+          padding: 8px 12px;
+          background: rgba(8, 16, 12, 0.5);
+          border: 1px solid rgba(255, 255, 255, 0.1);
           border-radius: 8px;
-          color: rgba(255, 255, 255, 0.6);
-          font-size: 0.8rem;
+          color: rgba(240, 244, 232, 0.6);
+          font-size: 0.78rem;
           cursor: pointer;
-          transition: all 0.15s;
+          transition: all 0.2s;
           white-space: nowrap;
         }
 
         .chip:hover {
-          background: rgba(255, 255, 255, 0.08);
-          color: rgba(255, 255, 255, 0.9);
+          background: rgba(139, 92, 246, 0.1);
+          border-color: rgba(139, 92, 246, 0.3);
+          color: rgba(240, 244, 232, 0.9);
         }
 
         .chip.active {
-          background: rgba(168, 85, 247, 0.2);
-          border-color: rgba(168, 85, 247, 0.4);
+          background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(168, 85, 247, 0.15));
+          border-color: rgba(139, 92, 246, 0.45);
           color: #e9d5ff;
+          box-shadow: 0 2px 8px rgba(139, 92, 246, 0.2);
         }
 
         .chip small {
-          font-size: 0.65rem;
+          font-size: 0.6rem;
           opacity: 0.6;
+          font-family: var(--font-mono, monospace);
         }
 
         .plant-stages {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+          display: flex;
+          flex-wrap: wrap;
           gap: 8px;
         }
 
         .stage-btn {
-          padding: 8px 10px;
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(255, 255, 255, 0.08);
+          padding: 8px 12px;
+          background: rgba(8, 16, 12, 0.5);
+          border: 1px solid rgba(34, 197, 94, 0.15);
           border-radius: 8px;
-          color: rgba(255, 255, 255, 0.6);
-          font-size: 0.8rem;
+          color: rgba(240, 244, 232, 0.6);
+          font-size: 0.78rem;
           cursor: pointer;
-          transition: all 0.15s;
+          transition: all 0.2s;
           white-space: nowrap;
           text-align: center;
         }
 
         .stage-btn:hover {
           background: rgba(34, 197, 94, 0.1);
-          border-color: rgba(34, 197, 94, 0.3);
+          border-color: rgba(34, 197, 94, 0.35);
+          color: rgba(240, 244, 232, 0.9);
         }
 
         .stage-btn.active {
-          background: rgba(34, 197, 94, 0.2);
+          background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(22, 163, 74, 0.15));
           border-color: rgba(34, 197, 94, 0.5);
           color: #86efac;
+          box-shadow: 0 2px 8px rgba(34, 197, 94, 0.2);
         }
       `}</style>
     </div>

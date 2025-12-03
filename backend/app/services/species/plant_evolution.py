@@ -46,7 +46,7 @@ PLANT_MILESTONES: dict[str, PlantMilestone] = {
         name="真核化",
         from_stage=0,
         to_stage=1,
-        requirements={"多细胞程度": 1.5},
+        requirements={"多细胞程度": 3.0},  # 从1.5提高到3.0（约需15-20回合=750-1000万年）
         unlock_organs=["叶绿体"],
         narrative="生命史上的重大飞跃：真核细胞的诞生，细胞核和叶绿体的形成开启了复杂生命的新纪元"
     ),
@@ -55,7 +55,7 @@ PLANT_MILESTONES: dict[str, PlantMilestone] = {
         name="多细胞化",
         from_stage=1,
         to_stage=2,
-        requirements={"多细胞程度": 3.0},
+        requirements={"多细胞程度": 6.0},  # 从3.0提高到6.0（约需30-40回合=1500-2000万年）
         unlock_organs=["类囊体膜"],
         narrative="细胞开始协作，形成原始组织，生命的复杂性迈上新台阶"
     ),
