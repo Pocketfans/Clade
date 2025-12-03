@@ -109,11 +109,52 @@ class ServiceContainer(
             if map_state and map_state.turn_index > 0:
                 self.simulation_engine.turn_counter = map_state.turn_index
                 logger.info(f"[容器] 已从数据库恢复回合数: {map_state.turn_index}")
+            else:
+                # 【新增】如果是首次启动（数据库为空或无进度），自动执行一次重置/初始化流程
+                # 检查是否没有任何物种存在，作为判断“全新开局”的依据
+                species_count = self.species_repository.count()
+                if species_count == 0 and (not map_state or map_state.turn_index == 0):
+                    logger.info("[容器] 检测到全新数据库，执行自动初始化流程...")
+                    self._perform_initial_reset()
         except Exception as e:
-            logger.warning(f"[容器] 恢复回合数失败: {e}")
+            logger.warning(f"[容器] 恢复回合数或自动初始化失败: {e}")
         
         self._initialized = True
         logger.info("[容器] 服务容器初始化完成")
+
+    def _perform_initial_reset(self) -> None:
+        """执行初始重置流程（模拟 create_save 的部分逻辑）"""
+        try:
+            # 1. 清空可能存在的残留数据
+            logger.info("[容器] 自动初始化：清理环境...")
+            self.migration_advisor.clear_all_caches()
+            self.habitat_manager.clear_all_caches()
+            self.dispersal_engine.clear_caches()
+            
+            if self.simulation_engine.ai_pressure_service:
+                self.simulation_engine.ai_pressure_service.clear_all_caches()
+            
+            self.simulation_engine.speciation.clear_all_caches()
+            self.embedding_integration.clear_all_caches()
+            
+            # 【新增】重置 ModelRouter 到初始状态（清除可能残留的配置）
+            # 避免之前运行时的配置污染新会话
+            if "model_router" in self.__dict__:
+                # 重新触发 cached_property 的初始化逻辑
+                del self.__dict__["model_router"]
+                logger.info("[容器] ModelRouter 已重置为默认状态")
+            
+            # 2. 确保地图已生成（已有 ensure_initialized，这里再次确认或重新生成）
+            # 注意：如果想强制重新生成地图，可以调用 map_manager.regenerate()
+            # 但通常 ensure_initialized 已经够了。
+            
+            # 3. 重置引擎状态
+            self.simulation_engine.turn_counter = 0
+            logger.info("[容器] 自动初始化完成：系统已准备就绪，回合数=0")
+            
+        except Exception as e:
+            logger.error(f"[容器] 自动初始化流程出错: {e}")
+
 
 
 # ========== 已废弃：全局实例 ==========

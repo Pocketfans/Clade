@@ -1,12 +1,11 @@
 """物种描述增强服务
 
-为规则生成的物种（背景物种分化、杂交等）提供 LLM 增强的描述。
+为规则生成的物种（背景物种分化、杂交等）提供描述增强。
 
 设计理念：
-- 轻量级：只生成描述，不涉及复杂的 JSON 解析和特质计算
-- 批量处理：积累多个待增强物种后一次性处理
+- 零成本：使用模板生成描述 + 向量遗传，完全移除 LLM 调用
+- 批量处理：保持原有的队列和批处理接口兼容
 - 异步执行：不阻塞主要推演流程
-- 成本优化：使用较短的 prompt 和较小的模型
 
 使用场景：
 1. 背景物种规则分化后
@@ -17,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from typing import TYPE_CHECKING, Sequence
 
 from ...models.species import Species
@@ -27,77 +27,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# 描述增强的 Prompt 模板
-DESCRIPTION_ENHANCE_PROMPT = """你是一位生物学描述专家。请为以下物种生成一段生动、专业的生物学描述。
-
-=== 物种信息 ===
-名称：{common_name} ({latin_name})
-代码：{lineage_code}
-栖息地：{habitat_type}
-营养级：{trophic_level:.1f}
-食性：{diet_type}
-
-=== 演化背景 ===
-{evolution_context}
-
-=== 父系信息 ===
-父系：{parent_name} ({parent_code})
-分化类型：{speciation_type}
-
-=== 当前特质（关键几项）===
-{key_traits}
-
-=== 要求 ===
-1. 生成 100-150 字的生物学描述
-2. 包含：形态特征、生态习性、与父系的差异、独特适应性
-3. 语言生动但科学严谨
-4. 不要使用"继承"、"杂交"等机械词汇，而是描述具体特征
-
-直接输出描述文本，不要加任何前缀或格式。"""
-
-HYBRID_DESCRIPTION_PROMPT = """你是一位生物学描述专家。请为以下杂交物种生成一段生动、专业的生物学描述。
-
-=== 物种信息 ===
-名称：{common_name} ({latin_name})
-代码：{lineage_code}
-栖息地：{habitat_type}
-营养级：{trophic_level:.1f}
-食性：{diet_type}
-
-=== 杂交背景 ===
-亲本A：{parent1_name} ({parent1_code})
-亲本B：{parent2_name} ({parent2_code})
-可育性：{fertility:.0%}
-
-=== 当前特质（关键几项）===
-{key_traits}
-
-=== 要求 ===
-1. 生成 100-150 字的生物学描述
-2. 包含：形态特征（体现双亲融合）、生态习性、独特优势或劣势
-3. 语言生动但科学严谨
-4. 描述具体的杂交特征表现，而非笼统的"继承双亲特征"
-
-直接输出描述文本，不要加任何前缀或格式。"""
-
-
 class DescriptionEnhancerService:
-    """物种描述增强服务
+    """物种描述增强服务 (规则版)
     
-    为规则生成的物种提供 LLM 增强描述，改善 embedding 质量。
+    不再调用 LLM，而是通过模板拼接和向量遗传算法为物种生成描述和 Embedding。
+    这种方式成本为零，且能满足 Embedding 引擎的识别需求。
     
     使用方式：
     1. 在规则生成物种后，调用 queue_for_enhancement() 将物种加入队列
     2. 在回合结束前，调用 process_queue_async() 批量处理
     3. 或者使用 enhance_single_async() 立即处理单个物种
-    
-    配置：
-    - batch_size: 每批处理的物种数量（默认 10）
-    - min_queue_size: 触发自动批量处理的最小队列大小（默认 5）
     """
     
-    def __init__(self, router: 'ModelRouter', batch_size: int = 10):
-        self.router = router
+    def __init__(self, router: 'ModelRouter' = None, batch_size: int = 10):
+        # router 参数保留用于兼容性，但不再使用
         self.batch_size = batch_size
         self._pending_queue: list[dict] = []
         self._enhancement_count = 0
@@ -164,16 +107,17 @@ class DescriptionEnhancerService:
         items_to_process = self._pending_queue[:max_items] if max_items else self._pending_queue[:]
         self._pending_queue = self._pending_queue[len(items_to_process):]
         
-        logger.info(f"[描述增强] 开始批量处理 {len(items_to_process)} 个物种")
+        logger.info(f"[描述增强] 开始批量处理 {len(items_to_process)} 个物种 (规则模式)")
         
         enhanced_species = []
         tasks = []
         
         for entry in items_to_process:
+            # 规则处理非常快，其实不需要 async，但为了保持接口一致，wrap 一下
             task = self._enhance_entry_async(entry, timeout_per_item)
             tasks.append(task)
         
-        # 并发执行（带超时）
+        # 并发执行
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         for entry, result in zip(items_to_process, results):
@@ -200,20 +144,7 @@ class DescriptionEnhancerService:
         fertility: float = 1.0,
         timeout: float = 30.0,
     ) -> Species | None:
-        """立即增强单个物种的描述
-        
-        Args:
-            species: 需要增强描述的物种
-            parent: 父系物种（分化时）
-            speciation_type: 分化类型
-            is_hybrid: 是否为杂交物种
-            parent2: 第二亲本（杂交时）
-            fertility: 杂交可育性
-            timeout: 超时时间
-            
-        Returns:
-            增强后的物种（原地修改），失败返回 None
-        """
+        """立即增强单个物种的描述"""
         entry = {
             "species": species,
             "parent": parent,
@@ -229,191 +160,107 @@ class DescriptionEnhancerService:
         entry: dict,
         timeout: float,
     ) -> Species | None:
-        """处理单个队列条目"""
+        """处理单个队列条目 (纯规则逻辑)"""
         species = entry["species"]
-        is_hybrid = entry["is_hybrid"]
         
         try:
-            if is_hybrid:
-                prompt = self._build_hybrid_prompt(entry)
-            else:
-                prompt = self._build_speciation_prompt(entry)
+            # 方案1：模板生成描述
+            description = self._generate_template_description(entry)
+            old_desc = species.description
+            species.description = description
             
-            # 调用 LLM（使用流式获取完整响应）
-            response = await asyncio.wait_for(
-                self._call_llm(prompt),
-                timeout=timeout,
+            # 方案2：向量遗传
+            self._apply_vector_inheritance(entry)
+            
+            vector_status = '成功' if species.ecological_vector else '跳过'
+            logger.debug(
+                f"[描述增强] {species.common_name} 生成完成: "
+                f"描述={len(description)}字, 向量={vector_status}"
             )
-            
-            if response and len(response) >= 50:  # 至少 50 字符
-                # 清理响应（去除可能的前缀/后缀）
-                description = self._clean_response(response)
+            return species
                 
-                # 更新物种描述
-                old_desc = species.description
-                species.description = description
-                
-                logger.info(
-                    f"[描述增强] 成功: {species.common_name}\n"
-                    f"  旧: {old_desc[:50]}...\n"
-                    f"  新: {description[:50]}..."
-                )
-                return species
-            else:
-                logger.warning(
-                    f"[描述增强] 响应过短: {species.common_name} - {len(response or '')} 字符"
-                )
-                return None
-                
-        except asyncio.TimeoutError:
-            logger.warning(f"[描述增强] 超时: {species.common_name}")
-            return None
         except Exception as e:
             logger.error(f"[描述增强] 异常: {species.common_name} - {e}")
             return None
-    
-    def _build_speciation_prompt(self, entry: dict) -> str:
-        """构建分化物种的描述增强 prompt"""
+
+    def _generate_template_description(self, entry: dict) -> str:
+        """方案1：基于规则模板生成描述"""
         species = entry["species"]
         parent = entry["parent"]
         speciation_type = entry["speciation_type"]
+        is_hybrid = entry["is_hybrid"]
         
-        # 提取关键特质
-        key_traits = self._format_key_traits(species)
+        # 基础信息
+        desc_parts = []
         
-        # 演化背景
-        if parent:
-            parent_name = parent.common_name
-            parent_code = parent.lineage_code
-            evolution_context = f"该物种从 {parent_name} 通过 {speciation_type} 演化而来。"
-        else:
-            parent_name = "未知祖先"
-            parent_code = "N/A"
-            evolution_context = f"该物种通过 {speciation_type} 演化形成。"
+        # 1. 开头：定义
+        habitat_map = {
+            "marine": "海洋", "freshwater": "淡水", "terrestrial": "陆生",
+            "amphibious": "两栖", "aerial": "飞行", "deep_sea": "深海", "coastal": "沿岸"
+        }
+        diet_map = {
+            "herbivore": "植食性", "carnivore": "肉食性", "omnivore": "杂食性",
+            "detritivore": "腐食性", "autotroph": "自养"
+        }
         
-        return DESCRIPTION_ENHANCE_PROMPT.format(
-            common_name=species.common_name,
-            latin_name=species.latin_name,
-            lineage_code=species.lineage_code,
-            habitat_type=species.habitat_type or "未知",
-            trophic_level=species.trophic_level,
-            diet_type=species.diet_type or "未知",
-            evolution_context=evolution_context,
-            parent_name=parent_name,
-            parent_code=parent_code,
-            speciation_type=speciation_type,
-            key_traits=key_traits,
-        )
-    
-    def _build_hybrid_prompt(self, entry: dict) -> str:
-        """构建杂交物种的描述增强 prompt"""
+        h_str = habitat_map.get(species.habitat_type, species.habitat_type)
+        d_str = diet_map.get(species.diet_type, species.diet_type)
+        
+        desc_parts.append(f"{species.common_name}是一种生活在{h_str}环境中的{d_str}生物。")
+        
+        # 2. 演化/来源
+        if is_hybrid:
+            p1 = entry.get("parent")
+            p2 = entry.get("parent2")
+            p1_name = p1.common_name if p1 else "未知物种"
+            p2_name = p2.common_name if p2 else "未知物种"
+            desc_parts.append(f"作为{p1_name}与{p2_name}的杂交后代，它继承了双亲的特征。")
+        elif parent:
+            desc_parts.append(f"它由{parent.common_name}通过{speciation_type}分化而来。")
+        
+        # 3. 特质描述
+        traits = species.abstract_traits or {}
+        if traits:
+            # 找显著特质
+            high_traits = [k for k, v in traits.items() if v > 7.0]
+            if high_traits:
+                desc_parts.append(f"该物种具有显著的{'、'.join(high_traits[:3])}。")
+        
+        # 4. 结尾
+        desc_parts.append("其生理结构已适应当前的生态位。")
+        
+        return "".join(desc_parts)
+
+    def _apply_vector_inheritance(self, entry: dict) -> None:
+        """方案2：向量遗传算法"""
         species = entry["species"]
         parent = entry["parent"]
-        parent2 = entry["parent2"]
-        fertility = entry["fertility"]
+        is_hybrid = entry["is_hybrid"]
         
-        # 提取关键特质
-        key_traits = self._format_key_traits(species)
+        new_vector = None
         
-        # 亲本信息
-        if parent:
-            parent1_name = parent.common_name
-            parent1_code = parent.lineage_code
-        else:
-            parent1_name = "未知亲本A"
-            parent1_code = "N/A"
-        
-        if parent2:
-            parent2_name = parent2.common_name
-            parent2_code = parent2.lineage_code
-        else:
-            parent2_name = "未知亲本B"
-            parent2_code = "N/A"
-        
-        return HYBRID_DESCRIPTION_PROMPT.format(
-            common_name=species.common_name,
-            latin_name=species.latin_name,
-            lineage_code=species.lineage_code,
-            habitat_type=species.habitat_type or "未知",
-            trophic_level=species.trophic_level,
-            diet_type=species.diet_type or "未知",
-            parent1_name=parent1_name,
-            parent1_code=parent1_code,
-            parent2_name=parent2_name,
-            parent2_code=parent2_code,
-            fertility=fertility,
-            key_traits=key_traits,
-        )
-    
-    def _format_key_traits(self, species: Species) -> str:
-        """格式化关键特质用于 prompt"""
-        traits = species.abstract_traits or {}
-        if not traits:
-            return "暂无特质数据"
-        
-        # 选择最高和最低的几个特质
-        sorted_traits = sorted(traits.items(), key=lambda x: x[1], reverse=True)
-        high_traits = sorted_traits[:3]  # 最高的3个
-        low_traits = sorted_traits[-2:]  # 最低的2个
-        
-        lines = []
-        lines.append("【优势特质】")
-        for name, value in high_traits:
-            lines.append(f"  - {name}: {value:.1f}")
-        lines.append("【劣势特质】")
-        for name, value in low_traits:
-            lines.append(f"  - {name}: {value:.1f}")
-        
-        return "\n".join(lines)
-    
-    async def _call_llm(self, prompt: str) -> str | None:
-        """调用 LLM 获取描述"""
-        try:
-            messages = [{"role": "user", "content": prompt}]
+        if is_hybrid:
+            parent2 = entry.get("parent2")
+            if parent and parent2 and parent.ecological_vector and parent2.ecological_vector:
+                # 杂交：加权平均
+                v1 = parent.ecological_vector
+                v2 = parent2.ecological_vector
+                if len(v1) == len(v2):
+                    # 加上一点随机扰动体现变异
+                    new_vector = [
+                        (a + b) / 2.0 + random.gauss(0, 0.01) 
+                        for a, b in zip(v1, v2)
+                    ]
+        elif parent and parent.ecological_vector:
+            # 分化：父系向量 + 噪声
+            noise_scale = 0.05
+            new_vector = [
+                v + random.gauss(0, noise_scale) 
+                for v in parent.ecological_vector
+            ]
             
-            # 使用流式调用收集完整响应
-            full_response = []
-            async for chunk in self.router.complete(
-                messages,
-                capability="speciation",  # 使用分化能力的配置
-                temperature=0.8,
-                max_tokens=300,
-            ):
-                if chunk:
-                    full_response.append(chunk)
-            
-            return "".join(full_response)
-        except Exception as e:
-            logger.error(f"[描述增强] LLM 调用失败: {e}")
-            return None
-    
-    def _clean_response(self, response: str) -> str:
-        """清理 LLM 响应"""
-        # 去除可能的 markdown 代码块
-        if response.startswith("```"):
-            lines = response.split("\n")
-            # 去除首尾的 ``` 行
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            response = "\n".join(lines)
-        
-        # 去除可能的引号包裹
-        response = response.strip()
-        if response.startswith('"') and response.endswith('"'):
-            response = response[1:-1]
-        
-        # 去除可能的前缀
-        prefixes_to_remove = [
-            "描述：", "描述:", "Description:", "物种描述：",
-            "以下是", "生物学描述：",
-        ]
-        for prefix in prefixes_to_remove:
-            if response.startswith(prefix):
-                response = response[len(prefix):].strip()
-        
-        return response.strip()
+        if new_vector:
+            species.ecological_vector = new_vector
     
     def get_stats(self) -> dict:
         """获取统计信息"""
@@ -425,5 +272,5 @@ class DescriptionEnhancerService:
 
 def create_description_enhancer(router: 'ModelRouter') -> DescriptionEnhancerService:
     """创建描述增强服务实例"""
-    return DescriptionEnhancerService(router)
-
+    # router 仅用于兼容接口，不再传递
+    return DescriptionEnhancerService(router=None)
