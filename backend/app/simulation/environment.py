@@ -326,7 +326,7 @@ class EnvironmentSystem:
         - Tier 3: x3.0 (毁灭性加成)
         """
         from .constants import (
-            get_pressure_tier_multiplier,
+            get_intensity_multiplier,
             PRESSURE_TYPE_TIERS,
             PRESSURE_TYPE_TIER_MODIFIERS
         )
@@ -335,7 +335,7 @@ class EnvironmentSystem:
         
         for item in parsed:
             # 1. 获取强度滑块带来的倍率 (Intensity Multiplier)
-            intensity_mult = get_pressure_tier_multiplier(item.intensity)
+            intensity_mult = get_intensity_multiplier(item.intensity)
             
             # 2. 获取压力类型本身的等级带来的效果倍率 (Type Tier Modifier)
             # 默认为 Tier 2 (中等)

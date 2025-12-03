@@ -194,8 +194,8 @@ class DivineEnergyService:
             
             # 【修改】针对环境压力应用分级倍率
             if action == "pressure" and cost_def.multiplier_field == "intensity":
-                from ...simulation.constants import get_pressure_tier_multiplier
-                tier_mult = get_pressure_tier_multiplier(int(multiplier))
+                from ...simulation.constants import get_intensity_multiplier
+                tier_mult = get_intensity_multiplier(int(multiplier))
                 return int(base * multiplier * tier_mult)
                 
             return int(base * multiplier)
@@ -219,7 +219,7 @@ class DivineEnergyService:
             TIER_1_BASE_COST,
             TIER_2_BASE_COST,
             TIER_3_BASE_COST,
-            get_pressure_tier_multiplier
+            get_intensity_multiplier
         )
         
         total = 0
@@ -240,7 +240,7 @@ class DivineEnergyService:
                 base_cost = TIER_3_BASE_COST
             
             # 2. 获取强度倍率 (针对 intensity 1-10 的非线性倍率)
-            intensity_mult = get_pressure_tier_multiplier(intensity)
+            intensity_mult = get_intensity_multiplier(intensity)
             
             # 3. 计算单项消耗 = 基础消耗 * 强度 * 强度倍率
             cost = int(base_cost * intensity * intensity_mult)
