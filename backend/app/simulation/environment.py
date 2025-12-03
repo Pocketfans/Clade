@@ -68,7 +68,7 @@ PRESSURE_TO_MODIFIER_MAP = {
         "storm_damage": 1.0,   # 物理破坏
         "flood": 0.5,          # 暴雨洪涝
         "habitat_fragmentation": 0.4,  # 栖息地破碎
-        "mortality_spike": 0.5,  # 【增强】直接死亡（从0.3提高到0.5）
+        "mortality_spike": 0.3,  # 【平衡】从0.5降低到0.3
     },
     
     # ============================================================
@@ -82,8 +82,8 @@ PRESSURE_TO_MODIFIER_MAP = {
         "sulfur_aerosol": 0.8, # 硫酸盐气溶胶
         "acidity": 0.4,        # 酸雨
         "light_reduction": 0.5, # 火山灰遮光
-        "mortality_spike": 0.5, # 【新增】直接死亡率：高强度火山喷发直接杀伤
-        "toxin_level": 0.4,    # 【新增】火山毒气（SO2、HF等）
+        "mortality_spike": 0.35, # 【平衡】从0.5降低到0.35
+        "toxin_level": 0.3,    # 【平衡】从0.4降低到0.3
     },
     "orogeny": {              # 造山期（如喜马拉雅造山）
         "tectonic": 1.0,       # 构造活动
@@ -119,7 +119,7 @@ PRESSURE_TO_MODIFIER_MAP = {
         "tectonic": 0.8,       # 构造活动
         "habitat_fragmentation": 0.6,  # 地形破碎
         "landslide_risk": 0.7, # 滑坡风险
-        "mortality_spike": 0.4,  # 【增强】直接死亡（从0.2提高到0.4）
+        "mortality_spike": 0.25,  # 【平衡】从0.4降低到0.25
     },
     
     # ============================================================
@@ -165,13 +165,13 @@ PRESSURE_TO_MODIFIER_MAP = {
     },
     "disease_outbreak": {     # 疾病爆发
         "disease": 1.0,        # 疾病压力
-        "mortality_spike": 0.7,  # 高死亡率
+        "mortality_spike": 0.4,  # 【平衡】从0.7降低到0.4
         "social_disruption": 0.4,  # 社会行为打乱
         "immune_stress": 0.5,  # 免疫系统压力
     },
     "wildfire_period": {      # 野火肆虐期
         "wildfire": 1.0,       # 火灾强度
-        "mortality_spike": 0.6,  # 直接死亡
+        "mortality_spike": 0.4,  # 【平衡】从0.6降低到0.4
         "habitat_loss": 0.7,   # 栖息地丧失
         "resource_decline": 0.5,  # 食物减少
         "regeneration_opportunity": 0.3,  # 先锋物种机会
@@ -195,7 +195,7 @@ PRESSURE_TO_MODIFIER_MAP = {
     },
     "anoxic_event": {         # 缺氧事件（OAE）
         "oxygen": -1.0,        # 氧气骤降
-        "mortality_spike": 0.8,  # 大规模窒息
+        "mortality_spike": 0.5,  # 【平衡】从0.8降低到0.5，避免一击必杀
         "sulfide_production": 0.4,  # 厌氧菌产硫化氢
         "deep_water_anoxia": 0.9,  # 深层缺氧
     },
@@ -203,7 +203,7 @@ PRESSURE_TO_MODIFIER_MAP = {
         "sulfide": 1.0,        # 硫化氢浓度
         "toxicity": 0.9,       # 剧毒
         "oxygen": -0.5,        # 伴随缺氧
-        "mortality_spike": 0.8,  # 大规模死亡
+        "mortality_spike": 0.5,  # 【平衡】从0.8降低到0.5
     },
     "uv_radiation_increase": { # 紫外辐射增强（臭氧减少）
         "uv_radiation": 1.0,   # UV-B增强
@@ -225,10 +225,10 @@ PRESSURE_TO_MODIFIER_MAP = {
     
     # ============================================================
     # === 新增：末日级天灾 ===
-    # 这些是最高级别的毁灭性事件
+    # 这些是最高级别的毁灭性事件，保持较高但合理的系数
     # ============================================================
     "meteor_impact": {        # 陨石撞击（如K-Pg灭绝事件）
-        "mortality_spike": 1.0,     # 直接大规模死亡
+        "mortality_spike": 0.8,     # 【平衡】从1.0降低到0.8，大灾难但不是100%
         "temperature": -0.8,        # 撞击冬天
         "light_reduction": 1.0,     # 尘埃遮天蔽日
         "wildfire": 0.6,            # 撞击引发大火
@@ -237,7 +237,7 @@ PRESSURE_TO_MODIFIER_MAP = {
         "resource_decline": 0.9,    # 食物链崩溃
     },
     "gamma_ray_burst": {      # 伽马射线暴（奥陶纪灭绝假说之一）
-        "mortality_spike": 1.0,     # 直接辐射杀伤
+        "mortality_spike": 0.8,     # 【平衡】从1.0降低到0.8
         "uv_radiation": 1.0,        # 臭氧层被破坏
         "dna_damage": 1.0,          # 严重基因损伤
         "mutation_rate": 0.8,       # 突变率暴增

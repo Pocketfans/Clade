@@ -258,12 +258,12 @@ class ReproductionConfig(BaseModel):
     
     # ========== 【新增v7】高死亡率繁殖惩罚 ==========
     # 死亡率惩罚阈值：超过此值开始降低繁殖效率
-    mortality_penalty_threshold: float = 0.5  # 从0.4提升到0.5，更宽容
+    mortality_penalty_threshold: float = 0.55  # 【平衡】从0.5提升到0.55，更宽容
     # 死亡率惩罚系数：每超过阈值10%，繁殖效率降低此比例
-    mortality_penalty_rate: float = 0.2  # 从0.3降低到0.2，减少死亡螺旋
+    mortality_penalty_rate: float = 0.15  # 【平衡】从0.2降低到0.15，减少死亡螺旋
 
     # 极端死亡率阈值：超过此值繁殖效率直接减半
-    extreme_mortality_threshold: float = 0.7
+    extreme_mortality_threshold: float = 0.80  # 【平衡】从0.7提升到0.8
 
 
 class MortalityConfig(BaseModel):
