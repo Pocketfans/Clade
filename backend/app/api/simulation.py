@@ -482,6 +482,10 @@ async def create_save(
                 lineage_code = f"{available_codes[i]}1"
                 species = species_generator.generate_from_prompt(prompt, lineage_code)
                 species_repo.upsert(species)
+        elif request.scenario == "繁荣生态":
+            logger.info(f"[存档API] 繁荣生态剧本，加载15个物种...")
+            from ..core.seed import seed_thriving_ecosystem
+            seed_thriving_ecosystem()
         else:
             from ..core.seed import seed_defaults
             seed_defaults()

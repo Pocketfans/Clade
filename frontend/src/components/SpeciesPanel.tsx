@@ -101,6 +101,31 @@ const roleConfig: Record<string, {
   }
 };
 
+// 根据营养级获取生态角色（与族谱保持一致）
+function getRoleFromTrophicLevel(trophicLevel: number | undefined): string {
+  const t = trophicLevel ?? 1.0;
+  if (t < 1.5) return 'producer';      // T < 1.5: 生产者
+  if (t < 2.0) return 'mixotroph';     // 1.5 ≤ T < 2.0: 混合营养
+  if (t < 2.8) return 'herbivore';     // 2.0 ≤ T < 2.8: 草食者
+  if (t < 3.5) return 'omnivore';      // 2.8 ≤ T < 3.5: 杂食者
+  return 'carnivore';                   // T ≥ 3.5: 肉食者
+}
+
+// 获取角色配置（优先使用营养级判断）
+function getRoleConfig(ecologicalRole: string | undefined, trophicLevel: number | undefined) {
+  // 优先使用营养级来判断角色
+  if (trophicLevel !== undefined && trophicLevel > 0) {
+    const roleKey = getRoleFromTrophicLevel(trophicLevel);
+    return roleConfig[roleKey] || roleConfig.unknown;
+  }
+  // 如果没有营养级，尝试使用 ecological_role
+  if (ecologicalRole) {
+    const role = roleConfig[ecologicalRole.toLowerCase()];
+    if (role) return role;
+  }
+  return roleConfig.unknown;
+}
+
 // 状态配置
 const statusConfig: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
   alive: { label: "存活", color: "#22c55e", bg: "rgba(34, 197, 94, 0.12)", icon: <Heart size={12} /> },
@@ -365,7 +390,7 @@ export function SpeciesPanel({
       {/* 物种卡片列表 */}
       <div className="sp-card-list">
         {filteredList.map((s, index) => {
-          const role = roleConfig[s.ecological_role?.toLowerCase()] || roleConfig.unknown;
+          const role = getRoleConfig(s.ecological_role, s.trophic_level);
           const prevPop = previousPopulations.get(s.lineage_code);
           const trend = getTrend(s.population, prevPop, s.status);
           const TrendIcon = trend.icon;
@@ -599,7 +624,7 @@ export function SpeciesPanel({
       })),
     ];
 
-    const role = roleConfig[snapshot?.ecological_role?.toLowerCase() || "unknown"] || roleConfig.unknown;
+    const role = getRoleConfig(snapshot?.ecological_role, snapshot?.trophic_level);
     const prevPop = previousPopulations.get(species.lineage_code);
     const trend = snapshot ? getTrend(snapshot.population, prevPop, snapshot.status) : null;
     const statusCfg = statusConfig[species.status] || statusConfig.alive;

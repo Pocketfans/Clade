@@ -1326,6 +1326,11 @@ async def create_save(request: CreateSaveRequest) -> dict:
                 species = species_generator.generate_from_prompt(prompt, lineage_code)
                 species_repository.upsert(species)
                 logger.debug(f"[存档API] 生成物种: {species.lineage_code} - {species.common_name}")
+        elif request.scenario == "繁荣生态":
+            # 繁荣生态剧本：15个物种的成熟生态系统
+            logger.info(f"[存档API] 繁荣生态剧本，加载15个物种...")
+            from ..core.seed import seed_thriving_ecosystem
+            seed_thriving_ecosystem()
         else:
             # 原初大陆：使用默认物种
             logger.info(f"[存档API] 原初大陆，加载默认物种...")

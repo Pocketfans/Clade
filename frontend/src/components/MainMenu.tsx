@@ -25,6 +25,7 @@ import {
   Star,
   Info,
   ExternalLink,
+  TreeDeciduous,
 } from "lucide-react";
 
 import type { UIConfig, SaveMetadata } from "@/services/api.types";
@@ -56,7 +57,7 @@ const FEATURES = [
 ];
 
 export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
-  const [stage, setStage] = useState<"root" | "create" | "load" | "blank">("root");
+  const [stage, setStage] = useState<"root" | "create" | "load" | "blank" | "thriving">("root");
   const [saves, setSaves] = useState<SaveMetadata[]>([]);
   const [saveName, setSaveName] = useState("");
   const [mapSeed, setMapSeed] = useState("");
@@ -405,6 +406,21 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
                   <div className="mm-card-shine" />
                 </div>
 
+                <div className="mm-card thriving" onClick={() => setStage("thriving")}>
+                  <div className="mm-card-bg" />
+                  <div className="mm-card-content">
+                    <div className="mm-card-icon thriving">
+                      <TreeDeciduous size={28} />
+                    </div>
+                    <div className="mm-card-text">
+                      <h3>繁荣生态 · 万物竞生</h3>
+                      <p>成熟生态系统。15个物种覆盖海陆深海，含顶级掠食者与共生关系，体验复杂食物网。</p>
+                    </div>
+                    <div className="mm-card-tag thriving">高级</div>
+                  </div>
+                  <div className="mm-card-shine" />
+                </div>
+
                 <div className="mm-card variant" onClick={() => setStage("blank")}>
                   <div className="mm-card-bg" />
                   <div className="mm-card-content">
@@ -476,6 +492,78 @@ export function MainMenu({ onStart, onOpenSettings, uiConfig }: Props) {
                     <>
                       <span className="mm-spinner" />
                       <span>正在创世纪...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play size={18} />
+                      <span>启动模拟</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* 繁荣生态剧本创建 */}
+            {stage === "thriving" && (
+              <div className="mm-form">
+                <div className="mm-form-header">
+                  <h2>繁荣生态配置</h2>
+                  <button className="mm-back-btn" onClick={() => setStage("root")}>
+                    <ArrowLeft size={16} />
+                    <span>返回</span>
+                  </button>
+                </div>
+                
+                <div className="mm-form-body">
+                  <div className="mm-field">
+                    <label>存档名称</label>
+                    <input
+                      type="text"
+                      value={saveName}
+                      onChange={(e) => setSaveName(e.target.value)}
+                      placeholder="为这个繁荣世界命名..."
+                      autoFocus
+                    />
+                  </div>
+
+                  <div className="mm-field">
+                    <label>
+                      地图种子
+                      <span className="mm-field-hint">选填，留空则随机生成</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={mapSeed}
+                      onChange={(e) => setMapSeed(e.target.value.replace(/\D/g, ''))}
+                      placeholder="例如: 12345"
+                    />
+                  </div>
+
+                  <div className="mm-scenario-preview thriving">
+                    <div className="mm-scenario-icon"><TreeDeciduous size={20} /></div>
+                    <div className="mm-scenario-info">
+                      <span className="mm-scenario-title">剧本：繁荣生态</span>
+                      <span className="mm-scenario-desc">
+                        15个物种的成熟生态系统，包括：
+                        <br />• 4种生产者（海洋藻类、陆地苔藓、淡水蓝藻、深海热泉菌）
+                        <br />• 4种初级消费者（纤毛虫、腹足类、水蚤、节肢动物）
+                        <br />• 3种次级消费者（水母、鹦鹉螺、两栖蠕虫）
+                        <br />• 2种顶级掠食者（奇虾、巨型蜈蚣）
+                        <br />• 2种特殊生态位（分解细菌、深海管虫）
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  className="mm-submit-btn thriving"
+                  onClick={() => handleCreateSave("繁荣生态")}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <>
+                      <span className="mm-spinner" />
+                      <span>正在构建生态...</span>
                     </>
                   ) : (
                     <>

@@ -485,6 +485,10 @@
   animation-delay: 0.1s;
 }
 
+.mm-card:nth-child(3) {
+  animation-delay: 0.2s;
+}
+
 .mm-card-bg {
   position: absolute;
   inset: 0;
@@ -565,6 +569,46 @@
   box-shadow: 0 8px 25px rgba(139, 92, 246, 0.4);
 }
 
+/* 繁荣生态卡片样式 */
+.mm-card.thriving .mm-card-bg {
+  background: 
+    radial-gradient(circle at top right, rgba(251, 191, 36, 0.1), transparent 50%),
+    radial-gradient(circle at bottom left, rgba(34, 197, 94, 0.1), transparent 50%);
+}
+
+.mm-card.thriving:hover {
+  border-color: rgba(251, 191, 36, 0.35);
+  box-shadow: 
+    0 20px 50px rgba(0, 0, 0, 0.4),
+    0 0 40px rgba(251, 191, 36, 0.12);
+}
+
+.mm-card-icon.thriving {
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.15), rgba(34, 197, 94, 0.1));
+  border-color: rgba(251, 191, 36, 0.25);
+  color: #fbbf24;
+  box-shadow: 0 4px 15px rgba(251, 191, 36, 0.15);
+}
+
+.mm-card.thriving:hover .mm-card-icon {
+  background: linear-gradient(135deg, #fbbf24, #22c55e);
+  border-color: transparent;
+  color: #0a0d08;
+  box-shadow: 0 8px 25px rgba(251, 191, 36, 0.4);
+}
+
+.mm-card.thriving .mm-card-text h3 {
+  background: linear-gradient(135deg, var(--text-primary) 0%, #fbbf24 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+.mm-card.thriving:hover .mm-card-text h3 {
+  background: linear-gradient(135deg, #fbbf24 0%, #22c55e 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
 .mm-card-text {
   flex: 1;
 }
@@ -624,6 +668,12 @@
   background: rgba(139, 92, 246, 0.15);
   border-color: rgba(139, 92, 246, 0.3);
   color: #a78bfa;
+}
+
+.mm-card-tag.thriving {
+  background: rgba(251, 191, 36, 0.15);
+  border-color: rgba(251, 191, 36, 0.3);
+  color: #fbbf24;
 }
 
 .mm-card-shine {
@@ -779,6 +829,22 @@
 .mm-scenario-desc {
   font-size: 0.8rem;
   color: rgba(240, 244, 232, 0.5);
+  line-height: 1.6;
+}
+
+/* 繁荣生态剧本预览 */
+.mm-scenario-preview.thriving {
+  background: rgba(251, 191, 36, 0.05);
+  border-color: rgba(251, 191, 36, 0.15);
+}
+
+.mm-scenario-preview.thriving .mm-scenario-icon {
+  background: rgba(251, 191, 36, 0.1);
+  color: #fbbf24;
+}
+
+.mm-scenario-preview.thriving .mm-scenario-title {
+  color: rgba(251, 191, 36, 0.9);
 }
 
 .mm-submit-btn {
@@ -811,6 +877,15 @@
 
 .mm-submit-btn.success:hover:not(:disabled) {
   box-shadow: 0 8px 30px rgba(139, 92, 246, 0.4);
+}
+
+.mm-submit-btn.thriving {
+  background: linear-gradient(135deg, #fbbf24, #22c55e);
+  box-shadow: 0 4px 20px rgba(251, 191, 36, 0.3);
+}
+
+.mm-submit-btn.thriving:hover:not(:disabled) {
+  box-shadow: 0 8px 30px rgba(251, 191, 36, 0.4);
 }
 
 .mm-submit-btn:disabled {
