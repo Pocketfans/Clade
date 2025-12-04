@@ -2,6 +2,7 @@ import type { TurnReport } from "@/services/api.types";
 import { X } from "lucide-react";
 import { useState } from "react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { EcologicalRealismSummary } from "./EcologicalRealismSummary";
 
 interface Props {
   report: TurnReport;
@@ -217,6 +218,30 @@ export function TurnSummaryModal({ report, previousReport, onClose }: Props) {
               </div>
             )}
           </section>
+          
+          {/* 生态拟真统计 */}
+          {report.ecological_realism && (
+            <section style={{ marginBottom: "32px" }}>
+              <h3 
+                style={{
+                  fontSize: "1.3rem",
+                  fontWeight: 600,
+                  color: "#22c55e",
+                  marginBottom: "16px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  cursor: "pointer"
+                }}
+                onClick={() => toggleSection("ecological")}
+              >
+                🌍 生态拟真 {expandedSection === "ecological" ? "▼" : "▶"}
+              </h3>
+              {expandedSection === "ecological" && (
+                <EcologicalRealismSummary data={report.ecological_realism} />
+              )}
+            </section>
+          )}
           
           {/* 回合叙事 */}
           <section style={{ marginBottom: "32px" }}>

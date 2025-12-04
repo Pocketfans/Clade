@@ -71,6 +71,49 @@ export function formatRelativeTime(isoString: string): string {
   }
 }
 
+// 生态拟真快照 - 物种级别
+export interface EcologicalRealismSnapshot {
+  // Allee 效应
+  is_below_mvp: boolean;                // 是否低于最小可存活种群
+  allee_reproduction_modifier: number;  // 繁殖率修正 (0-1)
+  
+  // 密度依赖疾病
+  disease_pressure: number;             // 疾病压力 (0-1)
+  disease_mortality_modifier: number;   // 疾病死亡率修正
+  
+  // 环境波动
+  env_fluctuation_modifier: number;     // 环境波动修正
+  
+  // 同化效率
+  assimilation_efficiency: number;      // 能量同化效率 (0.05-0.35)
+  
+  // 适应滞后
+  adaptation_penalty: number;           // 适应滞后惩罚 (0-0.3)
+  
+  // 互利共生
+  mutualism_benefit: number;            // 共生收益/惩罚
+  mutualism_partners: string[];         // 共生伙伴代码列表
+}
+
+// 生态拟真汇总 - 回合级别
+export interface EcologicalRealismSummary {
+  // Allee 效应统计
+  allee_affected_count: number;         // 受 Allee 效应影响的物种数
+  allee_affected_species: string[];     // 受影响物种代码列表
+  
+  // 疾病压力统计
+  disease_affected_count: number;       // 受疾病压力影响的物种数
+  avg_disease_pressure: number;         // 平均疾病压力
+  
+  // 互利共生统计
+  mutualism_links_count: number;        // 共生关系数量
+  mutualism_species_count: number;      // 参与共生的物种数
+  
+  // 环境压力统计
+  adaptation_stressed_count: number;    // 受适应滞后影响的物种数
+  avg_env_modifier: number;             // 平均环境波动修正
+}
+
 export interface SpeciesSnapshot {
   lineage_code: string;
   latin_name: string;
@@ -106,6 +149,9 @@ export interface SpeciesSnapshot {
   worst_tile_rate?: number;  // 最高死亡率
   has_refuge?: boolean;  // 是否有避难所
   distribution_status?: string;  // 分布状态
+  
+  // 生态拟真状态
+  ecological_realism?: EcologicalRealismSnapshot | null;
 }
 
 export interface BackgroundSummary {
@@ -251,6 +297,7 @@ export interface TurnReport {
   global_temperature: number;
   tectonic_stage?: string; // 新增：地质阶段
   extinction_count?: number; // 本回合灭绝物种数量
+  ecological_realism?: EcologicalRealismSummary | null; // 生态拟真统计
 }
 
 export interface LineageNode {

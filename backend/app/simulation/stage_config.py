@@ -827,6 +827,9 @@ def _register_default_stages() -> None:
     # 导入生态智能体阶段
     from ..services.intelligence.stage import EcologicalIntelligenceStage
     
+    # 导入生态拟真阶段
+    from .ecological_realism_stage import EcologicalRealismStage
+    
     # 核心阶段
     stage_registry.register("init", InitStage)
     stage_registry.register("parse_pressures", ParsePressuresStage)
@@ -835,6 +838,7 @@ def _register_default_stages() -> None:
     stage_registry.register("fetch_species", FetchSpeciesStage)
     stage_registry.register("food_web", FoodWebStage)
     stage_registry.register("tiering_and_niche", TieringAndNicheStage)
+    stage_registry.register("ecological_realism", EcologicalRealismStage)  # 生态拟真
     stage_registry.register("preliminary_mortality", PreliminaryMortalityStage)
     stage_registry.register("prey_distribution", PreyDistributionStage)
     stage_registry.register("migration", MigrationStage)

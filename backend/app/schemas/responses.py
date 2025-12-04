@@ -6,6 +6,30 @@ from typing import Sequence
 from pydantic import BaseModel, Field
 
 
+class EcologicalRealismSnapshot(BaseModel):
+    """物种的生态拟真状态快照"""
+    # Allee 效应
+    is_below_mvp: bool = False            # 是否低于最小可存活种群
+    allee_reproduction_modifier: float = 1.0  # 繁殖率修正 (0-1)
+    
+    # 密度依赖疾病
+    disease_pressure: float = 0.0         # 疾病压力 (0-1)
+    disease_mortality_modifier: float = 0.0  # 疾病死亡率修正
+    
+    # 环境波动
+    env_fluctuation_modifier: float = 1.0  # 环境波动修正
+    
+    # 同化效率
+    assimilation_efficiency: float = 0.10  # 能量同化效率 (0.05-0.35)
+    
+    # 适应滞后
+    adaptation_penalty: float = 0.0        # 适应滞后惩罚 (0-0.3)
+    
+    # 互利共生
+    mutualism_benefit: float = 0.0         # 共生收益/惩罚
+    mutualism_partners: list[str] = []     # 共生伙伴代码列表
+
+
 class SpeciesSnapshot(BaseModel):
     lineage_code: str
     latin_name: str
@@ -41,6 +65,9 @@ class SpeciesSnapshot(BaseModel):
     worst_tile_rate: float = 1.0      # 最高死亡率（最差地块）
     has_refuge: bool = True           # 是否有避难所
     distribution_status: str = ""     # 分布状态：稳定/警告/部分危机/全域危机
+    
+    # 【新增v4】生态拟真状态
+    ecological_realism: EcologicalRealismSnapshot | None = None
 
 
 class BranchingEvent(BaseModel):
@@ -168,6 +195,25 @@ class EcosystemMetrics(BaseModel):
     average_body_length_cm: float = 0.0
 
 
+class EcologicalRealismSummary(BaseModel):
+    """生态拟真系统整体统计"""
+    # Allee 效应统计
+    allee_affected_count: int = 0         # 受 Allee 效应影响的物种数
+    allee_affected_species: list[str] = []  # 受影响物种代码列表
+    
+    # 疾病压力统计
+    disease_affected_count: int = 0       # 受疾病压力影响的物种数
+    avg_disease_pressure: float = 0.0     # 平均疾病压力
+    
+    # 互利共生统计
+    mutualism_links_count: int = 0        # 共生关系数量
+    mutualism_species_count: int = 0      # 参与共生的物种数
+    
+    # 环境压力统计
+    adaptation_stressed_count: int = 0    # 受适应滞后影响的物种数
+    avg_env_modifier: float = 1.0         # 平均环境波动修正
+
+
 class MapOverview(BaseModel):
     tiles: Sequence[MapTileInfo]
     habitats: Sequence[HabitatEntry]
@@ -193,6 +239,7 @@ class TurnReport(BaseModel):
     global_temperature: float = 15.0
     tectonic_stage: str = "稳定期"
     ecosystem_metrics: EcosystemMetrics | None = None
+    ecological_realism: EcologicalRealismSummary | None = None  # 【新增v4】生态拟真统计
 
 
 class LineageNode(BaseModel):

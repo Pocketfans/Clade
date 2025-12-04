@@ -1,0 +1,151 @@
+/**
+ * EcologicalRealismSummary 样式
+ *
+ * 回合级生态拟真汇总组件样式
+ */
+
+.eco-summary {
+  padding: 16px;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.04) 0%, rgba(59, 130, 246, 0.04) 100%);
+  border-radius: 12px;
+  border: 1px solid rgba(var(--foreground-rgb), 0.08);
+  margin-bottom: 16px;
+}
+
+.eco-summary-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(var(--foreground-rgb), 0.08);
+}
+
+.eco-summary-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.eco-summary-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(var(--foreground-rgb), 0.9);
+  flex: 1;
+}
+
+.eco-summary-alert {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+  animation: pulse-attention 2s ease-in-out infinite;
+}
+
+@keyframes pulse-attention {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* ============ 卡片网格 ============ */
+.eco-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 480px) {
+  .eco-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ============ 汇总卡片 ============ */
+.eco-summary-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(var(--foreground-rgb), 0.02);
+  border: 1px solid rgba(var(--foreground-rgb), 0.06);
+  border-radius: 10px;
+  transition: all 0.2s ease;
+}
+
+.eco-summary-card:hover {
+  background: rgba(var(--foreground-rgb), 0.04);
+}
+
+.eco-summary-card.warning {
+  border-color: rgba(234, 179, 8, 0.25);
+  background: rgba(234, 179, 8, 0.05);
+}
+
+.eco-summary-card.positive {
+  border-color: rgba(34, 197, 94, 0.25);
+  background: rgba(34, 197, 94, 0.05);
+}
+
+.eco-summary-card-icon {
+  font-size: 24px;
+  line-height: 1;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.eco-summary-card-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.eco-summary-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: rgba(var(--foreground-rgb), 0.55);
+  margin-bottom: 4px;
+}
+
+.eco-summary-card-value {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.eco-summary-card-value .safe {
+  color: #22c55e;
+}
+
+.eco-summary-card-value .danger {
+  color: #ef4444;
+}
+
+.eco-summary-card-value .positive {
+  color: #22c55e;
+}
+
+.eco-summary-card-value .neutral {
+  color: rgba(var(--foreground-rgb), 0.5);
+}
+
+.eco-summary-card-detail {
+  font-size: 11px;
+  color: rgba(var(--foreground-rgb), 0.5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

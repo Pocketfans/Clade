@@ -31,6 +31,9 @@ modes:
       - name: tiering_and_niche
         enabled: true
         order: 40
+      - name: ecological_realism
+        enabled: true  # 生态拟真：Allee效应、疾病、共生等
+        order: 45
       - name: preliminary_mortality
         enabled: true
         order: 50
@@ -138,6 +141,9 @@ modes:
       - name: tiering_and_niche
         enabled: true
         order: 40
+      - name: ecological_realism
+        enabled: true  # 生态拟真：Allee效应、疾病、共生等
+        order: 45
       - name: preliminary_mortality
         enabled: true
         order: 50
@@ -267,6 +273,9 @@ modes:
       - name: tiering_and_niche
         enabled: true
         order: 40
+      - name: ecological_realism
+        enabled: true  # 生态拟真：Allee效应、疾病、共生等
+        order: 45
       - name: preliminary_mortality
         enabled: true
         order: 50
@@ -412,6 +421,9 @@ modes:
       - name: tiering_and_niche
         enabled: true
         order: 40
+      - name: ecological_realism
+        enabled: true  # 生态拟真：Allee效应、疾病、共生等
+        order: 45
       - name: preliminary_mortality
         enabled: true
         order: 50

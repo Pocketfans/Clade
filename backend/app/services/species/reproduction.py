@@ -640,10 +640,26 @@ class ReproductionService:
                 by_trophic_range[t_range].append((species, suitability))
             
             # 3. 计算T1范围（1.0-1.5）的基础承载力
-            # 使用地块资源值计算（避免依赖全局资源管理器）
-            t1_base_capacity = tile.resources * 100_000
+            # 【改进v8】直接使用ResourceManager的计算结果，确保NPP逻辑统一
+            # 获取地块资源状态
+            from ..ecology.resource_manager import get_resource_manager
+            try:
+                # 尝试从容器或上下文获取资源管理器（这里暂时用单例模式回退）
+                resource_manager = get_resource_manager()
+                tile_state = resource_manager.get_tile_state(tile_id)
+                if tile_state:
+                    # 使用 T1 承载力 (kg)
+                    t1_base_capacity = tile_state.t1_capacity_kg
+                else:
+                    # 回退逻辑（如果未初始化）
+                    t1_base_capacity = tile.resources * 100_000
+            except Exception:
+                # 异常回退
+                t1_base_capacity = tile.resources * 100_000
             
             # 应用P2动态修正（环境变化）
+            # 注意：如果使用了 ResourceManager，这一步可能在 calculate_npp 中已经包含了部分环境影响
+            # 但这里是针对短期的剧烈波动（temp_change），可以保留作为额外修正
             if global_state:
                 temp_change = global_state.get("temp_change", 0.0)
                 sea_level_change = global_state.get("sea_level_change", 0.0)
@@ -1223,6 +1239,37 @@ class ReproductionService:
         # 综合增长倍数
         # 【v8新增】应用资源繁荣加成
         growth_multiplier = base_growth_multiplier * survival_modifier * resource_modifier * self.resource_boost
+        
+        # 【新增v12】生态拟真模块集成 (Ecological Realism)
+        # 从 context 获取语义驱动的繁殖率修正（Allee效应、环境波动、共生等）
+        eco_realism_data = getattr(self, '_ecological_realism_data', None)
+        if eco_realism_data:
+            lineage_code = species.lineage_code
+            eco_repro_modifier = 1.0
+            
+            # Allee 效应：小种群繁殖惩罚
+            allee_results = eco_realism_data.get("allee_results", {})
+            allee_data = allee_results.get(lineage_code, {})
+            allee_modifier = allee_data.get("reproduction_modifier", 1.0)
+            if allee_modifier < 1.0:
+                eco_repro_modifier *= allee_modifier
+                logger.debug(f"[生态拟真] {species.common_name} Allee效应修正: ×{allee_modifier:.2f}")
+            
+            # 环境波动修正
+            env_modifiers = eco_realism_data.get("env_modifiers", {})
+            env_mod = env_modifiers.get(lineage_code, 1.0)
+            if env_mod != 1.0:
+                eco_repro_modifier *= env_mod
+                logger.debug(f"[生态拟真] {species.common_name} 环境波动修正: ×{env_mod:.2f}")
+            
+            # 互利共生收益（提高繁殖率）
+            mutualism_benefits = eco_realism_data.get("mutualism_benefits", {})
+            mutualism = mutualism_benefits.get(lineage_code, 0.0)
+            if mutualism > 0:
+                eco_repro_modifier *= (1.0 + mutualism)
+                logger.debug(f"[生态拟真] {species.common_name} 共生收益修正: ×{1.0 + mutualism:.2f}")
+            
+            growth_multiplier *= eco_repro_modifier
         
         # 限制单回合增长倍数（从配置读取）
         try:

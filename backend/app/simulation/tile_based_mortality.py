@@ -2141,12 +2141,24 @@ class TileBasedMortalityEngine:
         code_to_idx = {sp.lineage_code: idx for idx, sp in enumerate(species_list)}
         predation_matrix = np.zeros((n_species, n_species), dtype=np.float32)
         
+        # 【新增v12】获取空间捕食效率修正（从生态拟真数据）
+        spatial_efficiency_data = {}
+        if hasattr(self, '_ecological_realism_data') and self._ecological_realism_data:
+            spatial_efficiency_data = self._ecological_realism_data.get("spatial_predation_efficiency", {})
+        
         for sp_idx, species in enumerate(species_list):
             for prey_code in (species.prey_species or []):
                 prey_idx = code_to_idx.get(prey_code)
                 if prey_idx is not None:
                     preference = (species.prey_preferences or {}).get(prey_code, 0.5)
-                    predation_matrix[sp_idx, prey_idx] = preference
+                    
+                    # 【新增v12】应用空间捕食效率修正
+                    # 捕食效率受地理重叠程度影响（来自语义驱动的生态拟真模块）
+                    efficiency_key = f"{species.lineage_code}_{prey_code}"
+                    spatial_efficiency = spatial_efficiency_data.get(efficiency_key, 1.0)
+                    
+                    # 最终捕食强度 = 偏好度 × 空间效率
+                    predation_matrix[sp_idx, prey_idx] = preference * spatial_efficiency
         
         # ========== 2. 获取物种属性向量 ==========
         trophic_levels = species_arrays['trophic_level']
@@ -2702,6 +2714,48 @@ class TileBasedMortalityEngine:
                     exclusion_penalty = 0.20  # 额外+20%
                     evolution_adjustment += exclusion_penalty
                     adjustment_notes.append(f"竞争排斥淘汰+{exclusion_penalty:.1%}")
+            
+            # 【新增v5】生态拟真模块集成 (Ecological Realism)
+            # 从 plugin_data 获取语义驱动的生态学修正
+            # 这些修正由 EcologicalRealismStage 在死亡率计算前预先计算
+            from .ecological_realism_stage import (
+                apply_ecological_realism_to_mortality,
+            )
+            
+            # 创建临时 context 访问器（用于获取 plugin_data）
+            # 注意：此处需要外部传入 ctx 或直接传入 ecological_realism_data
+            # 为保持向后兼容，先检查 trophic_interactions 是否包含生态拟真数据
+            eco_realism_data = trophic_interactions.get("_ecological_realism_data", {})
+            if eco_realism_data:
+                # 应用语义驱动的生态拟真修正
+                eco_mortality_modifier = 0.0
+                
+                # 疾病压力
+                disease_results = eco_realism_data.get("disease_results", {})
+                disease_data = disease_results.get(lineage_code, {})
+                disease_mod = disease_data.get("mortality_modifier", 0.0)
+                if disease_mod > 0:
+                    eco_mortality_modifier += disease_mod
+                    adjustment_notes.append(f"疾病压力+{disease_mod:.1%}")
+                
+                # 适应滞后惩罚
+                adaptation_penalties = eco_realism_data.get("adaptation_penalties", {})
+                adaptation_penalty = adaptation_penalties.get(lineage_code, 0.0)
+                if adaptation_penalty > 0:
+                    eco_mortality_modifier += adaptation_penalty
+                    adjustment_notes.append(f"适应滞后+{adaptation_penalty:.1%}")
+                
+                # 互利共生收益（负值减少死亡率）
+                mutualism_benefits = eco_realism_data.get("mutualism_benefits", {})
+                mutualism = mutualism_benefits.get(lineage_code, 0.0)
+                if mutualism != 0:
+                    eco_mortality_modifier -= mutualism  # 正收益减少死亡率
+                    if mutualism > 0:
+                        adjustment_notes.append(f"共生收益-{mutualism:.1%}")
+                    else:
+                        adjustment_notes.append(f"共生缺失+{-mutualism:.1%}")
+                
+                evolution_adjustment += eco_mortality_modifier
             
             # 【新增v4】5. 食物网反馈压力
             # 处理来自 FoodWebManager 的反馈信号

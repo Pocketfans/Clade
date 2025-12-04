@@ -16,6 +16,7 @@ import { SpeciesAITab } from "../SpeciesAITab";
 // 模块化组件
 import { SpeciesListHeader } from "./components/SpeciesListHeader";
 import { SpeciesListItem } from "./components/SpeciesListItem";
+import { EcologicalRealismDisplay } from "./components/EcologicalRealismDisplay";
 import { useSpeciesList } from "./hooks/useSpeciesList";
 import { useSpeciesDetail } from "./hooks/useSpeciesDetail";
 import { ROLE_CONFIGS, getRoleConfig, DETAIL_TABS } from "./constants";
@@ -313,6 +314,9 @@ export function SpeciesPanelNew({
                   <span className="value">{speciesDetail.fitness?.toFixed(2) || "N/A"}</span>
                 </div>
               </div>
+              
+              {/* 生态拟真数据展示 */}
+              <EcologicalRealismDisplay data={selectedSnapshot?.ecological_realism} />
             </div>
           )}
 

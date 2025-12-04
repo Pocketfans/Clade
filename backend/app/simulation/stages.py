@@ -724,6 +724,12 @@ class ResourceCalcStage(BaseStage):
                 logger.warning("ResourceManager 不可用，跳过资源阶段")
                 return
             
+            # 【新增v12】注入生态拟真数据（用于动态同化效率）
+            eco_realism_data = ctx.plugin_data.get("ecological_realism", {})
+            if eco_realism_data:
+                resource_manager._ecological_realism_data = eco_realism_data
+                logger.debug("[资源计算] 已注入生态拟真数据（动态同化效率）")
+            
             # 计算各地块的物种消耗
             consumption_by_tile = self._calculate_consumption(ctx)
             
@@ -940,11 +946,22 @@ class PreliminaryMortalityStage(BaseStage):
         trophic_service = get_trophic_service()
         ctx.trophic_interactions = trophic_service.calculate(ctx.species_batch)
         
+        # 【新增】注入生态拟真数据到 trophic_interactions
+        # 这样死亡率计算可以访问语义驱动的生态学修正
+        eco_realism_data = ctx.plugin_data.get("ecological_realism", {})
+        if eco_realism_data:
+            ctx.trophic_interactions["_ecological_realism_data"] = eco_realism_data
+            logger.debug("[死亡率] 已注入生态拟真数据")
+        
         logger.info("【阶段1】计算初步死亡率（迁徙前）...")
         
         if engine._use_tile_based_mortality and ctx.all_tiles:
             logger.info("[地块死亡率] 构建地块-物种矩阵...")
             ctx.emit_event("info", "🗺️ 使用按地块计算死亡率", "生态")
+            
+            # 【新增v12】注入生态拟真数据到死亡率引擎
+            # 用于空间捕食效率、垂直生态位竞争等修正
+            engine.tile_mortality._ecological_realism_data = eco_realism_data if eco_realism_data else None
             
             engine.tile_mortality.build_matrices(ctx.species_batch, ctx.all_tiles, ctx.all_habitats)
             
@@ -1243,6 +1260,15 @@ class PopulationUpdateStage(BaseStage):
         # 【v8新增】更新资源繁荣加成（正面压力提高繁殖率）
         if ctx.modifiers:
             engine.reproduction_service.update_resource_boost(ctx.modifiers)
+        
+        # 【新增v12】注入生态拟真数据到繁殖服务
+        # 用于应用 Allee 效应、环境波动、共生等语义驱动的繁殖率修正
+        eco_realism_data = ctx.plugin_data.get("ecological_realism", {})
+        if eco_realism_data:
+            engine.reproduction_service._ecological_realism_data = eco_realism_data
+            logger.debug("[种群更新] 已注入生态拟真数据到繁殖服务")
+        else:
+            engine.reproduction_service._ecological_realism_data = None
         
         # 【修复】先计算所有物种的调整后死亡率，用于构建真实存活率
         # 这样繁殖模块才能正确反应压力造成的高死亡率
@@ -2603,6 +2629,7 @@ class BuildReportStage(BaseStage):
                     migration_events=ctx.migration_events,
                     stream_callback=on_narrative_chunk,
                     all_species=all_species_for_report,
+                    ecological_realism_data=ctx.plugin_data.get("ecological_realism"),  # 【新增】
                 ),
                 timeout=90
             )

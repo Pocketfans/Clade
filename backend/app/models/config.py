@@ -195,43 +195,43 @@ class ReproductionConfig(BaseModel):
     
     # ========== 基础增长 ==========
     # 每点繁殖速度提供的增长率加成
-    growth_rate_per_repro_speed: float = 0.35  # 从0.4降低到0.35
+    growth_rate_per_repro_speed: float = 0.5  # 从0.35提升到0.5，加快基础增长
     # 增长倍数下限（保护濒危物种）
-    growth_multiplier_min: float = 0.5  # 从0.6降低到0.5
-    # 【关键】增长倍数上限（大幅降低以避免种群爆发）
-    growth_multiplier_max: float = 8.0  # 从15.0降低到8.0
+    growth_multiplier_min: float = 0.5
+    # 【关键】增长倍数上限（大幅提升以允许种群快速扩张）
+    growth_multiplier_max: float = 15.0  # 从8.0回升到15.0，允许指数级爆发
     
     # ========== 体型加成 ==========
-    # 【优化v7】降低体型加成，避免微生物过快繁殖
+    # 【优化v8】恢复体型加成，微小生物应该繁殖极快
     # 微生物（<0.1mm）增长加成
-    size_bonus_microbe: float = 1.6  # 从2.0降低到1.6
+    size_bonus_microbe: float = 2.0  # 从1.6回升到2.0
     # 小型生物（0.1mm-1mm）增长加成
-    size_bonus_tiny: float = 1.3  # 从1.5降低到1.3
+    size_bonus_tiny: float = 1.5  # 从1.3回升到1.5
     # 中小型生物（1mm-1cm）增长加成
-    size_bonus_small: float = 1.1  # 从1.2降低到1.1
+    size_bonus_small: float = 1.25  # 从1.1回升到1.25
     
     # ========== 世代时间加成 ==========
-    # 【优化v7】降低世代加成
+    # 【优化v8】恢复世代加成
     # 极快繁殖（<1周）加成
-    repro_bonus_weekly: float = 1.5  # 从1.8降低到1.5
+    repro_bonus_weekly: float = 2.0  # 从1.5回升到2.0
     # 快速繁殖（<1月）加成
-    repro_bonus_monthly: float = 1.25  # 从1.4降低到1.25
+    repro_bonus_monthly: float = 1.5  # 从1.25回升到1.5
     # 中速繁殖（<半年）加成
-    repro_bonus_halfyear: float = 1.1  # 从1.2降低到1.1
+    repro_bonus_halfyear: float = 1.25  # 从1.1回升到1.25
     
     # ========== 存活率修正 ==========
-    # 【优化v7】降低存活率修正，使高死亡率更有效
+    # 【优化v8】提高存活率修正，让存活下来的物种能更好地恢复
     # 存活率修正基础值
-    survival_modifier_base: float = 0.3  # 从0.4降低到0.3
+    survival_modifier_base: float = 0.4  # 从0.3回升到0.4
     # 存活率修正系数
-    survival_modifier_rate: float = 1.0  # 从1.2降低到1.0
+    survival_modifier_rate: float = 1.2  # 从1.0回升到1.2
     
     # ========== 生存本能 ==========
-    # 【优化v7】提高阈值，降低加成，极端环境下繁殖能力应下降
+    # 【优化v8】适度回调生存本能，帮助濒危物种
     # 生存本能激活阈值（死亡率超过此值）
-    survival_instinct_threshold: float = 0.6  # 从0.5提高到0.6
-    # 生存本能最大加成（大幅降低）
-    survival_instinct_bonus: float = 0.4  # 从0.8降低到0.4
+    survival_instinct_threshold: float = 0.6
+    # 生存本能最大加成
+    survival_instinct_bonus: float = 0.6  # 从0.4提升到0.6
     
     # ========== 资源压力 ==========
     # 【优化v7】增强资源压力惩罚
@@ -258,12 +258,12 @@ class ReproductionConfig(BaseModel):
     
     # ========== 【新增v7】高死亡率繁殖惩罚 ==========
     # 死亡率惩罚阈值：超过此值开始降低繁殖效率
-    mortality_penalty_threshold: float = 0.55  # 【平衡】从0.5提升到0.55，更宽容
+    mortality_penalty_threshold: float = 0.60  # 【平衡】从0.55提升到0.60，更宽容
     # 死亡率惩罚系数：每超过阈值10%，繁殖效率降低此比例
-    mortality_penalty_rate: float = 0.15  # 【平衡】从0.2降低到0.15，减少死亡螺旋
+    mortality_penalty_rate: float = 0.10  # 【平衡】从0.15降低到0.10，减少死亡螺旋
 
     # 极端死亡率阈值：超过此值繁殖效率直接减半
-    extreme_mortality_threshold: float = 0.80  # 【平衡】从0.7提升到0.8
+    extreme_mortality_threshold: float = 0.85  # 【平衡】从0.80提升到0.85
 
 
 class MortalityConfig(BaseModel):
@@ -489,6 +489,114 @@ class EcologyBalanceConfig(BaseModel):
     overlap_competition_per_01: float = 0.04
     # 最大重叠竞争惩罚
     overlap_competition_max: float = 0.20
+
+
+class EcologicalRealismConfig(BaseModel):
+    """生态拟真配置 - 控制高级生态学机制
+    
+    【设计理念】
+    基于语义驱动的生态学判断，所有参数通过 embedding 语义匹配实现，
+    而非硬编码的类型枚举。
+    
+    【核心模块】
+    1. Allee 效应：小种群困境
+    2. 密度依赖疾病：高密度种群的疾病压力
+    3. 环境综合变数：长周期环境波动
+    4. 空间显式捕食：地理重叠影响捕食效率
+    5. 能量同化效率：基于物种特征的动态效率
+    6. 垂直生态位分层：减少同层竞争
+    7. 适应滞后：环境变化速率与适应能力的匹配
+    8. 互利共生网络：自动识别和维护共生关系
+    """
+    model_config = ConfigDict(extra="ignore")
+    
+    # ========== Allee 效应 ==========
+    # 是否启用 Allee 效应
+    enable_allee_effect: bool = True
+    # MVP 临界比例（相对于承载力）
+    allee_critical_ratio: float = 0.1
+    # 最大繁殖惩罚
+    allee_max_penalty: float = 0.4
+    # S型曲线陡峭度
+    allee_steepness: float = 5.0
+    
+    # ========== 密度依赖疾病 ==========
+    # 是否启用密度依赖疾病
+    enable_density_disease: bool = True
+    # 触发疾病的密度阈值
+    disease_density_threshold: float = 0.7
+    # 基础疾病死亡率
+    disease_base_mortality: float = 0.15
+    # 群居性影响系数
+    disease_social_factor: float = 0.3
+    # 抗病性减免系数
+    disease_resistance_factor: float = 0.5
+    
+    # ========== 环境综合变数 ==========
+    # 是否启用环境波动
+    enable_env_fluctuation: bool = True
+    # 波动周期（回合）
+    fluctuation_period_turns: int = 20
+    # 波动幅度
+    fluctuation_amplitude: float = 0.2
+    # 高纬度敏感系数
+    latitude_sensitivity: float = 1.5
+    # 专化物种敏感系数
+    specialist_sensitivity: float = 1.3
+    
+    # ========== 空间显式捕食 ==========
+    # 是否启用空间显式捕食
+    enable_spatial_predation: bool = True
+    # 最小重叠度才能捕食
+    min_overlap_for_predation: float = 0.1
+    # 重叠度对效率的影响
+    overlap_efficiency_factor: float = 0.6
+    
+    # ========== 能量同化效率 ==========
+    # 是否启用动态同化效率
+    enable_dynamic_assimilation: bool = True
+    # 草食基础效率
+    herbivore_base_efficiency: float = 0.12
+    # 肉食基础效率
+    carnivore_base_efficiency: float = 0.25
+    # 腐食基础效率
+    detritivore_base_efficiency: float = 0.20
+    # 滤食效率
+    filter_feeder_efficiency: float = 0.15
+    # 恒温动物效率惩罚
+    endotherm_penalty: float = 0.7
+    
+    # ========== 垂直生态位 ==========
+    # 是否启用垂直生态位分层
+    enable_vertical_niche: bool = True
+    # 同层竞争系数
+    same_layer_competition: float = 1.0
+    # 相邻层竞争系数
+    adjacent_layer_competition: float = 0.3
+    # 远层竞争系数
+    distant_layer_competition: float = 0.05
+    
+    # ========== 适应滞后 ==========
+    # 是否启用适应滞后
+    enable_adaptation_lag: bool = True
+    # 环境变化追踪窗口（回合）
+    env_change_tracking_window: int = 5
+    # 最大适应惩罚
+    max_adaptation_penalty: float = 0.3
+    # 高可塑性保护系数
+    plasticity_protection: float = 0.5
+    # 世代时间影响
+    generation_time_factor: float = 0.1
+    
+    # ========== 互利共生 ==========
+    # 是否启用互利共生
+    enable_mutualism: bool = True
+    # 共生匹配阈值
+    mutualism_threshold: float = 0.6
+    # 共生伙伴存在时的加成
+    mutualism_benefit: float = 0.1
+    # 共生伙伴灭绝时的惩罚
+    mutualism_penalty: float = 0.15
 
 
 class ResourceSystemConfig(BaseModel):
@@ -912,6 +1020,9 @@ class UIConfig(BaseModel):
     
     # 17. 资源系统配置
     resource_system: ResourceSystemConfig = Field(default_factory=ResourceSystemConfig)
+    
+    # 18. 生态拟真配置
+    ecological_realism: EcologicalRealismConfig = Field(default_factory=EcologicalRealismConfig)
     
     # --- Legacy Fields (Keep for migration) ---
     ai_provider: str | None = None

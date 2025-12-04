@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from ...ai.model_router import ModelRouter
     from ...services.system.embedding import EmbeddingService
     from ...services.system.save_manager import SaveManager
+    from ...services.ecology.semantic_anchors import SemanticAnchorService
+    from ...services.ecology.ecological_realism import EcologicalRealismService
 
 logger = logging.getLogger(__name__)
 
@@ -189,4 +191,87 @@ class CoreServiceProvider:
             'save_manager',
             lambda: SaveManager(self.settings.saves_dir, embedding_service=self.embedding_service)
         )
+    
+    @cached_property
+    def semantic_anchor_service(self) -> 'SemanticAnchorService':
+        """语义锚点服务 - 提供基于 embedding 的语义匹配
+        
+        用于生态拟真系统中的生态学判断。
+        """
+        from ...services.ecology.semantic_anchors import SemanticAnchorService
+        
+        def create_service():
+            service = SemanticAnchorService(self.embedding_service)
+            service.initialize()
+            logger.info("[核心服务] 语义锚点服务初始化完成")
+            return service
+        
+        return self._get_or_override('semantic_anchor_service', create_service)
+    
+    @cached_property
+    def ecological_realism_service(self) -> 'EcologicalRealismService':
+        """生态拟真服务 - 提供高级生态学机制
+        
+        包含 Allee 效应、密度依赖疾病、环境波动、空间捕食等模块。
+        """
+        from ...services.ecology.ecological_realism import (
+            EcologicalRealismService,
+            EcologicalRealismConfig,
+        )
+        
+        def create_service():
+            # 尝试从 UI 配置加载生态拟真配置
+            try:
+                ui_config = self.config_service.get_ui_config()
+                eco_config = ui_config.ecological_realism
+                config = EcologicalRealismConfig(
+                    enable_allee_effect=eco_config.enable_allee_effect,
+                    allee_critical_ratio=eco_config.allee_critical_ratio,
+                    allee_max_penalty=eco_config.allee_max_penalty,
+                    allee_steepness=eco_config.allee_steepness,
+                    enable_density_disease=eco_config.enable_density_disease,
+                    disease_density_threshold=eco_config.disease_density_threshold,
+                    disease_base_mortality=eco_config.disease_base_mortality,
+                    disease_social_factor=eco_config.disease_social_factor,
+                    disease_resistance_factor=eco_config.disease_resistance_factor,
+                    enable_env_fluctuation=eco_config.enable_env_fluctuation,
+                    fluctuation_period_turns=eco_config.fluctuation_period_turns,
+                    fluctuation_amplitude=eco_config.fluctuation_amplitude,
+                    latitude_sensitivity=eco_config.latitude_sensitivity,
+                    specialist_sensitivity=eco_config.specialist_sensitivity,
+                    enable_spatial_predation=eco_config.enable_spatial_predation,
+                    min_overlap_for_predation=eco_config.min_overlap_for_predation,
+                    overlap_efficiency_factor=eco_config.overlap_efficiency_factor,
+                    enable_dynamic_assimilation=eco_config.enable_dynamic_assimilation,
+                    herbivore_base_efficiency=eco_config.herbivore_base_efficiency,
+                    carnivore_base_efficiency=eco_config.carnivore_base_efficiency,
+                    detritivore_base_efficiency=eco_config.detritivore_base_efficiency,
+                    filter_feeder_efficiency=eco_config.filter_feeder_efficiency,
+                    endotherm_penalty=eco_config.endotherm_penalty,
+                    enable_vertical_niche=eco_config.enable_vertical_niche,
+                    same_layer_competition=eco_config.same_layer_competition,
+                    adjacent_layer_competition=eco_config.adjacent_layer_competition,
+                    distant_layer_competition=eco_config.distant_layer_competition,
+                    enable_adaptation_lag=eco_config.enable_adaptation_lag,
+                    env_change_tracking_window=eco_config.env_change_tracking_window,
+                    max_adaptation_penalty=eco_config.max_adaptation_penalty,
+                    plasticity_protection=eco_config.plasticity_protection,
+                    generation_time_factor=eco_config.generation_time_factor,
+                    enable_mutualism=eco_config.enable_mutualism,
+                    mutualism_threshold=eco_config.mutualism_threshold,
+                    mutualism_benefit=eco_config.mutualism_benefit,
+                    mutualism_penalty=eco_config.mutualism_penalty,
+                )
+            except Exception as e:
+                logger.warning(f"[核心服务] 加载生态拟真配置失败，使用默认值: {e}")
+                config = EcologicalRealismConfig()
+            
+            service = EcologicalRealismService(
+                self.semantic_anchor_service,
+                config,
+            )
+            logger.info("[核心服务] 生态拟真服务初始化完成")
+            return service
+        
+        return self._get_or_override('ecological_realism_service', create_service)
 

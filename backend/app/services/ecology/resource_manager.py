@@ -3,7 +3,7 @@
 基于净初级生产力 (NPP) 的资源模型，统一能量单位。
 
 核心功能：
-1. NPP 计算：基于气候、地质、栖息地类型
+1. NPP 计算：基于Miami模型（温湿限制）+ 纬度光照限制
 2. 资源再生：Logistic 恢复模型
 3. 过采惩罚：需求超过供给时的反馈
 4. 事件脉冲：火山灰、洪水、干旱等
@@ -30,11 +30,11 @@ if TYPE_CHECKING:
 
 from ...core.config import get_settings
 from ...models.config import ResourceSystemConfig
+# 导入常量以获取地图尺寸用于纬度计算
+from ...simulation.constants import LOGIC_RES_Y
 
 logger = logging.getLogger(__name__)
 _settings = get_settings()
-
-
 
 
 @dataclass
@@ -136,6 +136,11 @@ class ResourceManager:
     ) -> float:
         """计算单个地块的净初级生产力 (NPP)
         
+        【改进v8】使用综合生态压力模型：
+        1. Miami模型：Liebig最小因子定律，由温度和降水（湿度）的最小值决定
+        2. 纬度光照限制：高纬度地区即使温度适宜，光照不足也会限制生长
+        3. 致死阈值：极端环境直接归零，取消无条件保底
+        
         Args:
             tile: 地块对象
             temperature: 可选的温度覆盖
@@ -146,39 +151,86 @@ class ResourceManager:
         """
         cfg = self._config
         
-        # 基础 NPP = tile.resources × 转换系数
-        base_resource = getattr(tile, 'resources', 50)  # 默认 50
-        base_npp = base_resource * cfg.resource_to_npp_factor
+        # 获取环境参数
+        temp = temperature if temperature is not None else getattr(tile, 'temperature', 20)
+        hum = humidity if humidity is not None else getattr(tile, 'humidity', 0.5)
         
-        # 气候修正
-        if cfg.enable_climate_npp:
-            temp = temperature if temperature is not None else getattr(tile, 'temperature', 20)
-            hum = humidity if humidity is not None else getattr(tile, 'humidity', 0.5)
+        # 1. 致死阈值检测（Extreme Environment Cutoff）
+        # 如果环境过于恶劣，生命完全无法生存，NPP 强制归零
+        if temp < -30.0 or temp > 55.0:
+            return 0.0
+        if hum < 0.05:  # 极度干旱（沙漠中心）
+            return 0.0
             
-            # 温度修正
-            temp_modifier = self._calculate_temp_modifier(temp, cfg)
-            
-            # 湿度修正
-            hum_modifier = self._calculate_humidity_modifier(hum, cfg)
-            
-            base_npp *= temp_modifier * hum_modifier
+        # 2. Miami 模型计算气候潜力 NPP (g/m²/yr -> kg/tile/turn)
+        # 原模型公式：
+        # NPP_temp = 3000 / (1 + exp(1.315 - 0.119 * T))
+        # NPP_water = 3000 * (1 - exp(-0.000664 * Rainfall))
         
-        # 栖息地类型修正
+        # 映射参数
+        # 假设湿度 1.0 对应年降雨量 3000mm (热带雨林)
+        # 假设湿度 0.5 对应年降雨量 800mm (温带森林/草原)
+        # 假设湿度 0.1 对应年降雨量 100mm (荒漠)
+        rainfall_mm = hum * 3500.0
+        
+        try:
+            npp_temp = 3000.0 / (1.0 + math.exp(1.315 - 0.119 * temp))
+        except OverflowError:
+            npp_temp = 0.0
+            
+        npp_water = 3000.0 * (1.0 - math.exp(-0.000664 * rainfall_mm))
+        
+        # Liebig最小因子定律
+        miami_npp = min(npp_temp, npp_water)
+        
+        # 转换为游戏单位 (kg/tile/turn)
+        # miami_npp 是 g/m²/yr
+        # 假设一个 tile 是 100km² = 10^8 m² (仅作比喻，实际用系数调整)
+        # 使用 resource_to_npp_factor 作为缩放系数的基础
+        # 将 miami_npp (0-3000) 映射到游戏数值范围 (0-100000)
+        base_npp = miami_npp * 30.0  # 3000 * 30 = 90,000 max
+        
+        # 3. 纬度光照限制 (Latitudinal Light Limit)
+        # 获取 y 坐标 (0-LOGIC_RES_Y)
+        # 假设地图中间 (y=HEIGHT/2) 是赤道，两端是极地
+        y_coord = getattr(tile, 'y', 0)
+        if hasattr(tile, 'y'):
+            # 归一化纬度 0.0(赤道) - 1.0(极地)
+            half_height = LOGIC_RES_Y / 2.0
+            normalized_lat = abs(y_coord - half_height) / half_height
+            normalized_lat = min(1.0, max(0.0, normalized_lat))
+            
+            # 光照系数：赤道=1.0，极地=0.2 (极夜/光照角度低)
+            # 使用平方衰减模拟高纬度的剧烈变化
+            light_factor = 1.0 - (normalized_lat ** 2.5) * 0.8
+        else:
+            light_factor = 1.0
+            
+        base_npp *= light_factor
+        
+        # 4. 栖息地/土壤修正 (Edaphic Factors)
         habitat_type = getattr(tile, 'habitat_type', 'terrestrial')
         habitat_multiplier = self._get_habitat_multiplier(habitat_type, cfg)
         base_npp *= habitat_multiplier
         
-        # 事件脉冲修正
+        # 5. 地质资源加成 (Mineral Nutrients)
+        # 原有的 resources 属性代表矿物质/土壤肥力
+        tile_resources = getattr(tile, 'resources', 50)
+        # 资源影响系数：0.5 (贫瘠) - 1.5 (肥沃)
+        soil_fertility = 0.5 + (tile_resources / 1000.0)
+        base_npp *= soil_fertility
+
+        # 6. 事件脉冲修正 (Event Pulse)
         event_multiplier = self._get_event_multiplier(tile.id)
         base_npp *= event_multiplier
         
-        # 上限
+        # 上限截断
         base_npp = min(base_npp, cfg.max_npp_per_tile)
         
         return max(0.0, base_npp)
     
     def _calculate_temp_modifier(self, temp: float, cfg: ResourceSystemConfig) -> float:
-        """计算温度对 NPP 的修正"""
+        """计算温度对 NPP 的修正 (已集成到 calculate_npp，保留用于兼容)"""
         if cfg.optimal_temp_min <= temp <= cfg.optimal_temp_max:
             return 1.0
         
@@ -192,7 +244,7 @@ class ResourceManager:
         return max(0.1, modifier)  # 至少 10%
     
     def _calculate_humidity_modifier(self, humidity: float, cfg: ResourceSystemConfig) -> float:
-        """计算湿度对 NPP 的修正"""
+        """计算湿度对 NPP 的修正 (已集成到 calculate_npp，保留用于兼容)"""
         if humidity < cfg.humidity_min_threshold:
             # 极端干旱
             return 0.1 + 0.4 * (humidity / cfg.humidity_min_threshold)
@@ -209,8 +261,8 @@ class ResourceManager:
             "shallow_sea": cfg.shallow_sea_npp_multiplier,
             "coastal": cfg.shallow_sea_npp_multiplier,
             "freshwater": cfg.aquatic_npp_multiplier * 1.2,
-            "desert": cfg.desert_npp_multiplier,
-            "tundra": cfg.tundra_npp_multiplier,
+            "desert": cfg.desert_npp_multiplier,  # 沙漠在Miami模型中已受限，此处作为额外修正
+            "tundra": cfg.tundra_npp_multiplier,  # 苔原在温度限制下已很低
             "temperate": cfg.temperate_forest_npp_multiplier,
             "tropical": cfg.tropical_forest_npp_multiplier,
             "grassland": 0.8,
@@ -384,6 +436,35 @@ class ResourceManager:
     def get_ecological_efficiency(self, from_level: int, to_level: int) -> float:
         """获取生态效率（供外部使用）"""
         return self._get_efficiency(from_level, to_level, self._config)
+    
+    def get_species_assimilation_efficiency(
+        self,
+        species_code: str,
+        default: float = 0.10,
+    ) -> float:
+        """获取物种的同化效率（从生态拟真数据）
+        
+        同化效率由 EcologicalRealismService 基于语义匹配计算：
+        - 草食动物: ~12%
+        - 肉食动物: ~25%
+        - 腐食动物: ~20%
+        - 滤食动物: ~15%
+        
+        Args:
+            species_code: 物种代码
+            default: 默认效率值
+            
+        Returns:
+            同化效率 (0.05-0.35)
+        """
+        # 尝试从生态拟真数据获取
+        eco_data = getattr(self, '_ecological_realism_data', None)
+        if eco_data:
+            efficiencies = eco_data.get("assimilation_efficiencies", {})
+            if species_code in efficiencies:
+                return efficiencies[species_code]
+        
+        return default
     
     # ========== 资源压力计算 ==========
     
@@ -588,4 +669,3 @@ def get_resource_manager() -> ResourceManager:
             "Use Depends(get_resource_manager) for proper injection."
         )
     return container.resource_manager
-

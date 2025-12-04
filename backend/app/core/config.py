@@ -163,6 +163,17 @@ def setup_logging(settings: Settings) -> None:
     # 关闭 uvicorn 访问日志
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     
+    # FAISS 向量库加载日志（AVX512/AVX2 信息）
+    logging.getLogger("faiss").setLevel(logging.WARNING)
+    logging.getLogger("faiss.loader").setLevel(logging.WARNING)
+    
+    # 抑制启动时的初始化噪音日志
+    logging.getLogger("app.core.ai_router_config").setLevel(logging.WARNING)
+    logging.getLogger("app.ai.model_router").setLevel(logging.WARNING)
+    logging.getLogger("app.services.system.vector_store").setLevel(logging.WARNING)
+    logging.getLogger("app.services.system.divine_energy").setLevel(logging.WARNING)
+    logging.getLogger("app.services.system.divine_progression").setLevel(logging.WARNING)
+    
     root_logger.info(f"日志系统初始化完成 - 级别: {settings.log_level}, 目录: {settings.log_dir}")
 
 

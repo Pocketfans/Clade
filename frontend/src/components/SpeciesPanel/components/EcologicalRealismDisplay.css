@@ -1,0 +1,257 @@
+/**
+ * EcologicalRealismDisplay 样式
+ *
+ * 生态拟真状态展示组件的样式定义
+ */
+
+/* ============ 紧凑模式 ============ */
+.eco-compact {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.eco-indicator {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  cursor: help;
+  opacity: 0.9;
+  transition: opacity 0.15s;
+}
+
+.eco-indicator:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+/* ============ 完整模式容器 ============ */
+.eco-realism-display {
+  padding: 16px;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.03) 0%, rgba(59, 130, 246, 0.03) 100%);
+  border-radius: 12px;
+  border: 1px solid rgba(var(--foreground-rgb), 0.06);
+}
+
+.eco-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(var(--foreground-rgb), 0.08);
+}
+
+.eco-header h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(var(--foreground-rgb), 0.9);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.eco-status {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 20px;
+  letter-spacing: 0.3px;
+}
+
+.eco-status.eco-healthy {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+}
+
+.eco-status.eco-warning {
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+}
+
+.eco-status.eco-danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+/* ============ 卡片网格 ============ */
+.eco-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 600px) {
+  .eco-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ============ 卡片样式 ============ */
+.eco-card {
+  background: rgba(var(--foreground-rgb), 0.02);
+  border: 1px solid rgba(var(--foreground-rgb), 0.06);
+  border-radius: 10px;
+  padding: 12px;
+  transition: all 0.2s ease;
+}
+
+.eco-card:hover {
+  background: rgba(var(--foreground-rgb), 0.04);
+  border-color: rgba(var(--foreground-rgb), 0.1);
+}
+
+.eco-card.warning {
+  border-color: rgba(234, 179, 8, 0.3);
+  background: rgba(234, 179, 8, 0.05);
+}
+
+.eco-card.danger {
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.eco-card.healthy {
+  border-color: rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.05);
+}
+
+.eco-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.eco-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.eco-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(var(--foreground-rgb), 0.75);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.eco-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ============ 指标样式 ============ */
+.eco-metric {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.eco-metric .label {
+  font-size: 12px;
+  color: rgba(var(--foreground-rgb), 0.55);
+}
+
+.eco-metric .value {
+  font-size: 14px;
+  font-weight: 600;
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  color: rgba(var(--foreground-rgb), 0.85);
+}
+
+.eco-metric .value.healthy {
+  color: #22c55e;
+}
+
+.eco-metric .value.warning {
+  color: #eab308;
+}
+
+.eco-metric .value.danger {
+  color: #ef4444;
+}
+
+.eco-metric .value.neutral {
+  color: rgba(var(--foreground-rgb), 0.45);
+  font-weight: 400;
+}
+
+/* ============ 进度条 ============ */
+.eco-bar-container {
+  height: 6px;
+  background: rgba(var(--foreground-rgb), 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.eco-bar {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+  background: linear-gradient(90deg, #3b82f6 0%, #22c55e 100%);
+}
+
+.eco-bar.efficiency {
+  background: linear-gradient(90deg, #f97316 0%, #22c55e 100%);
+}
+
+/* ============ 警告框 ============ */
+.eco-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.eco-alert.danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}
+
+.eco-alert .alert-icon {
+  font-size: 14px;
+}
+
+/* ============ 共生伙伴 ============ */
+.eco-partners {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.partners-label {
+  font-size: 11px;
+  color: rgba(var(--foreground-rgb), 0.5);
+  flex-shrink: 0;
+}
+
+.partners-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.partner-code {
+  font-size: 10px;
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  padding: 2px 6px;
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+  border-radius: 4px;
+}
+
+.partner-more {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: rgba(var(--foreground-rgb), 0.08);
+  color: rgba(var(--foreground-rgb), 0.5);
+  border-radius: 4px;
+}
+

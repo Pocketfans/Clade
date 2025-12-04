@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from ...schemas.responses import TurnReport, SpeciesSnapshot
     from ..species.trophic_interaction import TrophicInteractionService
 
-from ...schemas.responses import SpeciesSnapshot
+from ...schemas.responses import SpeciesSnapshot, EcologicalRealismSnapshot, EcologicalRealismSummary
 from ...core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,93 @@ class TurnReportService:
         else:
             return "顶级掠食者"
     
+    def _build_ecological_realism_snapshot(
+        self,
+        lineage_code: str,
+        ecological_realism_data: Dict[str, Any] | None,
+    ) -> EcologicalRealismSnapshot | None:
+        """构建物种的生态拟真快照"""
+        if not ecological_realism_data:
+            return None
+        
+        allee_results = ecological_realism_data.get("allee_results", {})
+        disease_results = ecological_realism_data.get("disease_results", {})
+        env_modifiers = ecological_realism_data.get("env_modifiers", {})
+        assimilation = ecological_realism_data.get("assimilation_efficiencies", {})
+        adaptation = ecological_realism_data.get("adaptation_penalties", {})
+        mutualism_benefits = ecological_realism_data.get("mutualism_benefits", {})
+        mutualism_links = ecological_realism_data.get("mutualism_links", [])
+        
+        # 获取该物种的数据
+        allee = allee_results.get(lineage_code, {})
+        disease = disease_results.get(lineage_code, {})
+        
+        # 获取共生伙伴
+        partners = []
+        for link in mutualism_links:
+            if link.get("species_a") == lineage_code:
+                partners.append(link.get("species_b", ""))
+            elif link.get("species_b") == lineage_code:
+                partners.append(link.get("species_a", ""))
+        
+        return EcologicalRealismSnapshot(
+            is_below_mvp=allee.get("is_below_mvp", False),
+            allee_reproduction_modifier=allee.get("reproduction_modifier", 1.0),
+            disease_pressure=disease.get("disease_pressure", 0.0),
+            disease_mortality_modifier=disease.get("mortality_modifier", 0.0),
+            env_fluctuation_modifier=env_modifiers.get(lineage_code, 1.0),
+            assimilation_efficiency=assimilation.get(lineage_code, 0.10),
+            adaptation_penalty=adaptation.get(lineage_code, 0.0),
+            mutualism_benefit=mutualism_benefits.get(lineage_code, 0.0),
+            mutualism_partners=partners,
+        )
+    
+    def _build_ecological_realism_summary(
+        self,
+        species_data: List[Dict],
+        ecological_realism_data: Dict[str, Any] | None,
+    ) -> EcologicalRealismSummary | None:
+        """构建生态拟真系统整体统计"""
+        if not ecological_realism_data:
+            return None
+        
+        allee_results = ecological_realism_data.get("allee_results", {})
+        disease_results = ecological_realism_data.get("disease_results", {})
+        env_modifiers = ecological_realism_data.get("env_modifiers", {})
+        adaptation = ecological_realism_data.get("adaptation_penalties", {})
+        mutualism_links = ecological_realism_data.get("mutualism_links", [])
+        mutualism_benefits = ecological_realism_data.get("mutualism_benefits", {})
+        
+        # 统计受影响的物种
+        allee_affected = [code for code, data in allee_results.items() if data.get("is_below_mvp", False)]
+        disease_affected = [code for code, data in disease_results.items() if data.get("disease_pressure", 0) > 0.1]
+        adaptation_stressed = [code for code, pen in adaptation.items() if pen > 0.05]
+        
+        # 计算平均值
+        disease_pressures = [d.get("disease_pressure", 0) for d in disease_results.values()]
+        avg_disease = sum(disease_pressures) / len(disease_pressures) if disease_pressures else 0.0
+        
+        env_vals = list(env_modifiers.values())
+        avg_env = sum(env_vals) / len(env_vals) if env_vals else 1.0
+        
+        # 统计共生物种
+        mutualism_species = set()
+        for link in mutualism_links:
+            mutualism_species.add(link.get("species_a", ""))
+            mutualism_species.add(link.get("species_b", ""))
+        mutualism_species.discard("")
+        
+        return EcologicalRealismSummary(
+            allee_affected_count=len(allee_affected),
+            allee_affected_species=allee_affected[:10],  # 最多显示10个
+            disease_affected_count=len(disease_affected),
+            avg_disease_pressure=avg_disease,
+            mutualism_links_count=len(mutualism_links),
+            mutualism_species_count=len(mutualism_species),
+            adaptation_stressed_count=len(adaptation_stressed),
+            avg_env_modifier=avg_env,
+        )
+    
     async def build_report(
         self,
         turn_index: int,
@@ -72,6 +159,7 @@ class TurnReportService:
         migration_events: List[Any] | None = None,
         stream_callback: Callable[[str], Coroutine[Any, Any, None]] | None = None,
         all_species: List[Any] | None = None,
+        ecological_realism_data: Dict[str, Any] | None = None,  # 【新增】生态拟真数据
     ) -> "TurnReport":
         """构建回合报告
         
@@ -157,6 +245,10 @@ class TurnReportService:
                     "initial_population": getattr(mortality_result, 'initial_population', 0),
                     "births": getattr(mortality_result, 'births', 0),
                     "survivors": getattr(mortality_result, 'survivors', 0),
+                    # 【新增】生态拟真数据
+                    "ecological_realism": self._build_ecological_realism_snapshot(
+                        species.lineage_code, ecological_realism_data
+                    ),
                 })
             else:
                 # 没有死亡率计算结果（新分化的物种或其他情况），使用基础数据
@@ -182,6 +274,10 @@ class TurnReportService:
                     "initial_population": pop,
                     "births": 0,
                     "survivors": pop,
+                    # 【新增】生态拟真数据
+                    "ecological_realism": self._build_ecological_realism_snapshot(
+                        species.lineage_code, ecological_realism_data
+                    ),
                 })
         
         logger.info(f"[TurnReport] 族谱物种总数: {len(all_species)}, 存活: {sum(1 for s in species_data if s['status'] == 'alive')}")
@@ -232,6 +328,7 @@ class TurnReportService:
                 species=species_data,
                 branching_events=branching_events or [],
                 major_events=major_events or [],
+                ecological_realism=self._build_ecological_realism_summary(species_data, ecological_realism_data),
             )
         
         # ========== 【修复】调用 LLM 叙事引擎 ==========
@@ -335,6 +432,7 @@ class TurnReportService:
             species=species_data,
             branching_events=branching_events or [],
             major_events=major_events or [],
+            ecological_realism=self._build_ecological_realism_summary(species_data, ecological_realism_data),
         )
 
 
