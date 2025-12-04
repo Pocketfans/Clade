@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     ai_base_url: str | None = Field(default=None, alias="AI_BASE_URL")
     ai_api_key: str | None = Field(default=None, alias="AI_API_KEY")
     ai_request_timeout: int = Field(default=60, alias="AI_TIMEOUT")
+    allow_fake_embeddings: bool = Field(default=False, alias="ALLOW_FAKE_EMBEDDINGS")  # 默认禁用假向量，保证精度
     ai_concurrency_limit: int = Field(default=15, alias="AI_CONCURRENCY_LIMIT")
     ui_config_path: str = Field(default=str(PROJECT_ROOT / "data/settings.json"))
     

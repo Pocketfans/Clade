@@ -164,6 +164,7 @@ class SimulationServiceProvider:
                 gene_flow_service=self.gene_flow_service,
                 embedding_integration=self.embedding_integration,
                 resource_manager=self.resource_manager,
+                ecological_realism_service=self.ecological_realism_service,
                 configs=self.get_engine_configs(),
             )
         )

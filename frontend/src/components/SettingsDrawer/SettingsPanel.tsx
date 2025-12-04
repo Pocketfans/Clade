@@ -244,6 +244,10 @@ export function SettingsPanel({ config, onClose, onSave }: Props) {
             embeddingProvider={state.form.embedding_provider}
             embeddingProviderId={state.form.embedding_provider_id}
             embeddingModel={state.form.embedding_model}
+            embeddingConcurrencyEnabled={state.form.embedding_concurrency_enabled}
+            embeddingConcurrencyLimit={state.form.embedding_concurrency_limit}
+            embeddingSemanticHotspotOnly={state.form.embedding_semantic_hotspot_only}
+            embeddingSemanticHotspotLimit={state.form.embedding_semantic_hotspot_limit}
             dispatch={dispatch}
           />
         );

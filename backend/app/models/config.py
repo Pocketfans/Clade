@@ -972,6 +972,10 @@ class UIConfig(BaseModel):
     # 4. Embedding 配置
     embedding_provider_id: str | None = None
     embedding_model: str | None = None
+    embedding_concurrency_enabled: bool = False
+    embedding_concurrency_limit: int = 1
+    embedding_semantic_hotspot_only: bool = False
+    embedding_semantic_hotspot_limit: int = 512
     
     # 5. 自动保存配置
     autosave_enabled: bool = True  # 是否启用自动保存

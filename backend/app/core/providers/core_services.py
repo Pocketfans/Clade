@@ -46,10 +46,67 @@ class CoreServiceProvider:
     @cached_property
     def embedding_service(self) -> 'EmbeddingService':
         from ...services.system.embedding import EmbeddingService
-        return self._get_or_override(
-            'embedding_service',
-            lambda: EmbeddingService(self.settings.embedding_provider)
-        )
+        
+        def create_embedding_service():
+            # 1. 默认使用环境变量配置
+            provider = self.settings.embedding_provider
+            base_url = self.settings.ai_base_url
+            api_key = self.settings.ai_api_key
+            model = None
+            enabled = False
+            concurrency_enabled = False
+            concurrency_limit = 1
+            
+            # 2. 尝试从 UI 配置加载 (settings.json)
+            try:
+                ui_config = self.config_service.get_ui_config()
+                concurrency_enabled = getattr(ui_config, "embedding_concurrency_enabled", False)
+                concurrency_limit = max(1, getattr(ui_config, "embedding_concurrency_limit", 1) or 1)
+
+                # 如果 UI 中指定了 Embedding Provider
+                if ui_config.embedding_provider_id:
+                    provider_id = ui_config.embedding_provider_id
+                    
+                    # 在 providers 列表中查找详细配置
+                    if provider_id in ui_config.providers:
+                        prov_config = ui_config.providers[provider_id]
+                        provider = prov_config.provider_type
+                        
+                        # 优先使用 provider 特定的配置
+                        if prov_config.base_url:
+                            base_url = prov_config.base_url
+                        if prov_config.api_key:
+                            api_key = prov_config.api_key
+                            
+                        # 标记为启用
+                        enabled = True
+                    
+                # 如果 UI 中指定了模型
+                if ui_config.embedding_model:
+                    model = ui_config.embedding_model
+                    
+            except Exception as e:
+                logger.warning(f"[核心服务] 从 UI 配置加载 Embedding 设置失败: {e}")
+            
+            # 如果配置了必要参数，则启用
+            if base_url and api_key and model:
+                enabled = True
+                
+            logger.info(f"[Embedding] 初始化: provider={provider}, model={model}, base_url={base_url}, enabled={enabled}")
+            
+            return EmbeddingService(
+                provider=provider,
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                enabled=enabled,
+                timeout=self.settings.ai_request_timeout,
+                allow_fake_embeddings=self.settings.allow_fake_embeddings,
+                max_parallel_requests=concurrency_limit,
+                enable_concurrency=concurrency_enabled,
+            )
+
+        return self._get_or_override('embedding_service', create_embedding_service)
     
     @cached_property
     def model_router(self) -> 'ModelRouter':

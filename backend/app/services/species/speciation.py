@@ -24,6 +24,7 @@ from .plant_evolution import plant_evolution_service, PLANT_MILESTONES  # 【植
 from .plant_competition import plant_competition_calculator  # 【植物竞争】
 from .description_enhancer import DescriptionEnhancerService  # 【描述增强】
 from ...core.config import get_settings
+from ...simulation.constants import get_time_config
 
 # 获取配置
 _settings = get_settings()
@@ -1178,8 +1179,12 @@ class SpeciationService:
             async def process_batch(batch_entries: list) -> list:
                 """处理单个批次"""
                 batch_payload = self._build_batch_payload(
-                    batch_entries, average_pressure, pressure_summary, 
-                    map_changes, major_events
+                    batch_entries,
+                    average_pressure,
+                    pressure_summary,
+                    map_changes,
+                    major_events,
+                    turn_index,
                 )
                 # 【混合模式】传入entries用于判断是否为植物批次
                 batch_results = await self._call_batch_ai(batch_payload, stream_callback, batch_entries)
@@ -1460,7 +1465,8 @@ class SpeciationService:
         average_pressure: float,
         pressure_summary: str,
         map_changes: list,
-        major_events: list
+        major_events: list,
+        turn_index: int,
     ) -> dict:
         """构建批量分化请求的 payload"""
         # 构建物种列表文本
@@ -1572,6 +1578,14 @@ class SpeciationService:
         # prompt format(**payload) 不会递归解析 value 中的花括号
         species_list_escaped = species_list
         
+        time_config = get_time_config(max(turn_index, 0))
+        time_context = (
+            "\n=== ⏳ 时间尺度上下文 (Chronos Flow) ===\n"
+            f"当前地质年代：{time_config['era_name']}\n"
+            f"时间流逝速度：{time_config['years_per_turn']:,} 年/回合\n"
+            f"演化指导原则：{time_config.get('evolution_guide', 'Standard')}\n"
+        )
+
         payload_data = {
             "average_pressure": average_pressure,
             "pressure_summary": pressure_summary,
@@ -1581,6 +1595,7 @@ class SpeciationService:
             "major_events": self._summarize_major_events(major_events) if major_events else "无重大事件",
             "species_list": species_list_escaped,
             "batch_size": len(entries),
+            "time_context": time_context,
         }
         logger.debug(f"[分化批量] Payload keys: {list(payload_data.keys())}")
         return payload_data

@@ -31,9 +31,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Iterable, Any, Sequence, TYPE_CHECKING
+import threading
+import time
 
+import httpx
 import numpy as np
 
 from ...core.config import get_settings
@@ -74,6 +78,10 @@ class EmbeddingService:
         model: str | None = None,
         enabled: bool = False,
         cache_dir: Path | None = None,
+        timeout: int = 60,
+        allow_fake_embeddings: bool = True,
+        max_parallel_requests: int = 1,
+        enable_concurrency: bool = False,
     ) -> None:
         self.provider = provider
         self.dimension = dimension
@@ -81,6 +89,12 @@ class EmbeddingService:
         self.api_key = api_key
         self.model = model
         self.enabled = enabled
+        self.timeout = timeout
+        self.allow_fake_embeddings = allow_fake_embeddings
+        self.enable_concurrency = enable_concurrency and max_parallel_requests > 1
+        self.max_parallel_requests = max(1, max_parallel_requests)
+        if not self.enable_concurrency:
+            self.max_parallel_requests = 1
         
         # 缓存目录
         self._cache_dir = cache_dir or GLOBAL_CACHE_DIR
@@ -112,6 +126,7 @@ class EmbeddingService:
             "species_indexed": 0,
             "events_indexed": 0,
         }
+        self._stats_lock = threading.Lock()
 
     @property
     def model_identifier(self) -> str:
@@ -126,7 +141,7 @@ class EmbeddingService:
         self, 
         texts: Iterable[str], 
         require_real: bool = False,
-        batch_size: int = 100
+        batch_size: int = 20  # 默认批量大小减小到 20，提高稳定性
     ) -> list[list[float]]:
         """批量生成文本的向量表示
         
@@ -222,7 +237,8 @@ class EmbeddingService:
                     "请在设置中配置 Embedding Provider、Model、Base URL 和 API Key。"
                 )
             # 使用伪向量
-            self._stats["fake_embeds"] += len(texts)
+            with self._stats_lock:
+                self._stats["fake_embeds"] += len(texts)
             return [self._fake_embed(text) for text in texts]
 
     def _remote_embed_batch(
@@ -231,38 +247,80 @@ class EmbeddingService:
         require_real: bool = False,
         batch_size: int = 100
     ) -> list[list[float]]:
-        """批量调用远程 Embedding API"""
-        import httpx
+        """批量调用远程 Embedding API（支持并发分片）"""
+        chunks: list[list[str]] = [
+            texts[i:i + batch_size] for i in range(0, len(texts), batch_size)
+        ]
+        if not chunks:
+            return []
         
-        all_vectors = []
+        results: list[list[list[float]] | None] = [None] * len(chunks)
         
-        for i in range(0, len(texts), batch_size):
-            batch_texts = texts[i:i + batch_size]
-            
-            url = f"{self.api_base_url.rstrip('/')}/embeddings"
-            body = {"model": self.model, "input": batch_texts}
-            headers = {"Authorization": f"Bearer {self.api_key}"}
-            
+        def run_chunk(idx: int, chunk: list[str]) -> None:
+            vectors = self._request_embedding_chunk(chunk, require_real)
+            results[idx] = vectors
+        
+        max_workers = self.max_parallel_requests if self.enable_concurrency else 1
+        if max_workers <= 1 or len(chunks) == 1:
+            for idx, chunk in enumerate(chunks):
+                run_chunk(idx, chunk)
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {
+                    executor.submit(self._request_embedding_chunk, chunk, require_real): idx
+                    for idx, chunk in enumerate(chunks)
+                }
+                for future in as_completed(future_map):
+                    idx = future_map[future]
+                    results[idx] = future.result()
+        
+        all_vectors: list[list[float]] = []
+        for chunk_vectors in results:
+            if chunk_vectors is None:
+                continue
+            all_vectors.extend(chunk_vectors)
+        return all_vectors
+
+    def _request_embedding_chunk(
+        self,
+        batch_texts: list[str],
+        require_real: bool,
+        max_retries: int = 3,
+    ) -> list[list[float]]:
+        """向远程服务请求一个批次的向量"""
+        url = f"{self.api_base_url.rstrip('/')}/embeddings"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        body = {"model": self.model, "input": batch_texts}
+        
+        for attempt in range(max_retries):
             try:
-                response = httpx.post(url, json=body, headers=headers, timeout=60)
+                response = httpx.post(url, json=body, headers=headers, timeout=self.timeout)
                 response.raise_for_status()
                 data = response.json()
                 
-                # 按索引排序（API 可能乱序返回）
                 embeddings = sorted(data["data"], key=lambda x: x["index"])
                 batch_vectors = [e["embedding"] for e in embeddings]
-                all_vectors.extend(batch_vectors)
                 
-                self._stats["api_calls"] += 1
+                with self._stats_lock:
+                    self._stats["api_calls"] += 1
                 
+                return batch_vectors
             except Exception as exc:
-                if require_real:
-                    raise RuntimeError(f"Embedding API 调用失败: {exc}") from exc
-                logger.warning(f"[Embedding] API 调用失败，使用假向量: {exc}")
-                all_vectors.extend([self._fake_embed(t) for t in batch_texts])
-                self._stats["fake_embeds"] += len(batch_texts)
+                if attempt == max_retries - 1:
+                    if require_real or not self.allow_fake_embeddings:
+                        raise RuntimeError(f"Embedding API 调用失败 (重试耗尽): {exc}") from exc
+                    
+                    logger.warning(f"[Embedding] API 调用失败，使用假向量: {exc}")
+                    vectors = [self._fake_embed(t) for t in batch_texts]
+                    with self._stats_lock:
+                        self._stats["fake_embeds"] += len(batch_texts)
+                    return vectors
+                
+                logger.warning(f"[Embedding] API 调用失败，正在重试 ({attempt+1}/{max_retries}): {exc}")
+                time.sleep(1 * (attempt + 1))
         
-        return all_vectors
+        # 理论上不会到此
+        return [self._fake_embed(t) for t in batch_texts]
 
     def _fake_embed(self, text: str) -> list[float]:
         """生成基于文本哈希的伪向量（确定性）"""

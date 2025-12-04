@@ -479,8 +479,8 @@ class TestEcologicalRealismStage:
         
         eco_service = EcologicalRealismService(anchor_service)
         
-        engine.container = MagicMock()
-        engine.container.ecological_realism_service = eco_service
+        # 直接注入到 engine 属性
+        engine.ecological_realism_service = eco_service
         
         return engine
     
@@ -544,12 +544,9 @@ class TestEcologicalRealismStage:
     async def test_stage_handles_missing_service(self, stage, mock_context):
         """测试服务不可用时的处理"""
         engine = MagicMock()
-        engine.container = MagicMock()
         
-        # 模拟属性访问抛出异常
-        type(engine.container).ecological_realism_service = property(
-            lambda self: (_ for _ in ()).throw(Exception("Service unavailable"))
-        )
+        # 模拟服务未注入
+        engine.ecological_realism_service = None
         
         # 应该不会抛出异常，而是优雅地返回
         await stage.execute(mock_context, engine)

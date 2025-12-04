@@ -87,10 +87,9 @@ class EcologicalRealismStage(BaseStage):
     async def execute(self, ctx: 'SimulationContext', engine: 'SimulationEngine') -> None:
         """执行生态拟真计算"""
         # 获取生态拟真服务
-        try:
-            eco_service = engine.container.ecological_realism_service
-        except Exception as e:
-            self._logger.warning(f"[生态拟真] 服务不可用: {e}")
+        eco_service = getattr(engine, 'ecological_realism_service', None)
+        if eco_service is None:
+            self._logger.warning("[生态拟真] 服务未注入，跳过生态拟真计算")
             return
         
         results = EcologicalRealismResults()

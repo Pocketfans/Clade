@@ -679,6 +679,10 @@ export interface UIConfig {
   embedding_provider_id?: string | null;
   embedding_model?: string | null;
   embedding_dimensions?: number | null;
+  embedding_concurrency_enabled?: boolean;
+  embedding_concurrency_limit?: number;
+  embedding_semantic_hotspot_only?: boolean;
+  embedding_semantic_hotspot_limit?: number;
   
   // 5. 自动保存配置
   autosave_enabled?: boolean;      // 是否启用自动保存

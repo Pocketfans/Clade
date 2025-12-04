@@ -15,6 +15,10 @@ interface Props {
   embeddingProvider: string | null | undefined;
   embeddingProviderId: string | null | undefined;
   embeddingModel: string | null | undefined;
+  embeddingConcurrencyEnabled?: boolean | null;
+  embeddingConcurrencyLimit?: number | null;
+  embeddingSemanticHotspotOnly?: boolean | null;
+  embeddingSemanticHotspotLimit?: number | null;
   dispatch: Dispatch<SettingsAction>;
 }
 
@@ -23,12 +27,20 @@ export const EmbeddingSection = memo(function EmbeddingSection({
   embeddingProvider,
   embeddingProviderId,
   embeddingModel,
+  embeddingConcurrencyEnabled,
+  embeddingConcurrencyLimit,
+  embeddingSemanticHotspotOnly,
+  embeddingSemanticHotspotLimit,
   dispatch,
 }: Props) {
   const providerList = Object.values(providers).filter((p) => p.api_key);
   // 优先使用 embedding_provider_id，兼容旧的 embedding_provider
   const effectiveProviderId = embeddingProviderId || embeddingProvider;
   const selectedProvider = effectiveProviderId ? providers[effectiveProviderId] : null;
+  const concurrencyEnabled = Boolean(embeddingConcurrencyEnabled);
+  const concurrencyLimit = embeddingConcurrencyLimit && embeddingConcurrencyLimit > 0 ? embeddingConcurrencyLimit : 2;
+  const hotspotOnly = Boolean(embeddingSemanticHotspotOnly);
+  const hotspotLimit = embeddingSemanticHotspotLimit && embeddingSemanticHotspotLimit > 0 ? embeddingSemanticHotspotLimit : 400;
 
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
@@ -81,6 +93,31 @@ export const EmbeddingSection = memo(function EmbeddingSection({
     if (preset) {
       dispatch({ type: "UPDATE_GLOBAL", field: "embedding_dimensions", value: preset.dimensions });
     }
+  };
+
+  const handleConcurrencyToggle = (enabled: boolean) => {
+    dispatch({ type: "UPDATE_GLOBAL", field: "embedding_concurrency_enabled", value: enabled });
+    if (enabled && (!embeddingConcurrencyLimit || embeddingConcurrencyLimit < 2)) {
+      dispatch({ type: "UPDATE_GLOBAL", field: "embedding_concurrency_limit", value: 2 });
+    }
+  };
+
+  const handleConcurrencyLimitChange = (value: number) => {
+    if (Number.isNaN(value)) {
+      return;
+    }
+    const clamped = Math.min(16, Math.max(2, value));
+    dispatch({ type: "UPDATE_GLOBAL", field: "embedding_concurrency_limit", value: clamped });
+  };
+
+  const handleHotspotToggle = (enabled: boolean) => {
+    dispatch({ type: "UPDATE_GLOBAL", field: "embedding_semantic_hotspot_only", value: enabled });
+  };
+
+  const handleHotspotLimitChange = (value: number) => {
+    if (Number.isNaN(value)) return;
+    const clamped = Math.min(5120, Math.max(50, value));
+    dispatch({ type: "UPDATE_GLOBAL", field: "embedding_semantic_hotspot_limit", value: clamped });
   };
 
   return (
@@ -172,6 +209,82 @@ export const EmbeddingSection = memo(function EmbeddingSection({
                     ))}
                   </select>
                 </div>
+              </div>
+            </div>
+
+            {/* 并发控制 */}
+            <div className="form-row">
+              <div className="form-label">
+                <div className="form-label-text">并发加速</div>
+                <div className="form-label-desc">启用后可同时向服务商发送多个批次</div>
+              </div>
+              <div className="form-control" style={{ gap: "10px" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <input
+                    type="checkbox"
+                    checked={concurrencyEnabled}
+                    onChange={(e) => handleConcurrencyToggle(e.target.checked)}
+                  />
+                  <span>允许多并发请求</span>
+                </label>
+                {concurrencyEnabled && (
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <input
+                      type="number"
+                      min={2}
+                      max={16}
+                      value={concurrencyLimit}
+                      onChange={(e) => handleConcurrencyLimitChange(parseInt(e.target.value, 10))}
+                      style={{
+                        width: "80px",
+                        padding: "6px 8px",
+                        background: "var(--s-bg-deep)",
+                        border: "1px solid var(--s-border)",
+                        borderRadius: "var(--s-radius-sm)",
+                        color: "var(--s-text)",
+                      }}
+                    />
+                    <span style={{ fontSize: "0.8rem", color: "var(--s-text-muted)" }}>建议 2 - 8</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 热点地块语义 */}
+            <div className="form-row">
+              <div className="form-label">
+                <div className="form-label-text">热点语义模式</div>
+                <div className="form-label-desc">仅对关键地块计算语义，减少 API 压力</div>
+              </div>
+              <div className="form-control" style={{ gap: "10px" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <input
+                    type="checkbox"
+                    checked={hotspotOnly}
+                    onChange={(e) => handleHotspotToggle(e.target.checked)}
+                  />
+                  <span>只对热点地块启用语义</span>
+                </label>
+                {hotspotOnly && (
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <input
+                      type="number"
+                      min={50}
+                      max={5120}
+                      value={hotspotLimit}
+                      onChange={(e) => handleHotspotLimitChange(parseInt(e.target.value, 10))}
+                      style={{
+                        width: "100px",
+                        padding: "6px 8px",
+                        background: "var(--s-bg-deep)",
+                        border: "1px solid var(--s-border)",
+                        borderRadius: "var(--s-radius-sm)",
+                        color: "var(--s-text)",
+                      }}
+                    />
+                    <span style={{ fontSize: "0.8rem", color: "var(--s-text-muted)" }}>最大热点地块数</span>
+                  </div>
+                )}
               </div>
             </div>
 

@@ -13,12 +13,17 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
+
+from ...core.config import get_settings
+from ...core.config_service import ConfigService
 
 if TYPE_CHECKING:
     from ...models.species import Species
@@ -26,6 +31,17 @@ if TYPE_CHECKING:
     from ..system.embedding import EmbeddingService
 
 logger = logging.getLogger(__name__)
+
+_SETTINGS = get_settings()
+_TILE_CACHE_DIR = Path(_SETTINGS.cache_dir) / "embeddings"
+_SUITABILITY_CONFIG_SERVICE: ConfigService | None = None
+
+
+def _get_config_service() -> ConfigService:
+    global _SUITABILITY_CONFIG_SERVICE
+    if _SUITABILITY_CONFIG_SERVICE is None:
+        _SUITABILITY_CONFIG_SERVICE = ConfigService(_SETTINGS)
+    return _SUITABILITY_CONFIG_SERVICE
 
 
 # ============ 12 维特征空间定义 ============
@@ -89,16 +105,24 @@ class SuitabilityService:
         use_semantic: bool = True,
         semantic_weight: float = SEMANTIC_WEIGHT,
         feature_weight: float = FEATURE_WEIGHT,
+        semantic_hotspot_only: bool = False,
+        semantic_hotspot_limit: int = 512,
+        tile_cache_path: Path | None = None,
     ):
         self.embeddings = embedding_service
         self.use_semantic = use_semantic and embedding_service is not None
         self.semantic_weight = semantic_weight
         self.feature_weight = feature_weight
+        self.semantic_hotspot_only = semantic_hotspot_only
+        self.semantic_hotspot_limit = max(1, semantic_hotspot_limit)
+        self._recent_hotspot_ids: set[int] = set()
+        self._hotspot_resource_threshold: float = 0.0
         
         # 向量缓存
         self._species_semantic_cache: dict[str, np.ndarray] = {}  # lineage_code -> vector
         self._species_feature_cache: dict[str, np.ndarray] = {}
         self._tile_semantic_cache: dict[int, np.ndarray] = {}     # tile_id -> vector
+        self._tile_semantic_signatures: dict[int, str] = {}
         self._tile_feature_cache: dict[int, np.ndarray] = {}
         
         # 文本缓存 (用于显示)
@@ -118,6 +142,80 @@ class SuitabilityService:
             "semantic_calls": 0,
             "matrix_computes": 0,
         }
+        
+        # 持久化语义存储
+        self._tile_semantic_store_path = tile_cache_path or (_TILE_CACHE_DIR / "tile_semantics.json")
+        self._tile_semantic_store_path.parent.mkdir(parents=True, exist_ok=True)
+        self._semantic_store_dirty = False
+        self._load_tile_semantic_store()
+
+    # ============ 配置与缓存管理 ============
+
+    def update_semantic_settings(
+        self,
+        *,
+        use_semantic: bool | None = None,
+        semantic_hotspot_only: bool | None = None,
+        semantic_hotspot_limit: int | None = None,
+        embedding_service: "EmbeddingService | None" = None,
+    ) -> None:
+        if embedding_service is not None:
+            self.embeddings = embedding_service
+        if use_semantic is not None:
+            self.use_semantic = use_semantic and self.embeddings is not None
+        if semantic_hotspot_only is not None:
+            self.semantic_hotspot_only = semantic_hotspot_only
+        if semantic_hotspot_limit is not None:
+            self.semantic_hotspot_limit = max(1, semantic_hotspot_limit)
+
+    def _load_tile_semantic_store(self) -> None:
+        path = self._tile_semantic_store_path
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning(f"[SuitabilityService] 无法加载地块语义缓存: {exc}")
+            return
+        loaded = 0
+        for key, payload in data.items():
+            try:
+                tile_id = int(key)
+            except ValueError:
+                continue
+            vector = payload.get("vector")
+            signature = payload.get("signature")
+            if not isinstance(vector, list) or signature is None:
+                continue
+            self._tile_semantic_cache[tile_id] = np.array(vector, dtype=np.float32)
+            self._tile_semantic_signatures[tile_id] = signature
+            loaded += 1
+        if loaded:
+            logger.info(f"[SuitabilityService] 已加载 {loaded} 个地块语义向量缓存")
+
+    def _save_tile_semantic_store(self) -> None:
+        if not self._semantic_store_dirty:
+            return
+        data = {}
+        for tile_id, vector in self._tile_semantic_cache.items():
+            signature = self._tile_semantic_signatures.get(tile_id)
+            if signature is None:
+                continue
+            data[str(tile_id)] = {
+                "vector": vector.tolist(),
+                "signature": signature,
+            }
+        try:
+            self._tile_semantic_store_path.write_text(json.dumps(data), encoding="utf-8")
+            self._semantic_store_dirty = False
+        except Exception as exc:
+            logger.warning(f"[SuitabilityService] 保存地块语义缓存失败: {exc}")
+
+    def _cache_tile_semantic_vector(self, tile_id: int, vector: np.ndarray, signature: str) -> None:
+        self._tile_semantic_cache[tile_id] = vector
+        self._tile_semantic_signatures[tile_id] = signature
+        self._semantic_store_dirty = True
+        self._save_tile_semantic_store()
     
     # ============ 语义描述生成 ============
     
@@ -192,86 +290,219 @@ class SuitabilityService:
         
         return text.strip()
     
-    def _build_tile_text(self, tile: "MapTile") -> str:
-        """生成地块的语义描述文本"""
-        biome = getattr(tile, 'biome', '') or '未知'
-        temp = getattr(tile, 'temperature', 20)
-        humidity = getattr(tile, 'humidity', 0.5)
-        elevation = getattr(tile, 'elevation', 0)
-        salinity = getattr(tile, 'salinity', 0)
-        resources = getattr(tile, 'resources', 100)
-        cover = getattr(tile, 'cover', '') or '无'
-        has_river = getattr(tile, 'has_river', False)
+    def _classify_water_type(self, tile: "MapTile") -> tuple[str, bool]:
+        biome = (getattr(tile, 'biome', '') or '').lower()
+        salinity = getattr(tile, 'salinity', 0.0) or 0.0
         is_lake = getattr(tile, 'is_lake', False)
-        volcanic = getattr(tile, 'volcanic_potential', 0)
-        earthquake = getattr(tile, 'earthquake_risk', 0)
-        
-        # 判断水域类型
-        is_water = "海" in biome or is_lake
-        
-        if is_water:
+        if "海" in biome or is_lake:
             if salinity > 30:
-                water_type = "高盐度海水环境"
-            elif salinity > 10:
-                water_type = "半咸水环境"
-            elif is_lake:
-                water_type = "淡水湖泊环境"
-            else:
-                water_type = "淡水环境"
-        else:
-            water_type = "陆地环境"
-        
-        # 深度/海拔描述
-        if elevation < -3000:
-            elev_desc = "深海区域，极高水压，完全黑暗，温度接近0°C"
-        elif elevation < -1000:
-            elev_desc = "中层海域，光线微弱，水压较高"
-        elif elevation < -200:
-            elev_desc = "浅海区域，光线充足"
-        elif elevation < 0:
-            elev_desc = "近岸浅水区"
-        elif elevation > 4000:
-            elev_desc = "极高海拔，氧气稀薄，气温极低"
-        elif elevation > 2000:
-            elev_desc = "高海拔山地，气温较低"
-        elif elevation > 500:
-            elev_desc = "丘陵或低山"
-        else:
-            elev_desc = "低海拔平原"
-        
-        # 温度描述
-        if temp > 35:
-            temp_desc = "极端高温"
-        elif temp > 25:
-            temp_desc = "温暖炎热"
-        elif temp > 15:
-            temp_desc = "温和适宜"
-        elif temp > 5:
-            temp_desc = "凉爽"
-        elif temp > -10:
-            temp_desc = "寒冷"
-        else:
-            temp_desc = "极寒"
-        
+                return "高盐度深海水域", True
+            if salinity > 10:
+                return "半咸水海域", True
+            if is_lake:
+                return "淡水湖泊", True
+            return "浅海/近海水域", True
+        return "陆地环境", False
+
+    def _quantize_temperature(self, temp: float) -> tuple[str, str]:
+        buckets = [
+            (-100, -50, "致命极寒", "低于 -50°C 的地带几乎没有生命"),
+            (-50, -35, "极地冰封", "极寒冻原，偶尔出现耐寒微生物"),
+            (-35, -25, "严冬冻原", "长期 -30°C 的深冬大陆性气候"),
+            (-25, -20, "深冬酷寒", "-25~-20°C，稀有生命勉强存活"),
+            (-20, -15, "寒冷凛冽", "-20~-15°C，稍有升温即可触发生命反应"),
+            (-15, -10, "刺骨寒潮", "-15~-10°C 的冷锋地带"),
+            (-10, -6, "寒凉初春", "-10~-6°C，融雪期刚开始"),
+            (-6, -2, "低温临界", "-6~-2°C，许多生物的绝对临界点"),
+            (-2, 2, "冰线附近", "-2~2°C，冰水交错的敏感区"),
+            (2, 6, "冷凉温带", "2~6°C，适合冷水生物"),
+            (6, 10, "清爽微凉", "6~10°C，温带海洋气候"),
+            (10, 14, "温和宜居", "10~14°C，越来越多物种适应"),
+            (14, 18, "暖润舒适", "14~18°C，适宜大多数温带生命"),
+            (18, 22, "黄金暖温", "18~22°C，生理最优区"),
+            (22, 26, "温热繁盛", "22~26°C，热带雨林惯常温度"),
+            (26, 30, "炎热湿润", "26~30°C，热带浅海/雨林"),
+            (30, 36, "酷热闷湿", "30~36°C，热应激明显"),
+            (36, 42, "炽热危险", "36~42°C，仅耐热物种可长期生存"),
+            (42, 100, "致命酷热", "高于 42°C 的极端环境"),
+        ]
+        for low, high, label, desc in buckets:
+            if temp >= low and temp < high:
+                return label, desc
+        return ("未知", "气温数据缺失")
+
+    def _quantize_humidity(self, humidity: float) -> tuple[str, str]:
+        value = max(0.0, min(1.0, humidity))
+        buckets = [
+            (0.0, 0.05, "极端干裂", "接近真空的干燥，生命难以维系"),
+            (0.05, 0.12, "极度干燥", "沙漠中心的干燥空气"),
+            (0.12, 0.2, "荒漠干燥", "蒸发量远大于降水"),
+            (0.2, 0.3, "半干草原", "略有降水，植被稀疏"),
+            (0.3, 0.4, "干燥温带", "低湿度的温带大陆性气候"),
+            (0.4, 0.5, "适中偏干", "轻微干燥，仍可支持大部分植物"),
+            (0.5, 0.6, "温润宜居", "湿度 50% 左右的人居舒适区"),
+            (0.6, 0.7, "微潮湿润", "持续潮湿，适合雨林边缘"),
+            (0.7, 0.8, "潮湿丰沛", "降水丰富，易形成密林"),
+            (0.8, 0.9, "湿热闷沌", "90% 左右的闷热环境"),
+            (0.9, 1.01, "饱和湿润", "接近饱和的沼泽/南海空气"),
+        ]
+        for low, high, label, desc in buckets:
+            if value >= low and value < high:
+                return label, desc
+        return ("未知", "湿度数据缺失")
+
+    def _quantize_resources(self, resources: float) -> tuple[str, str]:
+        value = max(0.0, resources or 0.0)
+        buckets = [
+            (0, 20, "枯竭荒寂", "几乎没有可利用能量"),
+            (20, 40, "极度贫瘠", "只能支持零星微生物"),
+            (40, 70, "贫瘠", "资源稀少，需依靠突发事件"),
+            (70, 110, "偏低", "勉强能维持零散生产者"),
+            (110, 150, "稍低", "中小型群落可以稳定存在"),
+            (150, 190, "适中偏低", "早期生态系统的常见水平"),
+            (190, 230, "适中", "大多数陆地/浅海会出现的生产力"),
+            (230, 270, "适中偏高", "较肥沃，能支撑多层食物网"),
+            (270, 310, "充沛", "营养盐丰富，群落密度高"),
+            (310, 380, "富饶", "河口/潮滩等高 NPP 区域"),
+            (380, 480, "极富", "泛滥平原或藻华高发区"),
+            (480, 650, "爆发丰盈", "短期事件导致的资源暴涨"),
+            (650, 1000, "异常充沛", "火山灰/洪水/化能热泉等极端供给"),
+        ]
+        for low, high, label, desc in buckets:
+            if value >= low and value < high:
+                return label, desc
+        return ("未知", "资源数据缺失")
+
+    def _quantize_elevation(self, elevation: float) -> tuple[str, str]:
+        buckets = [
+            (-12000, -8000, "超深海沟", "最深的海沟，完全黑暗"),
+            (-8000, -6000, "深海沟", "6000m 以上的极深海区"),
+            (-6000, -4000, "深海盆地", "典型的深海平原"),
+            (-4000, -2500, "深海山脊", "深海山脊和海山"),
+            (-2500, -1500, "中层海域", "部分微光可达的水层"),
+            (-1500, -700, "次深海", "深中层，营养盐较多"),
+            (-700, -200, "浅海大陆架", "光照与营养最为充足"),
+            (-200, -20, "潮间带", "潮汐上下波动的浅水区"),
+            (-20, 0, "海岸/潟湖", "近岸或潟湖水体"),
+            (0, 80, "沿海低地", "海拔 0~80m 的平原"),
+            (80, 200, "内陆平原", "广阔的冲积平原"),
+            (200, 500, "丘陵台地", "缓丘和台地"),
+            (500, 1000, "低山", "低矮山地"),
+            (1000, 1800, "中山", "森林覆盖的山地"),
+            (1800, 2600, "高山", "空气稀薄的高原边缘"),
+            (2600, 3500, "极高山", "接近雪线的山体"),
+            (3500, 5000, "雪顶山脉", "全年积雪的山峰"),
+            (5000, 9000, "巅峰地带", "极端高山，如喜马拉雅"),
+        ]
+        for low, high, label, desc in buckets:
+            if elevation >= low and elevation < high:
+                return label, desc
+        return ("未知", "地势数据缺失")
+
+    def _compute_tile_signature(self, tile: "MapTile") -> str:
+        biome = getattr(tile, 'biome', 'unknown') or 'unknown'
+        cover = getattr(tile, 'cover', 'none') or 'none'
+        water_label, _ = self._classify_water_type(tile)
+        temp_bucket = self._quantize_temperature(getattr(tile, 'temperature', 20))[0]
+        humidity_bucket = self._quantize_humidity(getattr(tile, 'humidity', 0.5))[0]
+        resource_bucket = self._quantize_resources(getattr(tile, 'resources', 0))[0]
+        elevation_bucket = self._quantize_elevation(getattr(tile, 'elevation', 0))[0]
+        river_flag = "river" if getattr(tile, 'has_river', False) else "no_river"
+        lake_flag = "lake" if getattr(tile, 'is_lake', False) else "no_lake"
+        volcanic = getattr(tile, 'volcanic_potential', 0.0) or 0.0
+        earthquake = getattr(tile, 'earthquake_risk', 0.0) or 0.0
+        volcanic_bucket = "volcanic_hot" if volcanic > 0.6 else ("volcanic_active" if volcanic > 0.3 else "stable")
+        earthquake_bucket = "quake_high" if earthquake > 0.6 else ("quake_mid" if earthquake > 0.3 else "quake_low")
+        return "|".join([
+            biome,
+            cover,
+            water_label,
+            temp_bucket,
+            humidity_bucket,
+            resource_bucket,
+            elevation_bucket,
+            river_flag,
+            lake_flag,
+            volcanic_bucket,
+            earthquake_bucket,
+        ])
+
+    def _build_tile_text(self, tile: "MapTile") -> str:
+        """生成地块的语义描述文本，使用量化后的描述避免频繁变动"""
         tile_id = getattr(tile, 'id', 0)
         x = getattr(tile, 'x', 0)
         y = getattr(tile, 'y', 0)
+        biome = getattr(tile, 'biome', '未知') or '未知'
+        cover = getattr(tile, 'cover', '无植被') or '无植被'
+        temp_label, temp_desc = self._quantize_temperature(getattr(tile, 'temperature', 20))
+        humid_label, humid_desc = self._quantize_humidity(getattr(tile, 'humidity', 0.5))
+        resource_label, resource_desc = self._quantize_resources(getattr(tile, 'resources', 0))
+        elevation_label, elevation_desc = self._quantize_elevation(getattr(tile, 'elevation', 0))
+        water_label, is_water = self._classify_water_type(tile)
+        has_river = getattr(tile, 'has_river', False)
+        volcanic = getattr(tile, 'volcanic_potential', 0.0) or 0.0
+        earthquake = getattr(tile, 'earthquake_risk', 0.0) or 0.0
         
-        text = f"""地块 #{tile_id} 坐标({x}, {y})
-地形: {biome}
-环境类型: {water_type}
-{elev_desc}
-温度: {temp:.1f}°C ({temp_desc})
-湿度: {humidity:.0%}
-海拔: {elevation:.0f}米
-{'盐度: ' + f'{salinity:.1f}‰' if is_water else ''}
-资源丰富度: {resources:.0f}
-植被: {cover}
-{'有河流' if has_river else ''}
-{'火山活跃区' if volcanic > 0.5 else ''}
-{'地震风险区' if earthquake > 0.5 else ''}"""
+        lines = [
+            f"地块 #{tile_id} 坐标({x}, {y})",
+            f"地形: {biome}",
+            f"植被: {cover}",
+            f"环境类型: {water_label}",
+            f"温度等级: {temp_label}（{temp_desc}）",
+            f"湿度等级: {humid_label}（{humid_desc}）",
+            f"资源等级: {resource_label}（{resource_desc}）",
+            f"地势: {elevation_label}（{elevation_desc}）",
+        ]
+        if has_river:
+            lines.append("存在河流网络")
+        if volcanic > 0.6:
+            lines.append("处于火山强活跃区")
+        elif volcanic > 0.3:
+            lines.append("火山活动频繁")
+        if earthquake > 0.6:
+            lines.append("地震风险极高")
+        elif earthquake > 0.3:
+            lines.append("地震活动中等")
+        if not is_water and getattr(tile, 'is_lake', False):
+            lines.append("包含大型淡水湖泊")
+        return "\n".join(lines).strip()
+
+    def _should_use_semantic_for_tile(self, tile: "MapTile", signature: str) -> bool:
+        if not self.use_semantic or self.embeddings is None:
+            return False
+        if not self.semantic_hotspot_only:
+            return True
+        tile_id = getattr(tile, 'id', None)
+        if tile_id is None:
+            return False
+        if tile_id in self._recent_hotspot_ids:
+            return True
+        if not self._recent_hotspot_ids:
+            resources = getattr(tile, 'resources', 0.0) or 0.0
+            return resources >= self._hotspot_resource_threshold
+        # 如果签名发生变化（例如环境突变），允许重新计算一次
+        cached_signature = self._tile_semantic_signatures.get(tile_id)
+        return cached_signature != signature
+
+    def _select_hotspot_tiles(self, tiles: Sequence["MapTile"]) -> list["MapTile"]:
+        valid_tiles = [t for t in tiles if getattr(t, 'id', None) is not None]
+        if not self.semantic_hotspot_only:
+            self._recent_hotspot_ids = {t.id for t in valid_tiles if t.id is not None}
+            self._hotspot_resource_threshold = 0.0
+            return valid_tiles
         
-        return text.strip()
+        sorted_tiles = sorted(
+            valid_tiles,
+            key=lambda t: getattr(t, 'resources', 0.0) or 0.0,
+            reverse=True,
+        )
+        subset = sorted_tiles[: self.semantic_hotspot_limit]
+        self._recent_hotspot_ids = {t.id for t in subset if t.id is not None}
+        if subset:
+            self._hotspot_resource_threshold = getattr(subset[-1], 'resources', 0.0) or 0.0
+        else:
+            self._hotspot_resource_threshold = 0.0
+        return subset
     
     # ============ 特征向量提取 ============
     
@@ -746,40 +977,48 @@ class SuitabilityService:
         semantic_score = 0.5  # 默认中等
         species_text = ""
         tile_text = ""
+        tile_signature = self._compute_tile_signature(tile)
+        allow_semantic = self._should_use_semantic_for_tile(tile, tile_signature)
         
-        if self.use_semantic and self.embeddings is not None:
+        if self.use_semantic and self.embeddings is not None and allow_semantic:
             try:
-                # 获取/生成语义向量
+                # 物种文本/向量
                 if lineage_code not in self._species_semantic_cache:
                     species_text = self._build_species_text(species)
                     self._species_text_cache[lineage_code] = species_text
                     vec = self.embeddings.embed_single(species_text)
-                    self._species_semantic_cache[lineage_code] = np.array(vec)
+                    self._species_semantic_cache[lineage_code] = np.array(vec, dtype=np.float32)
                     self._stats["semantic_calls"] += 1
                 else:
                     species_text = self._species_text_cache.get(lineage_code, "")
                 
-                if tile_id not in self._tile_semantic_cache:
-                    tile_text = self._build_tile_text(tile)
-                    self._tile_text_cache[tile_id] = tile_text
+                # 地块文本/向量（带签名校验）
+                cached_signature = self._tile_semantic_signatures.get(tile_id)
+                if tile_id not in self._tile_text_cache:
+                    self._tile_text_cache[tile_id] = self._build_tile_text(tile)
+                tile_text = self._tile_text_cache.get(tile_id, "")
+                
+                if (
+                    tile_id not in self._tile_semantic_cache or
+                    cached_signature != tile_signature
+                ):
                     vec = self.embeddings.embed_single(tile_text)
-                    self._tile_semantic_cache[tile_id] = np.array(vec)
+                    np_vec = np.array(vec, dtype=np.float32)
+                    self._cache_tile_semantic_vector(tile_id, np_vec, tile_signature)
                     self._stats["semantic_calls"] += 1
                 else:
-                    tile_text = self._tile_text_cache.get(tile_id, "")
+                    np_vec = self._tile_semantic_cache[tile_id]
                 
-                # 余弦相似度
                 sp_vec = self._species_semantic_cache[lineage_code]
-                tile_vec = self._tile_semantic_cache[tile_id]
-                
                 sp_norm = sp_vec / (np.linalg.norm(sp_vec) + 1e-8)
-                tile_norm = tile_vec / (np.linalg.norm(tile_vec) + 1e-8)
+                tile_norm = np_vec / (np.linalg.norm(np_vec) + 1e-8)
                 semantic_score = float(np.dot(sp_norm, tile_norm))
                 semantic_score = (semantic_score + 1) / 2  # [-1, 1] -> [0, 1]
                 
             except Exception as e:
                 logger.warning(f"[SuitabilityService] 语义计算失败: {e}")
                 semantic_score = 0.5
+                tile_text = ""
         
         # 融合得分
         if self.use_semantic:
@@ -861,48 +1100,80 @@ class SuitabilityService:
         # 高斯核转换
         feature_similarity = np.exp(-distances ** 2 / (2 * 0.4 ** 2))  # (N, M)
         
-        # 语义相似度 (如果启用)
+        tile_index_map = {t.id: idx for idx, t in enumerate(tiles) if getattr(t, 'id', None) is not None}
         if self.use_semantic and self.embeddings is not None:
             try:
-                # 批量生成语义向量
+                # 物种语义缓存
+                missing_species = []
                 species_texts = []
-                tiles_texts = []
-                
                 for sp in species_list:
-                    if sp.lineage_code not in self._species_text_cache:
-                        text = self._build_species_text(sp)
-                        self._species_text_cache[sp.lineage_code] = text
-                    species_texts.append(self._species_text_cache[sp.lineage_code])
-                
-                for t in tiles:
-                    if t.id not in self._tile_text_cache:
-                        text = self._build_tile_text(t)
-                        self._tile_text_cache[t.id] = text
-                    tiles_texts.append(self._tile_text_cache[t.id])
-                
-                # 批量 embedding
-                species_semantic = np.array(self.embeddings.embed(species_texts))  # (N, D)
-                tile_semantic = np.array(self.embeddings.embed(tiles_texts))  # (M, D)
-                
-                # 缓存语义向量
-                for i, sp in enumerate(species_list):
-                    self._species_semantic_cache[sp.lineage_code] = species_semantic[i]
-                for i, t in enumerate(tiles):
-                    self._tile_semantic_cache[t.id] = tile_semantic[i]
-                
-                # 余弦相似度矩阵
-                sp_norm = species_semantic / (np.linalg.norm(species_semantic, axis=1, keepdims=True) + 1e-8)
-                tile_norm = tile_semantic / (np.linalg.norm(tile_semantic, axis=1, keepdims=True) + 1e-8)
-                semantic_similarity = sp_norm @ tile_norm.T  # (N, M)
-                semantic_similarity = (semantic_similarity + 1) / 2  # [-1, 1] -> [0, 1]
-                
-                # 融合
-                suitability_matrix = (
-                    self.semantic_weight * semantic_similarity + 
-                    self.feature_weight * feature_similarity
+                    code = sp.lineage_code
+                    if code not in self._species_semantic_cache:
+                        text = self._species_text_cache.get(code)
+                        if not text:
+                            text = self._build_species_text(sp)
+                            self._species_text_cache[code] = text
+                        missing_species.append(code)
+                        species_texts.append(text)
+                if species_texts:
+                    new_vectors = self.embeddings.embed(species_texts)
+                    for code, vec in zip(missing_species, new_vectors):
+                        self._species_semantic_cache[code] = np.array(vec, dtype=np.float32)
+                    self._stats["semantic_calls"] += len(missing_species)
+                species_semantic = np.array(
+                    [self._species_semantic_cache[sp.lineage_code] for sp in species_list],
+                    dtype=np.float32,
                 )
                 
-                self._stats["semantic_calls"] += N + M
+                # 地块语义缓存（仅热点）
+                hotspot_tiles = self._select_hotspot_tiles(tiles)
+                missing_tiles: list[tuple[int, str]] = []
+                missing_tile_texts: list[str] = []
+                subset_vectors: list[np.ndarray] = []
+                subset_indices: list[int] = []
+                for tile in hotspot_tiles:
+                    tile_id = getattr(tile, 'id', None)
+                    if tile_id is None or tile_id not in tile_index_map:
+                        continue
+                    signature = self._compute_tile_signature(tile)
+                    if tile_id not in self._tile_text_cache:
+                        self._tile_text_cache[tile_id] = self._build_tile_text(tile)
+                    cached_vec = self._tile_semantic_cache.get(tile_id)
+                    cached_signature = self._tile_semantic_signatures.get(tile_id)
+                    if cached_vec is not None and cached_signature == signature:
+                        subset_vectors.append(cached_vec)
+                        subset_indices.append(tile_index_map[tile_id])
+                    else:
+                        missing_tiles.append((tile_id, signature))
+                        missing_tile_texts.append(self._tile_text_cache[tile_id])
+                if missing_tile_texts:
+                    new_tile_vecs = self.embeddings.embed(missing_tile_texts)
+                    for (tile_id, signature), vec in zip(missing_tiles, new_tile_vecs):
+                        np_vec = np.array(vec, dtype=np.float32)
+                        self._cache_tile_semantic_vector(tile_id, np_vec, signature)
+                        if tile_id in tile_index_map:
+                            subset_vectors.append(np_vec)
+                            subset_indices.append(tile_index_map[tile_id])
+                    self._stats["semantic_calls"] += len(missing_tiles)
+                
+                if subset_vectors:
+                    sp_norm = species_semantic / (np.linalg.norm(species_semantic, axis=1, keepdims=True) + 1e-8)
+                    tile_subset = np.stack(subset_vectors, axis=0)
+                    tile_norm = tile_subset / (np.linalg.norm(tile_subset, axis=1, keepdims=True) + 1e-8)
+                    semantic_subset = sp_norm @ tile_norm.T  # (N, K)
+                    fusion = feature_similarity.copy()
+                    semantic_subset = (semantic_subset + 1) / 2
+                    for col_pos, subset_idx in enumerate(subset_indices):
+                        fusion[:, subset_idx] = (
+                            self.semantic_weight * semantic_subset[:, col_pos]
+                            + self.feature_weight * feature_similarity[:, subset_idx]
+                        )
+                    if len(subset_indices) == len(tiles):
+                        suitability_matrix = fusion
+                    else:
+                        suitability_matrix = fusion
+                else:
+                    suitability_matrix = feature_similarity
                 
             except Exception as e:
                 logger.warning(f"[SuitabilityService] 语义矩阵计算失败: {e}")
@@ -953,6 +1224,7 @@ class SuitabilityService:
         self._species_semantic_cache.clear()
         self._species_feature_cache.clear()
         self._tile_semantic_cache.clear()
+        self._tile_semantic_signatures.clear()
         self._tile_feature_cache.clear()
         self._species_text_cache.clear()
         self._tile_text_cache.clear()
@@ -960,6 +1232,8 @@ class SuitabilityService:
         self._cache_species_codes = []
         self._cache_tile_ids = []
         self._cache_turn = -1
+        self._recent_hotspot_ids.clear()
+        self._semantic_store_dirty = False
     
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
@@ -983,14 +1257,27 @@ def get_suitability_service(
     """获取全局宜居度服务实例"""
     global _global_suitability_service
     
+    ui_config = _get_config_service().get_ui_config()
+    hotspot_only = getattr(ui_config, "embedding_semantic_hotspot_only", False)
+    hotspot_limit = getattr(ui_config, "embedding_semantic_hotspot_limit", 512)
+    tile_cache_path = _TILE_CACHE_DIR / "tile_semantics.json"
+    use_semantic = embedding_service is not None
+    
     if _global_suitability_service is None:
         _global_suitability_service = SuitabilityService(
             embedding_service=embedding_service,
-            use_semantic=embedding_service is not None,
+            use_semantic=use_semantic,
+            semantic_hotspot_only=hotspot_only,
+            semantic_hotspot_limit=hotspot_limit,
+            tile_cache_path=tile_cache_path,
         )
-    elif embedding_service is not None and _global_suitability_service.embeddings is None:
-        _global_suitability_service.embeddings = embedding_service
-        _global_suitability_service.use_semantic = True
+    else:
+        _global_suitability_service.update_semantic_settings(
+            use_semantic=use_semantic,
+            semantic_hotspot_only=hotspot_only,
+            semantic_hotspot_limit=hotspot_limit,
+            embedding_service=embedding_service,
+        )
     
     return _global_suitability_service
 
