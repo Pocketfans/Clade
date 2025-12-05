@@ -1998,40 +1998,64 @@ class TileBasedMortalityEngine:
         safe_t3 = np.maximum(t3, MIN_BIOMASS)
         safe_t4 = np.maximum(t4, MIN_BIOMASS)
         
-        # 【平衡修复v3】降低无食物时的稀缺压力
-        # 原来2.0太高，导致新物种在第一回合就有44%+的死亡率
-        # 修改为1.0，让稀缺压力更温和
-        SCARCITY_MAX = 1.0  # 从2.0降到1.0
+        # ============================================================
+        # 【v15】Lotka-Volterra 振荡优化 + 生产者保护机制
+        # 目标：
+        # 1. 生产者先繁殖到高数量（前几回合低捕食压力）
+        # 2. 消费者跟随增长，控制生产者数量
+        # 3. 生产者不会被完全吃光（避难所机制）
+        # 4. 形成稳定的振荡周期
+        # ============================================================
         
-        # 【严重饥饿判定】
-        # 如果有种群但几乎没有猎物，强制设置为极高死亡率（0.9）
-        # 这是一个硬约束，防止消费者在无食物地块苟活
-        SEVERE_STARVATION_PENALTY = 0.9
+        # 消费者饥饿压力（猎物不足时）
+        SCARCITY_MAX = 1.2  # 饥饿压力上限
         
-        # 【新增v9】猎物丰富度奖励参数
-        # 当猎物生物量 > 需求的 N 倍时，给予负压力（死亡率减免）
-        # 【v10】大幅提高奖励：猎物越丰富，死亡率越低
-        ABUNDANCE_THRESHOLD = 1.5  # 猎物生物量超过需求1.5倍时开始给予奖励
-        ABUNDANCE_BONUS_MAX = 0.30  # 最大死亡率减免 30%
+        # 【严重饥饿判定】消费者无猎物时高死亡率
+        SEVERE_STARVATION_PENALTY = 0.90
         
-        # === T1 受 T2 采食 ===
+        # 猎物丰富度奖励（消费者在猎物充足时生存优势）
+        ABUNDANCE_THRESHOLD = 3.0  # 猎物生物量超过需求3倍时开始给予奖励（从2.0提高）
+        ABUNDANCE_BONUS_MAX = 0.35  # 最大死亡率减免 35%
+        
+        # 【v15新增】捕食压力上限（生产者避难所）
+        # 即使消费者再多，生产者也能保持最低繁殖率
+        # 捕食压力最高60%，配合繁殖效率5-20倍，生产者净增长仍为正
+        GRAZING_CAP = 0.60  # 捕食压力上限60%
+        
+        # === T1 受 T2 采食（核心 Lotka-Volterra 动态）===
+        # 【v15】动态捕食压力：与消费者/生产者比例挂钩
         req_t1 = np.where(t2 > 0, t2 / EFFICIENCY, 0)
         grazing_ratio = np.divide(req_t1, safe_t1, out=np.zeros_like(req_t1), where=t1 > MIN_BIOMASS)
-        grazing = np.minimum(grazing_ratio * 0.5, 0.8)
+        
+        # 【v15】温和的捕食压力曲线 + 上限保护
+        # - 消费者少（ratio < 0.5）：极低捕食压力，生产者爆发
+        # - 消费者适中（0.5 < ratio < 1.5）：缓慢增加
+        # - 消费者多（ratio > 1.5）：上限60%，保护生产者不被吃绝
+        grazing = np.where(
+            grazing_ratio < 0.5,
+            grazing_ratio * 0.08,  # 消费者少时，捕食压力极低（ratio=0.5时只有4%）
+            np.where(
+                grazing_ratio < 1.5,
+                0.04 + (grazing_ratio - 0.5) * 0.36,  # 线性增加（ratio=1.5时达到40%）
+                np.minimum(0.40 + (grazing_ratio - 1.5) * 0.20, GRAZING_CAP)  # 缓慢接近上限60%
+            )
+        )
+        
+        # 消费者饥饿压力（生产者不足时）
+        # 【v15】消费者需要更多猎物才能不饥饿
         scarcity_t2 = np.where(t1 > MIN_BIOMASS, 
-                               np.clip(grazing_ratio - 1.0, 0, SCARCITY_MAX),
+                               np.clip((grazing_ratio - 1.0) * 1.2, 0, SCARCITY_MAX),  # ratio>1时开始饥饿
                                np.where(t2 > 0, SCARCITY_MAX, 0.0))
         # T2 严重饥饿检查: T2存在但T1几乎为0
         starvation_mask_t2 = (t2 > MIN_BIOMASS) & (t1 <= MIN_BIOMASS)
         
-        # 【新增v9】T2 猎物丰富度奖励（负压力）
-        # 当 T1 >> T2需求时，T2消费者获得生存优势
-        # 【v10】提高奖励速度：每超过阈值1倍，减免5%死亡率
+        # 【v15】T2 猎物丰富度奖励（生产者爆发时消费者繁荣）
+        # 当生产者数量 >> 消费者需求时，消费者获得生存优势
         abundance_ratio_t2 = np.divide(safe_t1, np.maximum(req_t1, MIN_BIOMASS), 
                                        out=np.ones_like(safe_t1), where=req_t1 > MIN_BIOMASS)
         abundance_bonus_t2 = np.where(
             (t2 > MIN_BIOMASS) & (t1 > MIN_BIOMASS) & (abundance_ratio_t2 > ABUNDANCE_THRESHOLD),
-            -np.minimum((abundance_ratio_t2 - ABUNDANCE_THRESHOLD) * 0.05, ABUNDANCE_BONUS_MAX),
+            -np.minimum((abundance_ratio_t2 - ABUNDANCE_THRESHOLD) * 0.10, ABUNDANCE_BONUS_MAX),
             0.0
         )
         

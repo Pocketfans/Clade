@@ -1166,17 +1166,16 @@ class ReproductionService:
             base_growth_multiplier *= t3_efficiency
             logger.debug(f"[营养级效率] {species.common_name} (T{trophic_level:.1f}) 应用高营养级惩罚 {t3_efficiency:.1%}")
         elif trophic_level >= 2.0:
-            # 【v12修复】初级消费者（T2）：适度加成，但不能超过生产者
-            # 原设计过度加成导致消费者数量反超生产者
-            consumer_boost = 1.1  # 从30%降到10%加成
-            base_growth_multiplier *= consumer_boost
-            logger.debug(f"[消费者加成] {species.common_name} (T{trophic_level:.1f}) 初级消费者繁殖加成 +10%")
+            # 【v13】初级消费者：保持基础繁殖效率，不额外加成
+            # 消费者通过捕食获得能量，繁殖依赖猎物充足度
+            logger.debug(f"[消费者] {species.common_name} (T{trophic_level:.1f}) 基础繁殖效率")
         else:
-            # 【v12新增】T1 生产者：生态金字塔基础，需要快速繁殖
-            # 生产者（藻类、细菌等）繁殖速度通常最快，是食物链的基础
-            producer_boost = 1.5  # 50% 繁殖效率加成
+            # 【v13大幅强化】T1 生产者：生态金字塔基础，极速繁殖
+            # 生产者（藻类、细菌、原生植物）是 r 策略物种，繁殖速度极快
+            # 它们的数量应该由消费者捕食来控制，而不是繁殖效率限制
+            producer_boost = 5.0  # 500% 繁殖效率加成（5倍基础速度）
             base_growth_multiplier *= producer_boost
-            logger.debug(f"[生产者加成] {species.common_name} (T{trophic_level:.1f}) 生产者繁殖加成 +50%")
+            logger.info(f"[生产者爆发] {species.common_name} (T{trophic_level:.1f}) 生产者繁殖加成 +400%")
         
         # 3. 生存率修正
         survival_modifier = survival_mod_base + survival_rate * survival_mod_rate
@@ -1196,28 +1195,32 @@ class ReproductionService:
             mortality_penalty_rate = 0.3
             extreme_mortality_threshold = 0.7
         
-        # 【v12重新平衡】低死亡率繁殖加成
-        # 环境适宜时所有物种都可以获得加成，但生产者获得更多
-        # 原 v11 设计只对消费者生效且加成过高（200%），导致食物链倒置
-        LOW_MORTALITY_THRESHOLD = 0.40  # 死亡率低于40%时开始给予加成
+        # 【v13】低死亡率繁殖加成 - 生产者获得巨大加成
+        # 生产者在环境适宜时应该爆发式增长，消费者则依赖捕食效率
+        LOW_MORTALITY_THRESHOLD = 0.50  # 死亡率低于50%时开始给予加成
         
         if death_rate < LOW_MORTALITY_THRESHOLD:
             # 根据营养级分配不同的加成
             if trophic_level < 2.0:
-                # 生产者：环境适宜时繁殖效率更高（最高+80%）
-                low_mortality_bonus = (LOW_MORTALITY_THRESHOLD - death_rate) / LOW_MORTALITY_THRESHOLD * 0.80
+                # 【v13】生产者：环境适宜时爆发式增长（最高+300%）
+                # 这模拟了藻类大爆发、细菌繁殖等现象
+                low_mortality_bonus = (LOW_MORTALITY_THRESHOLD - death_rate) / LOW_MORTALITY_THRESHOLD * 3.0
+                logger.info(
+                    f"[生产者爆发] {species.common_name} 死亡率{death_rate:.1%}，"
+                    f"繁殖效率+{low_mortality_bonus:.0%}"
+                )
             elif trophic_level < 3.0:
-                # 初级消费者：猎物丰富时繁殖效率提高（最高+50%）
-                low_mortality_bonus = (LOW_MORTALITY_THRESHOLD - death_rate) / LOW_MORTALITY_THRESHOLD * 0.50
-            else:
-                # 高级消费者：加成更小（最高+30%）
+                # 初级消费者：猎物丰富时繁殖效率提高（最高+30%）
                 low_mortality_bonus = (LOW_MORTALITY_THRESHOLD - death_rate) / LOW_MORTALITY_THRESHOLD * 0.30
+                logger.debug(
+                    f"[消费者加成] {species.common_name} 死亡率{death_rate:.1%}，"
+                    f"繁殖效率+{low_mortality_bonus:.0%}"
+                )
+            else:
+                # 高级消费者：加成更小（最高+15%）
+                low_mortality_bonus = (LOW_MORTALITY_THRESHOLD - death_rate) / LOW_MORTALITY_THRESHOLD * 0.15
             
             survival_modifier *= (1.0 + low_mortality_bonus)
-            logger.debug(
-                f"[低死亡率加成] {species.common_name} (T{trophic_level:.1f}) 死亡率{death_rate:.1%}，"
-                f"繁殖效率+{low_mortality_bonus:.0%}"
-            )
         
         # 【核心修改】高死亡率惩罚优先于生存本能
         if death_rate > extreme_mortality_threshold:
