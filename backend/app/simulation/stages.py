@@ -1035,13 +1035,6 @@ class MigrationStage(BaseStage):
         logger.info("【阶段2】迁徙建议与执行...")
         ctx.emit_event("stage", "🦅 【阶段2】迁徙建议与执行", "生态")
         
-        # 获取 ModifierApplicator（如果可用）
-        modifier = getattr(ctx, 'modifier_applicator', None)
-        use_modifier = modifier is not None and len(modifier._assessments) > 0
-        
-        if use_modifier:
-            logger.debug("[迁徙] 使用 ModifierApplicator 应用迁徙偏向修正")
-        
         # 更新猎物分布缓存
         ctx.all_habitats = environment_repository.latest_habitats()
         habitat_manager.update_prey_distribution_cache(ctx.species_batch, ctx.all_habitats)
@@ -1076,27 +1069,12 @@ class MigrationStage(BaseStage):
         if ctx.cooldown_species:
             logger.debug(f"[迁徙冷却] {len(ctx.cooldown_species)} 个物种处于冷却期，跳过")
         
-        # 【关键】应用迁徙偏向修正
-        # 如果 ModifierApplicator 可用，调整每个物种的迁徙阈值
-        migration_bias_overrides = {}
-        if use_modifier:
-            for sp in ctx.species_batch:
-                code = sp.lineage_code
-                # 基础迁徙概率阈值
-                base_threshold = 0.3
-                # 通过 ModifierApplicator 调整
-                adjusted_threshold = modifier.apply(code, base_threshold, "migration")
-                if abs(adjusted_threshold - base_threshold) > 0.01:
-                    migration_bias_overrides[code] = adjusted_threshold
-                    logger.debug(f"[迁徙偏向] {sp.common_name}: 阈值 {base_threshold:.2f} → {adjusted_threshold:.2f}")
-        
         # 规划迁徙
         ctx.migration_events = engine.migration_advisor.plan(
             ctx.preliminary_mortality,
             ctx.modifiers, ctx.major_events, ctx.map_changes,
             current_turn=ctx.turn_index,
             cooldown_species=ctx.cooldown_species,
-            migration_bias_overrides=migration_bias_overrides if migration_bias_overrides else None,
         )
         
         # 执行迁徙
@@ -1242,15 +1220,6 @@ class PopulationUpdateStage(BaseStage):
         logger.info("计算种群变化（死亡+繁殖并行）...")
         ctx.emit_event("stage", "💀🐣 计算种群变化", "物种")
         
-        # 获取 ModifierApplicator（如果可用）
-        modifier = getattr(ctx, 'modifier_applicator', None)
-        use_modifier = modifier is not None and len(modifier._assessments) > 0
-        
-        if use_modifier:
-            logger.info("[种群更新] 使用 ModifierApplicator 应用 AI 修正 (mortality/r/K)")
-            stats = modifier.get_stats()
-            logger.debug(f"[种群更新] ModifierApplicator 统计: {stats}")
-        
         # 更新环境动态修正系数
         temp_change = ctx.modifiers.get("temperature", 0.0) if ctx.modifiers else 0.0
         sea_level_change = 0.0
@@ -1273,33 +1242,23 @@ class PopulationUpdateStage(BaseStage):
         else:
             engine.reproduction_service._ecological_realism_data = None
         
-        # 【修复】先计算所有物种的调整后死亡率，用于构建真实存活率
-        # 这样繁殖模块才能正确反应压力造成的高死亡率
-        adjusted_death_rates = {}
+        # 计算死亡率映射，用于构建存活率
+        death_rates = {}
         for item in ctx.combined_results:
             code = item.species.lineage_code
-            base_death_rate = item.death_rate
-            
-            # 通过 ModifierApplicator 应用 AI 死亡率修正
-            if use_modifier:
-                adjusted = modifier.apply(code, base_death_rate, "mortality")
-            else:
-                adjusted = base_death_rate
-            
             # 确保死亡率在有效范围内
-            adjusted_death_rates[code] = max(0.0, min(1.0, adjusted))
+            death_rates[code] = max(0.0, min(1.0, item.death_rate))
         
-        # 【关键修复】使用真实存活率（1 - adjusted_death_rate）
-        # 原来硬编码为 1.0，导致繁殖模块忽略了压力/LLM/规则系统计算的死亡率
+        # 使用真实存活率（1 - death_rate）
         survival_rates = {
             code: max(0.01, 1.0 - death_rate)  # 保证最低 1% 存活率避免除零
-            for code, death_rate in adjusted_death_rates.items()
+            for code, death_rate in death_rates.items()
         }
         
-        # 记录高死亡率物种的存活率（便于调试）
-        high_mortality_species = [(code, sr) for code, sr in survival_rates.items() if sr < 0.5]
+        # 记录高死亡率物种（便于调试）
+        high_mortality_species = [(code, dr) for code, dr in death_rates.items() if dr > 0.5]
         if high_mortality_species:
-            logger.info(f"[种群更新] 高死亡率物种存活率: {high_mortality_species[:5]}...")
+            logger.debug(f"[种群更新] 高死亡率物种: {high_mortality_species[:5]}...")
         
         niche_data = {
             code: (metrics.overlap, metrics.saturation)
@@ -1317,20 +1276,15 @@ class PopulationUpdateStage(BaseStage):
         )
         
         # 计算最终种群
+        from ..services.species.population_calculator import PopulationCalculator
+        
         for item in ctx.combined_results:
             code = item.species.lineage_code
             initial = item.initial_population
-            
-            # 【复用】使用之前计算的调整后死亡率（保持一致性）
-            death_rate = adjusted_death_rates.get(code, item.death_rate)
+            death_rate = death_rates.get(code, item.death_rate)
             
             repro_pop = ctx.reproduction_results.get(code, initial)
             repro_gain = max(0, repro_pop - initial)
-            
-            # 【关键】通过 ModifierApplicator 应用繁殖率 r 修正
-            if use_modifier:
-                r_factor = modifier.apply(code, 1.0, "reproduction_r")
-                repro_gain = int(repro_gain * r_factor)
             
             survivors = int(initial * (1.0 - death_rate))
             survivor_ratio = survivors / initial if initial > 0 else 0
@@ -1338,57 +1292,40 @@ class PopulationUpdateStage(BaseStage):
             offspring_survival = 0.8 + 0.2 * (1.0 - death_rate)
             effective_gain = int(repro_gain * survivor_ratio * offspring_survival)
             
-            # 【关键】通过 ModifierApplicator 应用承载力 K 修正
-            # 承载力限制最终种群上限
-            # 【修复】动态计算承载力，不再使用硬编码默认值
-            from ..services.species.population_calculator import PopulationCalculator
+            # 动态计算承载力
             stored_k = item.species.morphology_stats.get("carrying_capacity")
             if stored_k and stored_k > 0:
-                base_carrying_capacity = stored_k
+                carrying_capacity = stored_k
             else:
                 # 基于体型动态计算承载力
                 body_length = item.species.morphology_stats.get("body_length_cm", 1.0)
                 body_weight = item.species.morphology_stats.get("body_weight_g")
-                _, base_carrying_capacity = PopulationCalculator.calculate_reasonable_population(
+                _, carrying_capacity = PopulationCalculator.calculate_reasonable_population(
                     body_length, body_weight
                 )
-            if use_modifier:
-                adjusted_k = modifier.apply(code, base_carrying_capacity, "carrying_capacity")
-            else:
-                adjusted_k = base_carrying_capacity
             
             final_pop = survivors + effective_gain
             
             # 应用 K 限制：如果超过承载力，多余个体死亡
-            if final_pop > adjusted_k:
-                excess = final_pop - adjusted_k
-                final_pop = int(adjusted_k)
+            if final_pop > carrying_capacity:
+                excess = final_pop - carrying_capacity
+                final_pop = int(carrying_capacity)
                 if excess > 100:
-                    logger.debug(f"[承载力限制] {item.species.common_name}: 超出 K={adjusted_k:,.0f}，减少 {excess:,}")
+                    logger.debug(f"[承载力限制] {item.species.common_name}: 超出 K={carrying_capacity:,.0f}，减少 {excess:,}")
             
             ctx.new_populations[code] = max(0, final_pop)
             
             item.births = effective_gain
             item.final_population = final_pop
             item.survivors = survivors
-            # 记录 AI 修正后的实际死亡率
             item.adjusted_death_rate = death_rate
-            item.adjusted_k = adjusted_k
+            item.adjusted_k = carrying_capacity
             
             if abs(final_pop - initial) > initial * 0.3:
-                mod_info = ""
-                if use_modifier:
-                    parts = []
-                    if abs(base_death_rate - death_rate) > 0.01:
-                        parts.append(f"mort:{base_death_rate:.0%}→{death_rate:.0%}")
-                    if abs(adjusted_k - base_carrying_capacity) > 100:
-                        parts.append(f"K:{base_carrying_capacity:,.0f}→{adjusted_k:,.0f}")
-                    if parts:
-                        mod_info = f" [AI: {', '.join(parts)}]"
                 logger.debug(
                     f"[种群变化] {item.species.common_name}: "
                     f"{initial:,} → {final_pop:,} "
-                    f"(死亡{death_rate:.1%}, 存活{survivors:,}, 繁殖+{effective_gain:,}){mod_info}"
+                    f"(死亡{death_rate:.1%}, 存活{survivors:,}, 繁殖+{effective_gain:,})"
                 )
         
         # ===== 张量影子状态回写（线性地块分布）=====
@@ -2187,16 +2124,12 @@ class SpeciationStage(BaseStage):
         logger.info("开始物种分化...")
         ctx.emit_event("stage", "🌱 物种分化", "分化")
         
-        # 获取 ModifierApplicator（如果可用）
-        modifier = getattr(ctx, 'modifier_applicator', None)
-        use_modifier = modifier is not None and len(modifier._assessments) > 0
-        
         try:
-            # 【张量化重构】分化候选主要来自张量系统，LLM 信号作为补充
+            # 【张量化重构】分化候选主要来自张量系统
             speciation_candidates = set()
             evolution_directions = {}
             
-            # 1. 首先获取张量触发信号（主要来源）
+            # 1. 获取张量触发信号（主要来源）
             tensor_trigger_codes = getattr(ctx, "tensor_trigger_codes", set()) or set()
             if tensor_trigger_codes:
                 speciation_candidates |= tensor_trigger_codes
@@ -2207,28 +2140,7 @@ class SpeciationStage(BaseStage):
                     "分化"
                 )
             
-            # 2. 如果有 ModifierApplicator（LLM 评估启用），作为补充来源
-            if use_modifier:
-                ai_candidates = 0
-                for result in ctx.critical_results + ctx.focus_results:
-                    code = result.species.lineage_code
-                    # 只添加张量未识别的物种
-                    if code not in speciation_candidates and modifier.should_speciate(code, threshold=0.5):
-                        speciation_candidates.add(code)
-                        ai_candidates += 1
-                        # 获取演化方向
-                        directions = modifier.get_evolution_direction(code)
-                        if directions:
-                            evolution_directions[code] = directions
-                        logger.debug(
-                            f"[分化候选] AI 补充: {result.species.common_name}: "
-                            f"信号={modifier.get_speciation_signal(code):.2f}"
-                        )
-                
-                if ai_candidates > 0:
-                    logger.info(f"[分化] AI 补充 {ai_candidates} 个分化候选")
-            
-            # 3. 如果既没有张量触发也没有 LLM 信号，基于规则检测
+            # 2. 如果没有张量触发，基于规则检测
             if not speciation_candidates:
                 # 基于死亡率和种群的规则检测
                 for result in ctx.critical_results + ctx.focus_results:

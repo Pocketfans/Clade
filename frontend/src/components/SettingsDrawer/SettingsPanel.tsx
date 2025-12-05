@@ -17,7 +17,6 @@ import "./Settings.css";
 // Section 组件
 import {
   ConnectionSection,
-  ModelsSection,
   EmbeddingSection,
   PerformanceSection,
   SpeciationSection,
@@ -45,11 +44,10 @@ const TABS: {
 }[] = [
   // AI 配置
   { id: "connection", label: "服务商配置", icon: "🔌", desc: "API 连接", group: "ai" },
-  { id: "models", label: "智能路由", icon: "🤖", desc: "模型分配", group: "ai" },
+  { id: "performance", label: "AI 配置", icon: "🤖", desc: "模型与性能", group: "ai" },
   { id: "embedding", label: "向量记忆", icon: "🧠", desc: "语义搜索", group: "ai" },
   // 系统设置
   { id: "autosave", label: "自动存档", icon: "💾", desc: "自动保存", group: "system" },
-  { id: "performance", label: "性能调优", icon: "⚡", desc: "超时并发", group: "system" },
   // 游戏设置
   { id: "speciation", label: "分化设置", icon: "🧬", desc: "物种演化", group: "gameplay" },
   { id: "reproduction", label: "繁殖设置", icon: "🐣", desc: "种群增长", group: "gameplay" },
@@ -226,17 +224,6 @@ export function SettingsPanel({ config, onClose, onSave }: Props) {
             dispatch={dispatch}
           />
         );
-      case "models":
-        return (
-          <ModelsSection
-            providers={state.form.providers || {}}
-            capabilityRoutes={state.form.capability_routes || {}}
-            aiProvider={state.form.ai_provider ?? null}
-            aiModel={state.form.ai_model ?? null}
-            aiTimeout={state.form.ai_timeout || 60}
-            dispatch={dispatch}
-          />
-        );
       case "embedding":
         return (
           <EmbeddingSection
@@ -252,7 +239,7 @@ export function SettingsPanel({ config, onClose, onSave }: Props) {
           />
         );
       case "performance":
-        return <PerformanceSection config={state.form} dispatch={dispatch} />;
+        return <PerformanceSection config={state.form} providers={state.form.providers || {}} dispatch={dispatch} />;
       case "speciation":
         return <SpeciationSection config={state.form.speciation || {}} dispatch={dispatch} />;
       case "reproduction":

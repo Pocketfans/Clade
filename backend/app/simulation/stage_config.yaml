@@ -160,8 +160,8 @@ modes:
         enabled: true
         order: 80
       - name: ecological_intelligence
-        enabled: true  # 生态智能体评估
-        order: 52  # 在初步死亡率(50)后、迁徙(60)前，使AI能影响迁徙决策
+        enabled: false  # 【已废弃】张量系统已替代，LLM评估默认禁用
+        order: 52
       - name: speciation_data_transfer
         enabled: true
         order: 86
@@ -283,8 +283,8 @@ modes:
         enabled: true
         order: 80
       - name: ecological_intelligence
-        enabled: true  # 生态智能体评估（新架构唯一数值修正来源）
-        order: 52  # 在初步死亡率(50)后、迁徙(60)前，使AI能影响迁徙决策
+        enabled: false  # 【已废弃】张量系统已替代，LLM评估默认禁用
+        order: 52
       - name: speciation_data_transfer
         enabled: true
         order: 86
@@ -422,8 +422,8 @@ modes:
         enabled: true
         order: 80
       - name: ecological_intelligence
-        enabled: true  # 生态智能体评估（调试模式启用完整输出）
-        order: 52  # 在初步死亡率(50)后、迁徙(60)前，使AI能影响迁徙决策
+        enabled: false  # 【已废弃】张量系统已替代，LLM评估默认禁用
+        order: 52
       - name: speciation_data_transfer
         enabled: true
         order: 86

@@ -715,7 +715,7 @@ export interface UIConfig {
   load_balance_strategy?: "round_robin" | "random" | "least_latency";  // 负载均衡策略
 
   // 8. AI 叙事开关
-  ai_narrative_enabled?: boolean;     // 是否启用 AI 生成物种叙事（默认关闭）
+  ai_narrative_enabled?: boolean;     // 是否启用 AI 生成物种叙事（默认开启）
   
   // 9. 回合报告 LLM 开关（与物种叙事分开）
   turn_report_llm_enabled?: boolean;  // 是否启用 LLM 生成回合总结（默认开启）

@@ -197,7 +197,7 @@ mortality_engine = MortalityEngine(settings.batch_rule_limit)
 embedding_service = EmbeddingService(settings.embedding_provider)
 model_router = ModelRouter(
     {
-        # ========== 核心推演能力（高优先级）==========
+        # ========== 核心推演能力（本地模板）==========
         "turn_report": ModelConfig(provider="local", model="template-narrator"),
         "focus_batch": ModelConfig(
             provider="local", 
@@ -206,7 +206,7 @@ model_router = ModelRouter(
         ),
         "critical_detail": ModelConfig(provider="local", model="critical-template"),
         
-        # ========== 物种分化能力 ==========
+        # ========== 物种分化能力（需要 LLM）==========
         "speciation": ModelConfig(
             provider="openai", 
             model=settings.speciation_model,
@@ -217,83 +217,19 @@ model_router = ModelRouter(
             model=settings.speciation_model,
             extra_body={"response_format": {"type": "json_object"}}
         ),
-        "plant_speciation": ModelConfig(
-            provider="openai", 
-            model=settings.speciation_model,
-            extra_body={"response_format": {"type": "json_object"}}
-        ),
         "plant_speciation_batch": ModelConfig(
             provider="openai", 
             model=settings.speciation_model,
             extra_body={"response_format": {"type": "json_object"}}
         ),
         
-        # ========== 物种生成与叙事 ==========
-        "species_generation": ModelConfig(
-            provider="openai", 
-            model=settings.species_gen_model,
-            extra_body={"response_format": {"type": "json_object"}}
-        ),
-        "species_narrative": ModelConfig(
-            provider="openai", 
-            model=settings.speciation_model,
-            extra_body={"response_format": {"type": "json_object"}}
-        ),
-        "narrative": ModelConfig(
-            provider="openai", 
-            model=settings.speciation_model,
-            extra_body={"response_format": {"type": "json_object"}}
-        ),
-        
-        # ========== 压力适应与状态评估 ==========
-        "pressure_adaptation": ModelConfig(
-            provider="openai", 
-            model=settings.speciation_model,
-            extra_body={"response_format": {"type": "json_object"}}
-        ),
-        "species_status_eval": ModelConfig(
-            provider="openai", 
-            model=settings.speciation_model,
-            extra_body={"response_format": {"type": "json_object"}}
-        ),
-        
-        # ========== 杂交能力 ==========
+        # ========== 杂交能力（需要 LLM）==========
         "hybridization": ModelConfig(
             provider="openai", 
             model=settings.speciation_model,
             extra_body={"response_format": {"type": "json_object"}}
         ),
         "forced_hybridization": ModelConfig(
-            provider="openai", 
-            model=settings.speciation_model,
-            extra_body={"response_format": {"type": "json_object"}}
-        ),
-        
-        # ========== 生态智能体评估 ==========
-        "biological_assessment_a": ModelConfig(
-            provider="openai", 
-            model=settings.speciation_model,
-            extra_body={"response_format": {"type": "json_object"}}
-        ),
-        "biological_assessment_b": ModelConfig(
-            provider="openai", 
-            model=settings.speciation_model,
-            extra_body={"response_format": {"type": "json_object"}}
-        ),
-        
-        # ========== 辅助能力（可选LLM增强）==========
-        # 这些能力主要基于规则，但可配置LLM增强
-        "migration": ModelConfig(
-            provider="openai", 
-            model=settings.speciation_model,
-            extra_body={"response_format": {"type": "json_object"}}
-        ),
-        "pressure_escalation": ModelConfig(
-            provider="openai", 
-            model=settings.speciation_model,
-            extra_body={"response_format": {"type": "json_object"}}
-        ),
-        "reemergence": ModelConfig(
             provider="openai", 
             model=settings.speciation_model,
             extra_body={"response_format": {"type": "json_object"}}
@@ -456,6 +392,14 @@ ui_config = apply_ui_config(environment_repository.load_ui_config(ui_config_path
 # 【新增】Embedding 集成服务 - 管理分类学、演化预测、叙事生成等扩展功能
 embedding_integration = EmbeddingIntegrationService(embedding_service, model_router)
 
+# 【修复】从 UI 配置中获取各子配置，注入到 SimulationEngine
+_engine_configs = {
+    "ecology": getattr(ui_config, 'ecology_balance', None),
+    "mortality": getattr(ui_config, 'mortality', None),
+    "speciation": getattr(ui_config, 'speciation', None),
+    "food_web": getattr(ui_config, 'food_web', None),
+}
+
 simulation_engine = SimulationEngine(
     environment=environment_system,
     mortality=mortality_engine,
@@ -476,6 +420,7 @@ simulation_engine = SimulationEngine(
     reproduction_service=reproduction_service,
     gene_flow_service=gene_flow_service,
     embedding_integration=embedding_integration,  # 【新增】Embedding集成服务
+    configs=_engine_configs,  # 【修复】注入配置
 )
 watchlist: set[str] = set()
 action_queue = {"queued_rounds": 0, "running": False}
@@ -814,12 +759,13 @@ async def run_turns(command: TurnCommand, background_tasks: BackgroundTasks):
         
         # 【关键修复】使用 BackgroundTasks 执行自动保存
         # 这会在响应完全发送后才执行，避免响应被阻塞
-        latest_turn = reports[-1].turn_index if reports else 0
+        # 【修复】直接使用引擎的 turn_counter，而不是报告中的 turn_index
+        # final_turn 已在上面获取，是权威的回合数
         
         def do_autosave():
             """在后台执行自动保存"""
             try:
-                _perform_autosave(latest_turn)
+                _perform_autosave(final_turn)
             except Exception as e:
                 logger.warning(f"[后台任务] 自动保存失败: {e}")
         

@@ -1,5 +1,6 @@
 /**
- * EmbeddingSection - 向量记忆配置 (全新设计)
+ * EmbeddingSection - 向量记忆配置
+ * 单列布局，配置语义搜索引擎
  */
 
 import { memo, useState, useCallback, type Dispatch } from "react";
@@ -34,7 +35,6 @@ export const EmbeddingSection = memo(function EmbeddingSection({
   dispatch,
 }: Props) {
   const providerList = Object.values(providers).filter((p) => p.api_key);
-  // 优先使用 embedding_provider_id，兼容旧的 embedding_provider
   const effectiveProviderId = embeddingProviderId || embeddingProvider;
   const selectedProvider = effectiveProviderId ? providers[effectiveProviderId] : null;
   const concurrencyEnabled = Boolean(embeddingConcurrencyEnabled);
@@ -45,7 +45,6 @@ export const EmbeddingSection = memo(function EmbeddingSection({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
 
-  // 测试连接
   const handleTest = useCallback(async () => {
     if (!selectedProvider?.base_url || !selectedProvider?.api_key) {
       setTestResult({
@@ -79,7 +78,6 @@ export const EmbeddingSection = memo(function EmbeddingSection({
 
   const handleProviderChange = (providerId: string) => {
     dispatch({ type: "UPDATE_GLOBAL", field: "embedding_provider_id", value: providerId || null });
-    // 兼容旧字段名
     dispatch({ type: "UPDATE_GLOBAL", field: "embedding_provider", value: providerId || null });
     if (!providerId) {
       dispatch({ type: "UPDATE_GLOBAL", field: "embedding_model", value: null });
@@ -88,7 +86,6 @@ export const EmbeddingSection = memo(function EmbeddingSection({
 
   const handleModelChange = (model: string) => {
     dispatch({ type: "UPDATE_GLOBAL", field: "embedding_model", value: model || null });
-    // 自动设置模型对应的向量维度
     const preset = EMBEDDING_PRESETS.find((p) => p.name === model);
     if (preset) {
       dispatch({ type: "UPDATE_GLOBAL", field: "embedding_dimensions", value: preset.dimensions });
@@ -103,9 +100,7 @@ export const EmbeddingSection = memo(function EmbeddingSection({
   };
 
   const handleConcurrencyLimitChange = (value: number) => {
-    if (Number.isNaN(value)) {
-      return;
-    }
+    if (Number.isNaN(value)) return;
     const clamped = Math.min(16, Math.max(2, value));
     dispatch({ type: "UPDATE_GLOBAL", field: "embedding_concurrency_limit", value: clamped });
   };
@@ -156,6 +151,7 @@ export const EmbeddingSection = memo(function EmbeddingSection({
             <div className="form-label-text">
               Embedding 服务商 <span style={{ color: "var(--s-warning)", fontSize: "0.75rem" }}>*必选</span>
             </div>
+            <div className="form-label-desc">选择提供 Embedding 能力的服务商</div>
           </div>
           <div className="form-control">
             <div className="select-control">
@@ -186,6 +182,7 @@ export const EmbeddingSection = memo(function EmbeddingSection({
             <div className="form-row">
               <div className="form-label">
                 <div className="form-label-text">Embedding 模型</div>
+                <div className="form-label-desc">选择用于生成向量的模型</div>
               </div>
               <div className="form-control">
                 <div className="select-control">
@@ -205,62 +202,64 @@ export const EmbeddingSection = memo(function EmbeddingSection({
             </div>
 
             {/* 并发控制 */}
-            <div className="form-row">
+            <div className="form-row form-row-compact">
               <div className="form-label">
                 <div className="form-label-text">并发加速</div>
                 <div className="form-label-desc">启用后可同时向服务商发送多个批次</div>
               </div>
-              <div className="form-control" style={{ gap: "10px" }}>
-                <label className="checkbox-label">
+              <div className="form-control" style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <label className="switch">
                   <input
                     type="checkbox"
                     checked={concurrencyEnabled}
                     onChange={(e) => handleConcurrencyToggle(e.target.checked)}
                   />
-                  <span>允许多并发请求</span>
+                  <span className="switch-track">
+                    <span className="switch-thumb" />
+                  </span>
                 </label>
                 {concurrencyEnabled && (
-                  <div className="inline-input-group">
+                  <div className="number-input" style={{ width: "100px" }}>
                     <input
                       type="number"
                       min={2}
                       max={16}
                       value={concurrencyLimit}
                       onChange={(e) => handleConcurrencyLimitChange(parseInt(e.target.value, 10))}
-                      className="input-sm"
                     />
-                    <span style={{ fontSize: "0.8rem", color: "var(--s-text-muted)" }}>建议 2 - 8</span>
+                    <span className="number-input-suffix">并发</span>
                   </div>
                 )}
               </div>
             </div>
 
             {/* 热点地块语义 */}
-            <div className="form-row">
+            <div className="form-row form-row-compact">
               <div className="form-label">
                 <div className="form-label-text">热点语义模式</div>
                 <div className="form-label-desc">仅对关键地块计算语义，减少 API 压力</div>
               </div>
-              <div className="form-control" style={{ gap: "10px" }}>
-                <label className="checkbox-label">
+              <div className="form-control" style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <label className="switch">
                   <input
                     type="checkbox"
                     checked={hotspotOnly}
                     onChange={(e) => handleHotspotToggle(e.target.checked)}
                   />
-                  <span>只对热点地块启用语义</span>
+                  <span className="switch-track">
+                    <span className="switch-thumb" />
+                  </span>
                 </label>
                 {hotspotOnly && (
-                  <div className="inline-input-group">
+                  <div className="number-input" style={{ width: "120px" }}>
                     <input
                       type="number"
                       min={50}
                       max={5120}
                       value={hotspotLimit}
                       onChange={(e) => handleHotspotLimitChange(parseInt(e.target.value, 10))}
-                      className="input-sm"
                     />
-                    <span style={{ fontSize: "0.8rem", color: "var(--s-text-muted)" }}>最大热点地块数</span>
+                    <span className="number-input-suffix">地块</span>
                   </div>
                 )}
               </div>
@@ -270,15 +269,15 @@ export const EmbeddingSection = memo(function EmbeddingSection({
             <div className="form-row">
               <div className="form-label">
                 <div className="form-label-text">自定义模型名</div>
-                <div className="form-label-desc">如果模型不在列表中</div>
+                <div className="form-label-desc">如果模型不在预设列表中，可手动输入</div>
               </div>
-              <div className="form-control" style={{ flex: 1 }}>
+              <div className="form-control">
                 <input
                   type="text"
                   value={embeddingModel || ""}
                   onChange={(e) => handleModelChange(e.target.value)}
                   placeholder="输入模型名称..."
-                  style={{ width: "100%", maxWidth: "280px" }}
+                  style={{ width: "100%" }}
                 />
               </div>
             </div>
@@ -312,50 +311,26 @@ export const EmbeddingSection = memo(function EmbeddingSection({
 
       {/* 推荐模型 */}
       <Card title="推荐 Embedding 模型" icon="📌">
-        <div className="model-grid">
-          {/* Qwen-8B - 高精度推荐 */}
-          <div className="model-card recommended">
-            <div className="model-tag">推荐</div>
-            <h4 className="model-name">Qwen3-Embedding-8B</h4>
-            <p className="model-provider">硅基流动 / 阿里云</p>
-            <ul className="model-specs">
-              <li>4096 维向量</li>
-              <li>最高精度</li>
-              <li>中英文双语优化</li>
-            </ul>
+        <div className="feature-grid">
+          <div className="feature-item">
+            <span className="feature-item-icon">⭐</span>
+            <div className="feature-item-title">Qwen3-Embedding-8B</div>
+            <div className="feature-item-desc">4096 维 · 最高精度 · 推荐</div>
           </div>
-
-          {/* Qwen-4B - 性价比 */}
-          <div className="model-card">
-            <h4 className="model-name">Qwen3-Embedding-4B</h4>
-            <p className="model-provider">硅基流动 / 阿里云</p>
-            <ul className="model-specs">
-              <li>2560 维向量</li>
-              <li>性价比最高</li>
-              <li>速度更快</li>
-            </ul>
+          <div className="feature-item">
+            <span className="feature-item-icon">💎</span>
+            <div className="feature-item-title">Qwen3-Embedding-4B</div>
+            <div className="feature-item-desc">2560 维 · 性价比最高</div>
           </div>
-
-          {/* OpenAI */}
-          <div className="model-card">
-            <h4 className="model-name">text-embedding-3-small</h4>
-            <p className="model-provider">OpenAI</p>
-            <ul className="model-specs">
-              <li>1536 维向量</li>
-              <li>稳定可靠</li>
-              <li>全球可用</li>
-            </ul>
+          <div className="feature-item">
+            <span className="feature-item-icon">🌐</span>
+            <div className="feature-item-title">text-embedding-3-small</div>
+            <div className="feature-item-desc">1536 维 · OpenAI 稳定</div>
           </div>
-
-          {/* BGE */}
-          <div className="model-card">
-            <h4 className="model-name">BGE-M3</h4>
-            <p className="model-provider">BAAI / 智源</p>
-            <ul className="model-specs">
-              <li>1024 维向量</li>
-              <li>开源模型</li>
-              <li>多语言支持</li>
-            </ul>
+          <div className="feature-item">
+            <span className="feature-item-icon">🔓</span>
+            <div className="feature-item-title">BGE-M3</div>
+            <div className="feature-item-desc">1024 维 · 开源多语言</div>
           </div>
         </div>
       </Card>

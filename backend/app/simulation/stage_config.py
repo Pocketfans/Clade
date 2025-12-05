@@ -807,9 +807,6 @@ def _register_default_stages() -> None:
         FinalizeStage,
     )
     
-    # 导入生态智能体阶段
-    from ..services.intelligence.stage import EcologicalIntelligenceStage
-    
     # 导入生态拟真阶段
     from .ecological_realism_stage import EcologicalRealismStage
     
@@ -829,7 +826,7 @@ def _register_default_stages() -> None:
     stage_registry.register("hunger_migration", HungerMigrationStage)
     stage_registry.register("post_migration_niche", PostMigrationNicheStage)
     stage_registry.register("final_mortality", FinalMortalityStage)
-    stage_registry.register("ecological_intelligence", EcologicalIntelligenceStage)  # 生态智能体
+    # ecological_intelligence 已被张量系统替代，不再注册
     stage_registry.register("population_update", PopulationUpdateStage)
     
     # 遗传与演化阶段

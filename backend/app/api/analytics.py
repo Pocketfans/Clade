@@ -137,7 +137,7 @@ def get_game_state(
         # 额外字段（保持兼容）
         "running": session.is_running,
         "current_save": session.current_save_name,
-        "backend_session_id": id(session),
+        "backend_session_id": str(id(session)),
         # 嵌套格式也保留（向后兼容）
         "species_count_detail": {
             "total": len(all_species),

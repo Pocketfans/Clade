@@ -1,6 +1,6 @@
 /**
- * Controls - 全新设计的表单控件组件
- * 采用现代化设计语言
+ * Controls - 精美的表单控件组件
+ * 单列布局，优雅的交互效果
  */
 
 import { memo, type ReactNode, type ChangeEvent } from "react";
@@ -30,7 +30,7 @@ export const SliderRow = memo(function SliderRow({
   disabled = false,
 }: SliderRowProps) {
   return (
-    <div className="form-row">
+    <div className={`form-row ${disabled ? 'disabled' : ''}`}>
       <div className="form-label">
         <div className="form-label-text">{label}</div>
         {desc && <div className="form-label-desc">{desc}</div>}
@@ -71,7 +71,7 @@ export const ToggleRow = memo(function ToggleRow({
   disabled = false,
 }: ToggleRowProps) {
   return (
-    <div className="form-row form-row-compact">
+    <div className={`form-row form-row-compact ${disabled ? 'disabled' : ''}`}>
       <div className="form-label">
         <div className="form-label-text">{label}</div>
         {desc && <div className="form-label-desc">{desc}</div>}
@@ -125,7 +125,7 @@ export const NumberInput = memo(function NumberInput({
   };
 
   return (
-    <div className="form-row">
+    <div className={`form-row ${disabled ? 'disabled' : ''}`}>
       <div className="form-label">
         <div className="form-label-text">{label}</div>
         {desc && <div className="form-label-desc">{desc}</div>}
@@ -174,7 +174,7 @@ export function SelectRow<T extends string | number>({
   placeholder,
 }: SelectRowProps<T>) {
   return (
-    <div className="form-row">
+    <div className={`form-row ${disabled ? 'disabled' : ''}`}>
       <div className="form-label">
         <div className="form-label-text">{label}</div>
         {desc && <div className="form-label-desc">{desc}</div>}
@@ -188,7 +188,7 @@ export function SelectRow<T extends string | number>({
           >
             {placeholder && <option value="">{placeholder}</option>}
             {options.map((opt) => (
-              <option key={opt.value} value={opt.value}>
+              <option key={String(opt.value)} value={opt.value}>
                 {opt.label}
               </option>
             ))}
@@ -375,5 +375,3 @@ export const SectionHeader = memo(function SectionHeader({
     </div>
   );
 });
-
-

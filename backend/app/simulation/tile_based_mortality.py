@@ -889,6 +889,16 @@ class TileBasedMortalityEngine:
                     isolation_types.append("elongated")
             isolation_type = "+".join(isolation_types) if isolation_types else "none"
             
+            # 【新增】获取候选地块的环境详情
+            tile_environment = self.get_tile_environment_details(candidate_tiles)
+            
+            # 【新增】为每个隔离簇获取环境详情
+            cluster_environments = []
+            if clusters:
+                for cluster in clusters:
+                    cluster_env = self.get_tile_environment_details(cluster)
+                    cluster_environments.append(cluster_env)
+            
             result[lineage_code] = {
                 "candidate_tiles": candidate_tiles,
                 "tile_populations": tile_pops,
@@ -901,6 +911,9 @@ class TileBasedMortalityEngine:
                 "max_hex_distance": max_hex_dist,
                 "elongation_ratio": elongation_ratio,
                 "isolation_type": isolation_type,
+                # 【新增】地块环境信息
+                "tile_environment": tile_environment,
+                "cluster_environments": cluster_environments,
             }
         
         return result
@@ -939,6 +952,139 @@ class TileBasedMortalityEngine:
             clusters_map[root].add(tile_id)
         
         return list(clusters_map.values())
+    
+    def get_tile_environment_details(self, tile_ids: set[int]) -> dict:
+        """获取指定地块集合的环境详情（供分化服务使用）
+        
+        Args:
+            tile_ids: 地块ID集合
+            
+        Returns:
+            {
+                "biomes": {"deep_ocean": 5, "shallow_ocean": 3, ...},  # 各biome的地块数
+                "avg_temperature": 15.2,
+                "temp_range": (5.0, 25.0),
+                "avg_humidity": 0.7,
+                "avg_salinity": 35.0,
+                "avg_elevation": -100.0,
+                "has_freshwater": True,
+                "dominant_biome": "deep_ocean",
+                "environment_description": "深海环境，温度5-15°C，高盐度"
+            }
+        """
+        if not tile_ids or not self._tiles:
+            return {
+                "biomes": {},
+                "avg_temperature": 15.0,
+                "temp_range": (15.0, 15.0),
+                "avg_humidity": 0.5,
+                "avg_salinity": 35.0,
+                "avg_elevation": 0.0,
+                "has_freshwater": False,
+                "dominant_biome": "unknown",
+                "environment_description": "未知环境"
+            }
+        
+        # 收集地块数据
+        temps = []
+        humidities = []
+        salinities = []
+        elevations = []
+        biome_counts: dict[str, int] = {}
+        has_freshwater = False
+        
+        for tile in self._tiles:
+            if tile.id not in tile_ids:
+                continue
+            
+            temps.append(tile.temperature)
+            humidities.append(tile.humidity)
+            salinities.append(tile.salinity)
+            elevations.append(tile.elevation)
+            
+            biome = tile.biome or "unknown"
+            biome_counts[biome] = biome_counts.get(biome, 0) + 1
+            
+            if tile.has_river or tile.is_lake or tile.salinity < 5:
+                has_freshwater = True
+        
+        if not temps:
+            return {
+                "biomes": {},
+                "avg_temperature": 15.0,
+                "temp_range": (15.0, 15.0),
+                "avg_humidity": 0.5,
+                "avg_salinity": 35.0,
+                "avg_elevation": 0.0,
+                "has_freshwater": False,
+                "dominant_biome": "unknown",
+                "environment_description": "未知环境"
+            }
+        
+        avg_temp = sum(temps) / len(temps)
+        avg_humidity = sum(humidities) / len(humidities)
+        avg_salinity = sum(salinities) / len(salinities)
+        avg_elevation = sum(elevations) / len(elevations)
+        
+        # 找出主导biome
+        dominant_biome = max(biome_counts.keys(), key=lambda k: biome_counts[k]) if biome_counts else "unknown"
+        
+        # 生成环境描述
+        desc_parts = []
+        
+        # 栖息地类型
+        if avg_elevation < -200:
+            desc_parts.append("深海环境")
+        elif avg_elevation < 0:
+            desc_parts.append("浅海/近海环境")
+        elif avg_elevation < 500:
+            desc_parts.append("低地/平原环境")
+        elif avg_elevation < 2000:
+            desc_parts.append("山地环境")
+        else:
+            desc_parts.append("高山环境")
+        
+        # 温度
+        if avg_temp < 0:
+            desc_parts.append("极寒")
+        elif avg_temp < 10:
+            desc_parts.append("寒冷")
+        elif avg_temp < 20:
+            desc_parts.append("温带")
+        elif avg_temp < 30:
+            desc_parts.append("温暖")
+        else:
+            desc_parts.append("炎热")
+        
+        # 湿度
+        if avg_humidity < 0.3:
+            desc_parts.append("干旱")
+        elif avg_humidity > 0.7:
+            desc_parts.append("潮湿")
+        
+        # 盐度
+        if avg_salinity < 5:
+            desc_parts.append("淡水")
+        elif avg_salinity > 40:
+            desc_parts.append("高盐")
+        
+        # 淡水资源
+        if has_freshwater and avg_elevation >= 0:
+            desc_parts.append("有淡水资源")
+        
+        environment_description = "，".join(desc_parts) if desc_parts else "标准环境"
+        
+        return {
+            "biomes": biome_counts,
+            "avg_temperature": round(avg_temp, 1),
+            "temp_range": (round(min(temps), 1), round(max(temps), 1)),
+            "avg_humidity": round(avg_humidity, 2),
+            "avg_salinity": round(avg_salinity, 1),
+            "avg_elevation": round(avg_elevation, 1),
+            "has_freshwater": has_freshwater,
+            "dominant_biome": dominant_biome,
+            "environment_description": environment_description
+        }
     
     def _build_tile_environment_matrix(self) -> None:
         """构建地块环境特征矩阵

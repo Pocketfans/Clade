@@ -1037,9 +1037,18 @@ class SpeciationService:
                     region_population = population
                 
                 # 生成地块级环境摘要
+                # 【新增】获取该子代所属隔离簇的环境详情
+                cluster_environment = None
+                tile_environment = candidate_data.get("tile_environment") if candidate_data else None
+                cluster_environments = candidate_data.get("cluster_environments", []) if candidate_data else []
+                if cluster_environments and idx < len(cluster_environments):
+                    cluster_environment = cluster_environments[idx]
+                
                 tile_context = self._generate_tile_context(
                     assigned_tiles, tile_populations, tile_mortality, 
-                    mortality_gradient, is_isolated
+                    mortality_gradient, is_isolated,
+                    tile_environment=tile_environment,
+                    cluster_environment=cluster_environment
                 )
                 
                 # 【新增】规则引擎预处理：计算约束条件
@@ -1151,8 +1160,17 @@ class SpeciationService:
         logger.info(f"[分化] 开始批量处理 {len(active_batch)} 个AI分化任务 + {len(background_entries)} 个规则分化任务 (剩余排队 {len(self._deferred_requests)})")
         
         # ========== 【优化】先处理背景物种的规则分化 ==========
-        # 背景物种完全跳过 AI，直接使用规则生成，节省 Token 和时间
+        # 背景物种完全跳过 AI，直接使用规则引擎生成，节省 Token 和时间
+        # 【改进】现在使用完整的规则引擎约束系统，生成高质量的物种数据
         background_results: list[tuple[dict, dict]] = []  # [(entry, ai_content)]
+        
+        # 构建环境压力字典（用于规则引擎）
+        env_pressure_dict = {}
+        if pressures:
+            for p in pressures:
+                if hasattr(p, 'category') and hasattr(p, 'intensity'):
+                    env_pressure_dict[p.category] = p.intensity
+        
         for entry in background_entries:
             ctx = entry["ctx"]
             ai_content = self._generate_rule_based_fallback(
@@ -1161,10 +1179,13 @@ class SpeciationService:
                 survivors=ctx["population"],
                 speciation_type=ctx["speciation_type"],
                 average_pressure=average_pressure,
+                environment_pressure=env_pressure_dict,
+                turn_index=turn_index,
             )
             background_results.append((entry, ai_content))
             logger.debug(
-                f"[规则分化] 背景物种 {ctx['parent'].common_name} -> {ai_content.get('common_name')}"
+                f"[规则分化] 背景物种 {ctx['parent'].common_name} -> {ai_content.get('common_name')} "
+                f"({ai_content.get('_evolution_direction', '自然分化')})"
             )
         
         if background_results:
@@ -1270,6 +1291,8 @@ class SpeciationService:
                     survivors=ctx["population"],
                     speciation_type=ctx["speciation_type"],
                     average_pressure=average_pressure,
+                    environment_pressure=env_pressure_dict,
+                    turn_index=turn_index,
                 )
                 ai_content = self._normalize_ai_content(ai_content)
 
@@ -2007,10 +2030,13 @@ class SpeciationService:
         survivors: int,
         speciation_type: str,
         average_pressure: float,
+        environment_pressure: dict[str, float] | None = None,
+        turn_index: int = 0,
     ) -> dict:
-        """【优化】当AI持续失败时，使用规则生成新物种内容
+        """【优化】当AI持续失败时，使用规则引擎生成新物种内容
         
         这确保即使AI完全不可用，物种分化仍能进行。
+        现在使用完整的规则引擎约束系统，生成高质量的物种数据。
         
         Args:
             parent: 父系物种
@@ -2018,59 +2044,200 @@ class SpeciationService:
             survivors: 存活数
             speciation_type: 分化类型
             average_pressure: 平均压力
+            environment_pressure: 环境压力字典（可选）
+            turn_index: 当前回合（用于时代约束）
             
         Returns:
             可直接用于 _create_species 的内容字典
         """
         import random
+        import hashlib
         
-        # ========== 1. 生成名称 ==========
-        # 基于父系名称变化
+        # 使用 new_code 作为随机种子，确保相同物种生成一致的内容
+        seed = int(hashlib.md5(new_code.encode()).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+        
+        # ========== 0. 使用规则引擎获取约束 ==========
+        env_pressure = environment_pressure or {"temperature": 0, "humidity": 0}
+        constraints = self.rules.preprocess(
+            parent_species=parent,
+            offspring_index=1,
+            total_offspring=1,
+            environment_pressure=env_pressure,
+            pressure_context=speciation_type,
+            turn_index=turn_index,
+        )
+        
+        # ========== 1. 生成名称（更丰富的变化）==========
         parent_latin = parent.latin_name or "Species unknown"
         latin_parts = parent_latin.split()
         genus = latin_parts[0] if latin_parts else "Genus"
         
-        # 生成种加词后缀
-        suffixes = ["minor", "major", "robustus", "gracilis", "fortis", "novus", "primus", "adaptus"]
-        new_species_name = f"{genus} {random.choice(suffixes)}"
+        # 根据分化类型和演化方向选择后缀
+        evolution_direction = constraints.get("evolution_direction", "自然分化")
         
-        # 中文俗名：父系名 + 变异后缀
+        suffix_map = {
+            "环境适应型": ["robustus", "tolerans", "resistens", "durans", "fortis"],
+            "活动强化型": ["velox", "agilis", "cursor", "celer", "mobilis"],
+            "繁殖策略型": ["fecundus", "prolifer", "fertilis", "abundans", "vivax"],
+            "防御特化型": ["armatus", "spinosus", "coriaceus", "tectus", "protectus"],
+            "极端特化型": ["extremus", "ultimus", "maximus", "supremus", "insignis"],
+        }
+        suffixes = suffix_map.get(evolution_direction, ["novus", "adaptus", "evolutus", "mutatus", "diversus"])
+        
+        # 添加编码后缀避免重名
+        code_suffix = new_code.replace(".", "").lower()[-3:]
+        new_species_name = f"{genus} {rng.choice(suffixes)}_{code_suffix}"
+        
+        # 中文俗名：更丰富的命名
         parent_common = parent.common_name or "未知物种"
-        chinese_suffixes = ["变种", "亚种", "新型", "适应型", "进化型"]
-        new_common_name = f"{parent_common[:4]}{random.choice(chinese_suffixes)}"
+        base_name = parent_common[:3] if len(parent_common) > 3 else parent_common
         
-        # ========== 2. 生成特质变化 ==========
-        # 基于压力和分化类型生成合理的特质变化
+        chinese_prefix_map = {
+            "环境适应型": ["耐候", "适应", "强韧", "坚毅"],
+            "活动强化型": ["迅捷", "敏锐", "灵巧", "飞速"],
+            "繁殖策略型": ["繁盛", "多产", "群居", "社会"],
+            "防御特化型": ["铠甲", "刺盾", "厚皮", "壳护"],
+            "极端特化型": ["极端", "特化", "专精", "独特"],
+        }
+        chinese_prefixes = chinese_prefix_map.get(evolution_direction, ["演化", "分支", "变异"])
+        new_common_name = f"{rng.choice(chinese_prefixes)}{base_name}"
+        
+        # ========== 2. 使用规则引擎生成特质变化 ==========
         trait_changes = {}
         
-        if speciation_type == "地理隔离":
-            # 地理隔离：温度适应分化
-            trait_changes["耐寒性"] = f"+{random.uniform(0.5, 1.5):.1f}"
-            trait_changes["繁殖速度"] = f"-{random.uniform(0.3, 0.8):.1f}"
-        elif speciation_type == "极端环境特化":
-            # 极端环境：强化环境耐受
-            if average_pressure > 5:
-                trait_changes["耐热性"] = f"+{random.uniform(0.8, 1.5):.1f}"
-                trait_changes["运动能力"] = f"-{random.uniform(0.5, 1.0):.1f}"
-            else:
-                trait_changes["耐旱性"] = f"+{random.uniform(0.5, 1.2):.1f}"
-                trait_changes["社会性"] = f"-{random.uniform(0.3, 0.6):.1f}"
+        # 从规则引擎获取建议的增强/减弱属性
+        suggested_increases = constraints.get("suggested_increases", [])
+        suggested_decreases = constraints.get("suggested_decreases", [])
+        
+        # 增强属性（使用规则引擎的预算）
+        trait_budget = constraints.get("_trait_budget")
+        if trait_budget:
+            max_increase = trait_budget.total_increase_allowed
+            max_decrease = trait_budget.total_decrease_required
+            single_max = trait_budget.single_trait_max
         else:
-            # 一般分化
-            trait_changes["运动能力"] = f"+{random.uniform(0.3, 0.8):.1f}"
-            trait_changes["繁殖速度"] = f"-{random.uniform(0.2, 0.5):.1f}"
+            max_increase, max_decrease, single_max = 3.0, 1.5, 2.0
         
-        # ========== 3. 生成描述 ==========
-        description = (
-            f"从{parent.common_name}分化而来的新物种，"
-            f"在{speciation_type}压力下演化出独特的适应性。"
-            f"继承了祖先的基本形态特征，但已发展出细微差异。"
-            f"栖息于{parent.habitat_type or '未知'}环境，"
-            f"与母种形成生态位分化。"
+        # 分配增强点数
+        total_increase = 0
+        for trait in suggested_increases[:2]:  # 最多增强2个属性
+            if trait and "随机" not in trait:
+                change = rng.uniform(0.5, min(single_max, max_increase - total_increase))
+                trait_changes[trait] = f"+{change:.1f}"
+                total_increase += change
+                if total_increase >= max_increase:
+                    break
+        
+        # 分配减弱点数（权衡）
+        total_decrease = 0
+        for trait in suggested_decreases[:2]:  # 最多减弱2个属性
+            if trait:
+                change = rng.uniform(0.3, min(single_max * 0.5, max_decrease - total_decrease))
+                trait_changes[trait] = f"-{change:.1f}"
+                total_decrease += change
+                if total_decrease >= max_decrease:
+                    break
+        
+        # ========== 3. 生成器官演化（使用约束）==========
+        organ_evolution = []
+        organ_constraints = constraints.get("_organ_constraints", [])
+        
+        # 随机选择一个器官进行演化
+        evolvable_organs = [
+            oc for oc in organ_constraints 
+            if oc.max_target_stage > oc.current_stage
+        ]
+        
+        if evolvable_organs and rng.random() > 0.3:  # 70% 概率进行器官演化
+            chosen = rng.choice(evolvable_organs)
+            new_stage = min(chosen.max_target_stage, chosen.current_stage + 1)
+            
+            organ_names = {
+                "locomotion": "运动器官",
+                "sensory": "感觉器官",
+                "metabolic": "代谢系统",
+                "digestive": "消化系统",
+                "defense": "防御结构",
+                "reproduction": "繁殖系统",
+            }
+            stage_names = {
+                1: "原基形成",
+                2: "初级结构",
+                3: "功能完善",
+                4: "高度特化",
+            }
+            
+            organ_evolution.append({
+                "category": chosen.category,
+                "current_stage": chosen.current_stage,
+                "target_stage": new_stage,
+                "description": f"{organ_names.get(chosen.category, chosen.category)}发展至{stage_names.get(new_stage, '新阶段')}"
+            })
+        
+        # ========== 4. 生成形态变化 ==========
+        parent_morph = parent.morphology_stats or {}
+        morphology_changes = {}
+        
+        # 体长变化（±20%）
+        base_length = parent_morph.get("body_length_cm", 10.0)
+        length_ratio = rng.uniform(0.85, 1.15)
+        morphology_changes["body_length_cm"] = length_ratio
+        
+        # 体重变化（与体长相关，但有独立变异）
+        base_weight = parent_morph.get("body_weight_g", 100.0)
+        weight_ratio = length_ratio ** 2.5 * rng.uniform(0.9, 1.1)  # 体重与体长的立方近似
+        morphology_changes["body_weight_g"] = weight_ratio
+        
+        # ========== 5. 生成描述（更详细）==========
+        habitat_map = {
+            "marine": "海洋", "freshwater": "淡水", "terrestrial": "陆地",
+            "amphibious": "两栖", "aerial": "空中", "deep_sea": "深海", "coastal": "沿岸"
+        }
+        diet_map = {
+            "herbivore": "植食性", "carnivore": "肉食性", "omnivore": "杂食性",
+            "detritivore": "腐食性", "autotroph": "自养型"
+        }
+        
+        habitat_str = habitat_map.get(parent.habitat_type, parent.habitat_type or "未知")
+        diet_str = diet_map.get(parent.diet_type, parent.diet_type or "杂食性")
+        direction_desc = constraints.get("direction_description", "自然选择")
+        
+        # 构建详细描述
+        description_parts = [
+            f"{new_common_name}是从{parent.common_name}分化而来的{habitat_str}{diet_str}物种。",
+            f"在{speciation_type}的选择压力下，该物种发展出{direction_desc}的演化策略。",
+        ]
+        
+        # 添加关键特质描述
+        if trait_changes:
+            changes_desc = []
+            for trait, change in trait_changes.items():
+                if change.startswith("+"):
+                    changes_desc.append(f"{trait}增强")
+                else:
+                    changes_desc.append(f"{trait}降低")
+            description_parts.append(f"主要适应性变化包括{'、'.join(changes_desc)}。")
+        
+        # 添加器官演化描述
+        if organ_evolution:
+            organ_desc = organ_evolution[0].get("description", "器官结构优化")
+            description_parts.append(f"形态上，{organ_desc}。")
+        
+        description = "".join(description_parts)
+        
+        # ========== 6. 生成关键创新 ==========
+        key_innovations = [f"{speciation_type}适应"]
+        if organ_evolution:
+            key_innovations.append(organ_evolution[0].get("description", "器官演化"))
+        if suggested_increases:
+            key_innovations.append(f"{suggested_increases[0]}强化")
+        
+        # ========== 7. 返回完整内容 ==========
+        logger.info(
+            f"[规则Fallback] 为 {new_code} 生成规则物种: "
+            f"{new_common_name} ({evolution_direction})"
         )
-        
-        # ========== 4. 返回完整内容 ==========
-        logger.info(f"[规则Fallback] 为 {new_code} 生成规则基础的物种内容")
         
         return {
             "latin_name": new_species_name,
@@ -2081,14 +2248,15 @@ class SpeciationService:
             "diet_type": parent.diet_type,
             "prey_species": list(parent.prey_species) if parent.prey_species else [],
             "prey_preferences": dict(parent.prey_preferences) if parent.prey_preferences else {},
-            "key_innovations": [f"{speciation_type}适应"],
+            "key_innovations": key_innovations,
             "trait_changes": trait_changes,
-            "morphology_changes": {"body_length_cm": random.uniform(0.9, 1.1)},
-            "event_description": f"因{speciation_type}从{parent.common_name}分化",
+            "morphology_changes": morphology_changes,
+            "event_description": f"因{speciation_type}从{parent.common_name}分化，采用{evolution_direction}策略",
             "speciation_type": speciation_type,
-            "reason": f"在{speciation_type}条件下的自然选择结果",
-            "organ_evolution": [],
+            "reason": f"在{speciation_type}条件下，通过{direction_desc}实现自然选择",
+            "organ_evolution": organ_evolution,
             "_is_rule_fallback": True,  # 标记为规则生成
+            "_evolution_direction": evolution_direction,  # 记录演化方向供后续使用
         }
 
     def _next_lineage_code(self, parent_code: str, existing_codes: set[str]) -> str:
@@ -3454,6 +3622,8 @@ class SpeciationService:
         tile_mortality: dict[int, float],
         mortality_gradient: float,
         is_isolated: bool,
+        tile_environment: dict | None = None,
+        cluster_environment: dict | None = None,
     ) -> str:
         """生成地块级环境上下文描述
         
@@ -3465,6 +3635,8 @@ class SpeciationService:
             tile_mortality: 各地块死亡率
             mortality_gradient: 死亡率梯度
             is_isolated: 是否地理隔离
+            tile_environment: 【新增】地块环境详情（来自张量系统）
+            cluster_environment: 【新增】该子代所属隔离簇的环境详情
             
         Returns:
             地块环境描述文本
@@ -3488,36 +3660,70 @@ class SpeciationService:
         # 生成描述
         parts = []
         
-        # 区域规模
-        parts.append(f"分化发生于{num_tiles}个地块区域")
+        # 【优先使用】环境详情中的描述
+        env = cluster_environment or tile_environment
+        if env and env.get("environment_description"):
+            parts.append(f"【环境特征】{env['environment_description']}")
+            
+            # 补充详细的环境数据
+            env_details = []
+            if "avg_temperature" in env:
+                temp = env["avg_temperature"]
+                temp_range = env.get("temp_range", (temp, temp))
+                env_details.append(f"温度{temp_range[0]}~{temp_range[1]}°C")
+            if "avg_humidity" in env:
+                humidity = env["avg_humidity"]
+                if humidity < 0.3:
+                    env_details.append("干燥")
+                elif humidity > 0.7:
+                    env_details.append("潮湿")
+            if "avg_salinity" in env:
+                sal = env["avg_salinity"]
+                if sal < 5:
+                    env_details.append("淡水")
+                elif sal > 40:
+                    env_details.append(f"高盐度({sal:.0f}‰)")
+            if "avg_elevation" in env:
+                elev = env["avg_elevation"]
+                if elev < -500:
+                    env_details.append("深海")
+                elif elev < -100:
+                    env_details.append("浅海")
+                elif elev > 2000:
+                    env_details.append("高山")
+            if "dominant_biome" in env and env["dominant_biome"] != "unknown":
+                env_details.append(f"主要生境:{env['dominant_biome']}")
+            
+            if env_details:
+                parts.append("(" + "，".join(env_details) + ")")
         
-        # 种群信息
-        parts.append(f"区域种群{int(region_pop):,}")
+        # 区域规模和种群
+        parts.append(f"分化区域{num_tiles}块，种群{int(region_pop):,}")
         
-        # 环境压力描述
+        # 环境压力描述（基于死亡率）
         if avg_rate > 0.5:
-            pressure_desc = "高环境压力"
+            pressure_desc = "高选择压力"
         elif avg_rate > 0.3:
-            pressure_desc = "中等环境压力"
+            pressure_desc = "中等选择压力"
         else:
-            pressure_desc = "低环境压力"
-        parts.append(f"{pressure_desc}（平均死亡率{avg_rate:.1%}）")
+            pressure_desc = "低选择压力"
+        parts.append(f"{pressure_desc}（死亡率{avg_rate:.1%}）")
         
         # 隔离状态
         if is_isolated:
-            parts.append("与其他种群存在地理隔离")
+            parts.append("存在地理隔离")
         
-        # 压力梯度
+        # 压力梯度（驱动分化的关键因素）
         if mortality_gradient > 0.3:
-            parts.append(f"区域间存在显著的环境梯度（压力差异{mortality_gradient:.1%}）")
+            parts.append(f"显著环境梯度({mortality_gradient:.1%})→强分化压力")
         elif mortality_gradient > 0.15:
-            parts.append(f"区域间存在一定的环境差异")
+            parts.append(f"中等环境梯度({mortality_gradient:.1%})")
         
         # 局部异质性
         if len(region_rates) >= 2:
             local_gradient = max_rate - min_rate
             if local_gradient > 0.2:
-                parts.append("区域内部环境条件不均匀")
+                parts.append("区域内环境不均匀")
         
         return "。".join(parts)
     
@@ -3710,42 +3916,51 @@ class SpeciationService:
     ) -> tuple[bool, str]:
         """验证属性变化是否符合营养级规则
         
+        【修复】与 prompt 中的预算限制保持一致：
+        - prompt 告诉 AI: max_increase=3.0
+        - 这里的验证应该允许一定容错（考虑权衡后的净增益）
+        - 硬限制改为 6.0（允许 AI 略微超出，但不能离谱）
+        
         Returns:
             (验证是否通过, 错误信息)
         """
         # 获取营养级对应的属性上限
         limits = self.trophic_calculator.get_attribute_limits(trophic_level)
         
-        # 1. 检查总和变化
+        # 1. 检查总和变化（与 prompt 中 max_increase=3.0 对应，但允许容错到 6.0）
         old_sum = sum(old_traits.values())
         new_sum = sum(new_traits.values())
         sum_diff = new_sum - old_sum
         
-        if sum_diff > 8:
-            return False, f"属性总和增加{sum_diff}，超过上限8"
+        # 【修改】净增益上限从 8 改为 6（prompt 要求 3，允许 2x 容错）
+        # 超过 6 说明 AI 完全忽略了预算限制
+        if sum_diff > 6.0:
+            logger.warning(f"[属性验证] 净增益 {sum_diff:.1f} 超过上限 6.0（prompt 要求 ≤3.0）")
+            return False, f"属性总和净增加{sum_diff:.1f}，超过上限6.0（建议≤3.0）"
         
         # 2. 检查总和是否超过营养级上限
         if new_sum > limits["total"]:
-            return False, f"属性总和{new_sum}超过营养级{trophic_level:.1f}的上限{limits['total']}"
+            return False, f"属性总和{new_sum:.1f}超过营养级T{trophic_level:.1f}的上限{limits['total']}"
         
         # 3. 检查单个属性是否超过特化上限
         above_specialized = [
             (k, v) for k, v in new_traits.items() if v > limits["specialized"]
         ]
         if above_specialized:
-            return False, f"属性{above_specialized[0][0]}={above_specialized[0][1]}超过特化上限{limits['specialized']}"
+            return False, f"属性{above_specialized[0][0]}={above_specialized[0][1]:.1f}超过特化上限{limits['specialized']}"
         
         # 4. 检查超过基础上限的属性数量
         above_base_count = sum(1 for v in new_traits.values() if v > limits["base"])
         if above_base_count > 2:
             return False, f"{above_base_count}个属性超过基础上限{limits['base']}，最多允许2个"
         
-        # 5. 检查权衡（有增必有减，除非是营养级提升）
+        # 5. 检查权衡（有增必有减，除非是小幅提升）
         increases = sum(1 for k, v in new_traits.items() if v > old_traits.get(k, 0))
         decreases = sum(1 for k, v in new_traits.items() if v < old_traits.get(k, 0))
         
-        if increases > 0 and decreases == 0 and sum_diff > 3:
-            return False, "有属性提升但无权衡代价"
+        # 【修改】放宽权衡检查：只有净增益 >4 且无任何减少时才拒绝
+        if increases > 0 and decreases == 0 and sum_diff > 4.0:
+            return False, f"净增益{sum_diff:.1f}但无权衡代价（需要至少一项属性降低）"
         
         return True, "验证通过"
     

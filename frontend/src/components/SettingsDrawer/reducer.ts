@@ -47,7 +47,7 @@ export function createDefaultConfig(): UIConfig {
     pressure_intensity: { ...DEFAULT_PRESSURE_INTENSITY_CONFIG },
     // AI 功能开关
     turn_report_llm_enabled: true,      // 默认开启 LLM 回合报告
-    ai_narrative_enabled: false,        // 默认关闭物种叙事
+    ai_narrative_enabled: true,         // 默认开启物种叙事
     load_balance_enabled: false,        // 默认关闭负载均衡
   };
 }

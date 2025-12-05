@@ -117,7 +117,7 @@ class CoreServiceProvider:
         def create_router():
             router = ModelRouter(
                 {
-                    # Core reasoning capabilities
+                    # Core reasoning capabilities (local templates)
                     "turn_report": ModelConfig(provider="local", model="template-narrator"),
                     "focus_batch": ModelConfig(
                         provider="local", 
@@ -126,7 +126,7 @@ class CoreServiceProvider:
                     ),
                     "critical_detail": ModelConfig(provider="local", model="critical-template"),
                     
-                    # Speciation capabilities
+                    # Speciation capabilities (requires LLM)
                     "speciation": ModelConfig(
                         provider="openai", 
                         model=self.settings.speciation_model,
@@ -137,82 +137,19 @@ class CoreServiceProvider:
                         model=self.settings.speciation_model,
                         extra_body={"response_format": {"type": "json_object"}}
                     ),
-                    "plant_speciation": ModelConfig(
-                        provider="openai", 
-                        model=self.settings.speciation_model,
-                        extra_body={"response_format": {"type": "json_object"}}
-                    ),
                     "plant_speciation_batch": ModelConfig(
                         provider="openai", 
                         model=self.settings.speciation_model,
                         extra_body={"response_format": {"type": "json_object"}}
                     ),
                     
-                    # Species generation and narrative
-                    "species_generation": ModelConfig(
-                        provider="openai", 
-                        model=self.settings.species_gen_model,
-                        extra_body={"response_format": {"type": "json_object"}}
-                    ),
-                    "species_narrative": ModelConfig(
-                        provider="openai", 
-                        model=self.settings.speciation_model,
-                        extra_body={"response_format": {"type": "json_object"}}
-                    ),
-                    "narrative": ModelConfig(
-                        provider="openai", 
-                        model=self.settings.speciation_model,
-                        extra_body={"response_format": {"type": "json_object"}}
-                    ),
-                    
-                    # Pressure adaptation and status evaluation
-                    "pressure_adaptation": ModelConfig(
-                        provider="openai", 
-                        model=self.settings.speciation_model,
-                        extra_body={"response_format": {"type": "json_object"}}
-                    ),
-                    "species_status_eval": ModelConfig(
-                        provider="openai", 
-                        model=self.settings.speciation_model,
-                        extra_body={"response_format": {"type": "json_object"}}
-                    ),
-                    
-                    # Hybridization capabilities
+                    # Hybridization capabilities (requires LLM)
                     "hybridization": ModelConfig(
                         provider="openai", 
                         model=self.settings.speciation_model,
                         extra_body={"response_format": {"type": "json_object"}}
                     ),
                     "forced_hybridization": ModelConfig(
-                        provider="openai", 
-                        model=self.settings.speciation_model,
-                        extra_body={"response_format": {"type": "json_object"}}
-                    ),
-                    
-                    # Ecological intelligence assessment
-                    "biological_assessment_a": ModelConfig(
-                        provider="openai", 
-                        model=self.settings.speciation_model,
-                        extra_body={"response_format": {"type": "json_object"}}
-                    ),
-                    "biological_assessment_b": ModelConfig(
-                        provider="openai", 
-                        model=self.settings.speciation_model,
-                        extra_body={"response_format": {"type": "json_object"}}
-                    ),
-                    
-                    # Auxiliary capabilities (optional LLM enhancement)
-                    "migration": ModelConfig(
-                        provider="openai", 
-                        model=self.settings.speciation_model,
-                        extra_body={"response_format": {"type": "json_object"}}
-                    ),
-                    "pressure_escalation": ModelConfig(
-                        provider="openai", 
-                        model=self.settings.speciation_model,
-                        extra_body={"response_format": {"type": "json_object"}}
-                    ),
-                    "reemergence": ModelConfig(
                         provider="openai", 
                         model=self.settings.speciation_model,
                         extra_body={"response_format": {"type": "json_object"}}

@@ -206,11 +206,6 @@ class SimulationContext:
     # 结构: {"plugin_name": {"key": value, ...}, ...}
     plugin_data: dict[str, dict[str, Any]] = field(default_factory=dict)
     
-    # === 生态智能体评估 ===
-    biological_assessment_results: dict = field(default_factory=dict)  # {lineage_code: BiologicalAssessment}
-    species_priority_partition: Any = None  # PartitionResult
-    modifier_applicator: Any = None  # ModifierApplicator 实例
-    
     # === 张量系统 ===
     tensor_state: Any = None  # TensorState 影子状态
     tensor_trigger_codes: set[str] = field(default_factory=set)  # 张量分化触发的物种编码

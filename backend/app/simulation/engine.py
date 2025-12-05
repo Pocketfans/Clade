@@ -145,9 +145,20 @@ class SimulationEngine:
         
         # === 内部创建的服务 ===
         self.gene_activation_service = GeneActivationService()
-        self.tile_mortality = TileBasedMortalityEngine()
+        
+        # 从 configs 获取配置对象（由 simulation_services.py 注入）
+        ecology_config = self.configs.get("ecology")
+        mortality_config = self.configs.get("mortality")
+        speciation_config = self.configs.get("speciation")
+        food_web_config = self.configs.get("food_web")
+        
+        self.tile_mortality = TileBasedMortalityEngine(
+            ecology_config=ecology_config,
+            mortality_config=mortality_config,
+            speciation_config=speciation_config,
+        )
         self.tile_mortality.set_embedding_service(embeddings)
-        self.food_web_manager = FoodWebManager()
+        self.food_web_manager = FoodWebManager(config=food_web_config)
         self.trophic_service = TrophicInteractionService()
         
         # Embedding 集成服务

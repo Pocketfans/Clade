@@ -99,38 +99,16 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   },
 ];
 
-// ============ AI 能力定义 ============
+// ============ AI 能力定义（精简版，仅保留实际使用的功能） ============
 export const AI_CAPABILITIES: Record<string, CapabilityDef[]> = {
   core: [
     { key: "turn_report", label: "回合报告", desc: "生成每回合的整体生态演化总结", defaultTimeout: 120, parallel: "single", parallelNote: "流式输出，无需并行" },
-    { key: "focus_batch", label: "重点批次", desc: "关键物种分块并行处理（max_concurrent=3）", defaultTimeout: 90, parallel: "batch", parallelNote: "staggered_gather 分块并行" },
-    { key: "critical_detail", label: "关键分析", desc: "分析濒危或优势物种的详细状态", defaultTimeout: 90, parallel: "concurrent", parallelNote: "多物种并发评估" },
-  ],
-  speciation: [
-    { key: "speciation", label: "物种分化", desc: "单物种分化判定，回合内多物种并发", defaultTimeout: 60, parallel: "concurrent", parallelNote: "staggered_gather 并发控制" },
-    { key: "speciation_batch", label: "批量分化", desc: "同批多物种一次请求处理", defaultTimeout: 90, parallel: "batch", parallelNote: "批量接口，高并发场景" },
-    { key: "plant_speciation", label: "植物分化", desc: "植物专用分化，支持批量模式", defaultTimeout: 60, parallel: "batch", parallelNote: "植物批量分化" },
-    { key: "species_generation", label: "物种生成", desc: "生成初始物种或新物种的属性", defaultTimeout: 60, parallel: "single" },
-  ],
-  narrative: [
-    { key: "pressure_adaptation", label: "压力适应", desc: "多物种并行评估适应能力", defaultTimeout: 60, parallel: "concurrent", parallelNote: "staggered_gather 带并发上限" },
-    { key: "species_status_eval", label: "状态评估", desc: "分批并行评估，单个超时有fallback", defaultTimeout: 60, parallel: "batch", parallelNote: "批量评估接口" },
-    { key: "species_narrative", label: "物种叙事", desc: "批量组装提示并并行请求", defaultTimeout: 60, parallel: "batch", parallelNote: "staggered_gather 批量叙事" },
-    { key: "narrative", label: "描述重写", desc: "多物种并行执行描述更新", defaultTimeout: 45, parallel: "concurrent", parallelNote: "staggered_gather 并发" },
-  ],
-  advanced: [
-    { key: "hybridization", label: "自然杂交", desc: "回合内多组杂交并发执行", defaultTimeout: 60, parallel: "concurrent", parallelNote: "并发杂交判定" },
-    { key: "forced_hybridization", label: "强制杂交", desc: "玩家触发的杂交事件判定", defaultTimeout: 60, parallel: "single" },
-    { key: "biological_assessment_a", label: "智能体A档", desc: "生态智能体高精度评估，A/B可并行", defaultTimeout: 90, parallel: "batch", parallelNote: "A/B两批可并行gather" },
-    { key: "biological_assessment_b", label: "智能体B档", desc: "生态智能体快速评估，与A档并行", defaultTimeout: 60, parallel: "batch", parallelNote: "A/B两批可并行gather" },
+    { key: "species_narrative", label: "物种描述", desc: "为物种生成演化故事和行为描述", defaultTimeout: 60, parallel: "batch", parallelNote: "批量生成" },
   ],
 };
 
 export const ALL_CAPABILITIES: CapabilityDef[] = [
   ...AI_CAPABILITIES.core,
-  ...AI_CAPABILITIES.speciation,
-  ...AI_CAPABILITIES.narrative,
-  ...AI_CAPABILITIES.advanced,
 ];
 
 // 简化版能力定义（用于模型路由）

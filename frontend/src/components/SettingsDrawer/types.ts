@@ -20,7 +20,6 @@ import type { ModelInfo } from "@/services/api";
 // ============ Tab 类型 ============
 export type SettingsTab =
   | "connection"
-  | "models"
   | "embedding"
   | "memory"
   | "autosave"
