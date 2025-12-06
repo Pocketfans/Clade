@@ -251,8 +251,16 @@ def get_species_food_chain(
     lineage_code: str,
     container: 'ServiceContainer' = Depends(get_container),
 ):
-    """获取特定物种的食物链"""
-    from ..services.species.food_web_manager import FoodWebManager
+    """获取特定物种的食物链
+    
+    返回该物种的上下游食物关系：
+    - species: 物种基本信息
+    - prey_chain: 猎物链（向下追溯）
+    - predator_chain: 捕食者链（向上追溯）
+    - food_dependency: 食物依赖满足度 (0-1)
+    - predation_pressure: 被捕食压力 (0-1)
+    """
+    from ..services.species.predation import PredationService
     
     species_repo = container.species_repository
     species = species_repo.get_by_lineage(lineage_code)
@@ -260,8 +268,9 @@ def get_species_food_chain(
     if not species:
         raise HTTPException(status_code=404, detail=f"物种 {lineage_code} 不存在")
     
-    food_web_manager = FoodWebManager(species_repo)
-    return food_web_manager.get_species_chain(species)
+    all_species = species_repo.list_species()
+    predation_service = PredationService()
+    return predation_service.get_species_food_chain(species, all_species)
 
 
 @router.get("/ecosystem/food-web/{lineage_code}/neighborhood", tags=["ecosystem"])
@@ -270,8 +279,11 @@ def get_species_neighborhood(
     depth: int = Query(2, ge=1, le=4, description="邻域深度"),
     container: 'ServiceContainer' = Depends(get_container),
 ):
-    """获取物种的食物网邻域"""
-    from ..services.species.food_web_manager import FoodWebManager
+    """获取物种的食物网邻域
+    
+    返回以该物种为中心的 k-hop 邻域内的物种和捕食关系。
+    """
+    from ..services.species.predation import PredationService
     
     species_repo = container.species_repository
     species = species_repo.get_by_lineage(lineage_code)
@@ -279,8 +291,39 @@ def get_species_neighborhood(
     if not species:
         raise HTTPException(status_code=404, detail=f"物种 {lineage_code} 不存在")
     
-    food_web_manager = FoodWebManager(species_repo)
-    return food_web_manager.get_neighborhood(species, depth=depth)
+    all_species = species_repo.list_species()
+    predation_service = PredationService()
+    
+    # 获取食物链数据
+    food_chain = predation_service.get_species_food_chain(species, all_species, max_depth=depth)
+    
+    # 构建邻域节点和链接
+    nodes = [{"id": species.lineage_code, "name": species.common_name, "trophic_level": species.trophic_level}]
+    links = []
+    
+    def collect_nodes_from_chain(chain_items, direction):
+        for item in chain_items:
+            if item["code"] not in [n["id"] for n in nodes]:
+                nodes.append({
+                    "id": item["code"],
+                    "name": item["name"],
+                    "trophic_level": item["trophic_level"]
+                })
+            if direction == "prey":
+                links.append({"source": item["code"], "target": species.lineage_code})
+            else:  # predator
+                links.append({"source": species.lineage_code, "target": item["code"]})
+    
+    collect_nodes_from_chain(food_chain.get("prey_chain", []), "prey")
+    collect_nodes_from_chain(food_chain.get("predator_chain", []), "predator")
+    
+    return {
+        "center": species.lineage_code,
+        "depth": depth,
+        "nodes": nodes,
+        "links": links,
+        "food_chain": food_chain
+    }
 
 
 @router.get("/ecosystem/extinction-impact/{lineage_code}", tags=["ecosystem"])
