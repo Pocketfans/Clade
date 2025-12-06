@@ -39,3 +39,7 @@ class TensorState:
         if self.species_params.ndim != 2:
             raise ValueError("species_params must be 2D (S, F)")
 
+
+
+
+

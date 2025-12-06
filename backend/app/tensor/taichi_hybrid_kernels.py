@@ -123,3 +123,7 @@ def kernel_competition(
         else:
             result[s, i, j] = 0.0
 
+
+
+
+

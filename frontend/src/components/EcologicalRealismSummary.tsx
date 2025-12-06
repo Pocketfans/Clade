@@ -112,3 +112,7 @@ export function EcologicalRealismSummary({ data, className = "" }: EcologicalRea
 export default EcologicalRealismSummary;
 
 
+
+
+
+

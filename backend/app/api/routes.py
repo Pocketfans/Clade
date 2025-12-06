@@ -1,4 +1,4 @@
-﻿"""
+"""
 ⚠️⚠️⚠️ 已弃用 - Legacy API Routes ⚠️⚠️⚠️
 
 此文件为历史遗留的巨型路由模块，已被拆分到以下领域模块：
@@ -230,6 +230,13 @@ model_router = ModelRouter(
             extra_body={"response_format": {"type": "json_object"}}
         ),
         "forced_hybridization": ModelConfig(
+            provider="openai", 
+            model=settings.speciation_model,
+            extra_body={"response_format": {"type": "json_object"}}
+        ),
+        
+        # ========== 物种生成能力（需要 LLM）==========
+        "species_generation": ModelConfig(
             provider="openai", 
             model=settings.speciation_model,
             extra_body={"response_format": {"type": "json_object"}}

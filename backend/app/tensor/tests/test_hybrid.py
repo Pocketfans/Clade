@@ -228,3 +228,7 @@ class TestPerformance:
         print(f"死亡率: {mortality_time:.2f} ms")
         print(f"扩散: {diffusion_time:.2f} ms")
 
+
+
+
+

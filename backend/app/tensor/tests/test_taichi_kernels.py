@@ -241,3 +241,7 @@ class TestBenchmark:
                 print(f"\n加速比 - 死亡率: {results['speedup']['mortality']:.2f}x")
                 print(f"加速比 - 扩散: {results['speedup']['diffusion']:.2f}x")
 
+
+
+
+

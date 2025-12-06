@@ -196,3 +196,7 @@ class TestEnergyConstants:
         assert "物理防御" in comp_map.get("运动能力", [])
         assert "运动能力" in comp_map.get("物理防御", [])
 
+
+
+
+

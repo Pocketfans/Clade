@@ -247,3 +247,7 @@ export function EcologicalRealismDisplay({ data, compact = false }: EcologicalRe
 export default EcologicalRealismDisplay;
 
 
+
+
+
+
