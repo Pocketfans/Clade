@@ -276,7 +276,8 @@ function GameScene() {
           setBatchProgress({ current: i + 1, total: rounds, message: `正在演化第 ${i + 1}/${rounds} 回合...` });
           
           // 如果没有指定压力，使用空数组（自然演化）
-          const next = await runTurn(pressures.length > 0 ? pressures : []);
+          // 【优化】批量执行时不生成详细报告，提高性能
+          const next = await runTurn(pressures.length > 0 ? pressures : [], 1, false);
           allReports.push(...next);
           
           if (next.length > 0) {

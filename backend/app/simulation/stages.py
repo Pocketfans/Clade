@@ -2390,6 +2390,25 @@ class BuildReportStage(BaseStage):
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
         from ..repositories.environment_repository import environment_repository
+        from ..schemas.responses import TurnReport
+        
+        # 【优化】检查是否需要生成报告（自动过回合/随机回合可跳过）
+        skip_report = False
+        if ctx.command and hasattr(ctx.command, 'auto_reports'):
+            skip_report = not ctx.command.auto_reports
+        
+        if skip_report:
+            logger.info(f"[报告] 回合 {ctx.turn_index} 跳过报告生成 (auto_reports=False)")
+            # 创建一个最简报告，只包含基本信息
+            ctx.report = TurnReport(
+                turn_index=ctx.turn_index,
+                narrative=f"回合 {ctx.turn_index} 完成。",
+                pressures_summary="",
+                species=[],
+                branching_events=ctx.branching_events or [],
+                major_events=ctx.major_events or [],
+            )
+            return
         
         logger.info("构建回合报告...")
         ctx.emit_event("stage", "📝 构建回合报告", "报告")

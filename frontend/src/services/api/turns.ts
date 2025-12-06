@@ -10,14 +10,21 @@ const TURN_TIMEOUT = 5 * 60 * 1000;
 
 /**
  * 执行推演（支持多回合）
+ * @param pressures 压力列表
+ * @param rounds 回合数
+ * @param autoReports 是否生成详细报告（自动过回合时可设为 false 以提高性能）
  */
-export async function runTurn(pressures: PressureDraft[] = [], rounds = 1): Promise<TurnReport[]> {
+export async function runTurn(
+  pressures: PressureDraft[] = [], 
+  rounds = 1,
+  autoReports = true
+): Promise<TurnReport[]> {
   console.log("🚀 [演化] 发送推演请求...");
-  console.log("📋 [演化] 压力数量:", pressures.length);
+  console.log("📋 [演化] 压力数量:", pressures.length, "生成报告:", autoReports);
 
   const data = await http.post<TurnReport[]>(
     "/api/turns/run",
-    { rounds, pressures },
+    { rounds, pressures, auto_reports: autoReports },
     { timeout: TURN_TIMEOUT }
   );
 
@@ -31,17 +38,22 @@ export async function runTurn(pressures: PressureDraft[] = [], rounds = 1): Prom
 
 /**
  * 批量执行多回合
+ * @param rounds 总回合数
+ * @param pressuresPerRound 每回合的压力
+ * @param onProgress 进度回调
+ * @param autoReports 是否生成详细报告（批量执行默认不生成）
  */
 export async function runBatchTurns(
   rounds: number,
   pressuresPerRound?: PressureDraft[],
-  onProgress?: (current: number, total: number, report: TurnReport) => void
+  onProgress?: (current: number, total: number, report: TurnReport) => void,
+  autoReports = false  // 批量执行默认不生成详细报告
 ): Promise<TurnReport[]> {
   const allReports: TurnReport[] = [];
 
   for (let i = 0; i < rounds; i++) {
     console.log(`🔄 [批量执行] 回合 ${i + 1}/${rounds}`);
-    const reports = await runTurn(pressuresPerRound || []);
+    const reports = await runTurn(pressuresPerRound || [], 1, autoReports);
     allReports.push(...reports);
 
     if (reports.length > 0 && onProgress) {
