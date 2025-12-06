@@ -312,7 +312,7 @@ npm run dev
 | `max_concurrent` | 10 | 最大并发批次 |
 
 
-```
+
 
 ### 可配置参数
 
