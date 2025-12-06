@@ -414,9 +414,9 @@ PLANT_PROMPTS = {
 4) 输出 JSON 对象，results 数组与输入 request_id 对应。
 
 === 输出格式 ===
-{
+{{
     "results": [
-        {
+        {{
             "request_id": "请求ID",
             "latin_name": "拉丁学名",
             "common_name": "中文俗名",
@@ -424,17 +424,17 @@ PLANT_PROMPTS = {
             "life_form_stage": 当前阶段或+1（不可跳级）,
             "growth_form": "aquatic/moss/herb/shrub/tree",
             "innovations": [
-                {
+                {{
                     "name": "演化特征名称",
                     "type": "organ/ability/morphology",
                     "description": "作用机理",
-                    "gains": {"特质名": +数值}
-                }
+                    "gains": {{"特质名": +数值}}
+                }}
             ],
             "event_description": "分化叙事"
-        }
+        }}
     ]
-}
+}}
 
 === 命名提示（中文俗名可选风格）===
 - 环境+形态+类群：风崖长鳍鱼、玄渊盲螈、霜脊游龙
