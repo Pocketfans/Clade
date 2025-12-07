@@ -1077,12 +1077,54 @@ class GeneDiversityConfig(BaseModel):
     activation_death_rate_threshold: float = Field(default=0.25, description="激活所需死亡率阈值 (25%)")
     # 激活所需的最小暴露次数（降低门槛）
     activation_min_exposure: int = Field(default=1, description="激活所需最小暴露次数 (1次)")
-    # 分化时继承休眠基因的概率【调高：确保继承90%+】
-    dormant_gene_inherit_chance: float = Field(default=0.90, description="分化时休眠基因继承概率 (90%)")
-    # 分化时从基因库继承的最大特质数
-    max_inherit_traits_from_library: int = Field(default=4, description="从基因库继承最大特质数")
-    # 分化时从基因库继承的最大器官数
-    max_inherit_organs_from_library: int = Field(default=2, description="从基因库继承最大器官数")
+    
+    # ========== v3.0 基于环境压力的基因继承参数 ==========
+    # 【核心理念】分化时父代休眠基因默认 100% 继承，但高压力环境会导致不适应的基因丢失（自然选择）
+    # 低压力(0-3)时几乎不丢失，高压力(7-10)时不适应基因可能丢失 10-15%
+    
+    # 基因丢失开始的压力阈值（低于此值几乎不丢失）
+    gene_loss_pressure_threshold: float = Field(
+        default=2.0, 
+        description="基因丢失开始的压力阈值 (pressure < 2.0 时无丢失)"
+    )
+    # 每单位压力增加的基因丢失率
+    gene_loss_rate_per_pressure: float = Field(
+        default=0.02, 
+        description="每单位压力增加的丢失率 (2%/压力单位)"
+    )
+    # 最大基因丢失率上限
+    max_gene_loss_rate: float = Field(
+        default=0.15, 
+        description="最大基因丢失率上限 (15%)"
+    )
+    # 压力匹配时的保留率加成（匹配当前环境压力的基因更难丢失）
+    pressure_match_retain_bonus: float = Field(
+        default=0.10, 
+        description="压力匹配保留率加成 (+10%)"
+    )
+    # 显性有害突变的保留系数（更容易被选择掉）
+    dominant_harmful_retain_factor: float = Field(
+        default=0.70, 
+        description="显性有害突变保留系数 (×0.7)"
+    )
+    # 轻微有害突变的保留系数
+    mildly_harmful_retain_factor: float = Field(
+        default=0.90, 
+        description="轻微有害突变保留系数 (×0.9)"
+    )
+    # 器官基因相对于特质基因的稳定性（丢失率倍数）
+    organ_gene_stability_factor: float = Field(
+        default=0.50, 
+        description="器官基因稳定性 (丢失率×0.5)"
+    )
+    
+    # [DEPRECATED] 以下参数已废弃，保留用于兼容旧存档
+    # 分化时继承休眠基因的概率 - 已被环境压力机制替代
+    dormant_gene_inherit_chance: float = Field(default=0.90, description="[废弃] 分化时休眠基因继承概率")
+    # 分化时从基因库继承的最大特质数 - 已移除上限
+    max_inherit_traits_from_library: int = Field(default=999, description="[废弃] 从基因库继承最大特质数 (已无上限)")
+    # 分化时从基因库继承的最大器官数 - 已移除上限
+    max_inherit_organs_from_library: int = Field(default=999, description="[废弃] 从基因库继承最大器官数 (已无上限)")
     
     # ========== v2.0 有害突变（遗传负荷）参数 ==========
     # 新物种生成时产生有害突变的概率

@@ -394,10 +394,19 @@ export const DEFAULT_GENE_DIVERSITY_CONFIG: GeneDiversityConfig = {
   activation_death_rate_threshold: 0.25,  // 25% 死亡率阈值
   activation_min_exposure: 1,        // 最少暴露1次
 
-  // 分化继承参数
-  dormant_gene_inherit_chance: 0.50, // 50% 继承概率
-  max_inherit_traits_from_library: 4,
-  max_inherit_organs_from_library: 2,
+  // v3.0 基于环境压力的基因继承参数
+  gene_loss_pressure_threshold: 2.0,       // 压力 < 2.0 时几乎不丢失
+  gene_loss_rate_per_pressure: 0.02,       // 每单位压力增加 2% 丢失率
+  max_gene_loss_rate: 0.15,                // 最高 15% 丢失率
+  pressure_match_retain_bonus: 0.10,       // 压力匹配 +10% 保留率
+  dominant_harmful_retain_factor: 0.70,    // 显性有害突变保留率 ×0.7
+  mildly_harmful_retain_factor: 0.90,      // 轻微有害突变保留率 ×0.9
+  organ_gene_stability_factor: 0.50,       // 器官基因丢失率 ×0.5
+
+  // [废弃] 旧参数保留用于兼容
+  dormant_gene_inherit_chance: 0.90,       // [废弃] 被环境压力机制替代
+  max_inherit_traits_from_library: 999,    // [废弃] 已无上限
+  max_inherit_organs_from_library: 999,    // [废弃] 已无上限
   
   // v2.0 有害突变（遗传负荷）参数
   harmful_mutation_chance: 0.15,            // 15% 有害突变概率

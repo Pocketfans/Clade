@@ -1096,16 +1096,33 @@ class TurnReportService:
         
         # ========== 检查 LLM 回合报告开关 ==========
         # 优先从 UI 配置读取，否则从系统配置读取
+        enable_turn_report_llm = False  # 默认值
+        config_source = "默认"
         try:
             from pathlib import Path
             settings = get_settings()
             ui_config_path = Path(settings.ui_config_path)
-            ui_config = self.environment_repository.load_ui_config(ui_config_path)
-            enable_turn_report_llm = ui_config.turn_report_llm_enabled
-        except Exception:
+            logger.info(f"[TurnReportService] 读取 UI 配置: {ui_config_path}")
+            
+            if ui_config_path.exists():
+                ui_config = self.environment_repository.load_ui_config(ui_config_path)
+                enable_turn_report_llm = ui_config.turn_report_llm_enabled
+                config_source = "UI配置"
+                logger.info(f"[TurnReportService] ✅ UI 配置读取成功，turn_report_llm_enabled={enable_turn_report_llm}")
+            else:
+                logger.warning(f"[TurnReportService] ⚠️ UI 配置文件不存在: {ui_config_path}，使用系统配置")
+                enable_turn_report_llm = settings.enable_turn_report_llm
+                config_source = "系统配置(文件不存在)"
+        except Exception as e:
             # 回退到系统配置
+            logger.warning(f"[TurnReportService] ⚠️ 读取 UI 配置失败: {e}，回退到系统配置")
+            import traceback
+            logger.debug(f"[TurnReportService] 异常详情: {traceback.format_exc()}")
             settings = get_settings()
             enable_turn_report_llm = settings.enable_turn_report_llm
+            config_source = "系统配置(异常)"
+        
+        logger.info(f"[TurnReportService] 📊 最终配置: turn_report_llm_enabled={enable_turn_report_llm} (来源: {config_source})")
         
         # 如果开关关闭，直接使用简单模式，不调用 LLM
         if not enable_turn_report_llm:

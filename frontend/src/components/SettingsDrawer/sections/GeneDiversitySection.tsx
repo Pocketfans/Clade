@@ -407,45 +407,99 @@ export const GeneDiversitySection = memo(function GeneDiversitySection({
         />
       </Card>
 
-      {/* 分化时的基因继承 */}
-      <Card title="分化时基因继承" icon="👶" desc="新物种如何继承父代的休眠基因">
-        <InfoBox>
-          <strong>📋 分化时休眠基因的来源：</strong>
-          <br />1. <strong>父代继承</strong>：50%概率继承父物种的每个特质作为休眠基因
-          <br />2. <strong>基因库继承</strong>：从属（Genus）级基因库继承已发现的基因
-          <br />3. <strong>分化突破</strong>：50%概率直接激活一个休眠基因或发现新基因
-          <br />4. <strong>Bootstrap补齐</strong>：对没有休眠基因的物种自动补齐基础基因
+      {/* 分化时的基因继承 - v3.0 基于环境压力的机制 */}
+      <Card title="🧬 分化时基因继承（v3.0）" icon="👶" desc="基于环境压力的智能基因丢失机制">
+        <InfoBox variant="info">
+          <strong>📋 v3.0 新机制：</strong>
+          <br />1. <strong>完整继承</strong>：子代默认 100% 继承父代的所有休眠基因
+          <br />2. <strong>压力筛选</strong>：高压力环境下，不适应的基因会被自然选择淘汰
+          <br />3. <strong>智能保留</strong>：与当前环境压力匹配的基因几乎不会丢失
+          <br />4. <strong>有害突变加速淘汰</strong>：显性有害突变在高压力下更容易丢失
+          <br /><br />
+          <strong>🎯 设计理念：</strong>低压力 = 遗传稳定；高压力 = 自然选择（适者生存）
         </InfoBox>
         <SliderRow
-          label="休眠基因继承概率"
-          desc="分化时，子代有此概率继承父代的每个休眠基因"
-          value={c.dormant_gene_inherit_chance ?? 0.50}
-          min={0.20}
-          max={0.80}
-          step={0.05}
-          onChange={(v) => handleUpdate({ dormant_gene_inherit_chance: v })}
+          label="压力阈值（丢失开始点）"
+          desc="环境压力低于此值时，基因几乎不会丢失。高于此值后，丢失率随压力增加"
+          value={c.gene_loss_pressure_threshold ?? 2.0}
+          min={0}
+          max={5.0}
+          step={0.5}
+          onChange={(v) => handleUpdate({ gene_loss_pressure_threshold: v })}
+          formatValue={(v) => `压力 > ${v.toFixed(1)}`}
+        />
+        <SliderRow
+          label="丢失率增长系数"
+          desc="每超过阈值 1 点压力，基因丢失率增加此比例"
+          value={c.gene_loss_rate_per_pressure ?? 0.02}
+          min={0.01}
+          max={0.05}
+          step={0.005}
+          onChange={(v) => handleUpdate({ gene_loss_rate_per_pressure: v })}
+          formatValue={(v) => `+${(v * 100).toFixed(1)}%/压力`}
+        />
+        <SliderRow
+          label="最大丢失率上限"
+          desc="无论压力多高，基因丢失率不会超过此值（保护机制）"
+          value={c.max_gene_loss_rate ?? 0.15}
+          min={0.05}
+          max={0.30}
+          step={0.01}
+          onChange={(v) => handleUpdate({ max_gene_loss_rate: v })}
           formatValue={(v) => `${(v * 100).toFixed(0)}%`}
         />
-        <NumberInput
-          label="基因库最大继承特质数"
-          desc="从属级基因库继承的最大特质数量"
-          value={c.max_inherit_traits_from_library ?? 4}
-          min={1}
-          max={8}
-          step={1}
-          onChange={(v) => handleUpdate({ max_inherit_traits_from_library: v })}
-          suffix="个"
-        />
-        <NumberInput
-          label="基因库最大继承器官数"
-          desc="从属级基因库继承的最大器官数量"
-          value={c.max_inherit_organs_from_library ?? 2}
-          min={1}
-          max={4}
-          step={1}
-          onChange={(v) => handleUpdate({ max_inherit_organs_from_library: v })}
-          suffix="个"
-        />
+        <ConfigGroup title="智能保留机制">
+          <SliderRow
+            label="压力匹配保留加成"
+            desc="当基因的压力类型与当前环境匹配时，保留率额外增加。例如：耐旱基因在干旱环境下更难丢失"
+            value={c.pressure_match_retain_bonus ?? 0.10}
+            min={0.05}
+            max={0.25}
+            step={0.01}
+            onChange={(v) => handleUpdate({ pressure_match_retain_bonus: v })}
+            formatValue={(v) => `+${(v * 100).toFixed(0)}%`}
+          />
+          <SliderRow
+            label="器官基因稳定性"
+            desc="器官基因比特质基因更稳定，丢失率乘以此系数。0.5 = 丢失率减半"
+            value={c.organ_gene_stability_factor ?? 0.50}
+            min={0.25}
+            max={1.0}
+            step={0.05}
+            onChange={(v) => handleUpdate({ organ_gene_stability_factor: v })}
+            formatValue={(v) => `×${v.toFixed(2)}`}
+          />
+        </ConfigGroup>
+        <ConfigGroup title="有害突变淘汰">
+          <SliderRow
+            label="显性有害突变保留率"
+            desc="显性有害突变更容易被自然选择淘汰，保留率乘以此系数"
+            value={c.dominant_harmful_retain_factor ?? 0.70}
+            min={0.3}
+            max={1.0}
+            step={0.05}
+            onChange={(v) => handleUpdate({ dominant_harmful_retain_factor: v })}
+            formatValue={(v) => `×${v.toFixed(2)}`}
+          />
+          <SliderRow
+            label="轻微有害突变保留率"
+            desc="轻微有害突变的保留率略低于正常基因"
+            value={c.mildly_harmful_retain_factor ?? 0.90}
+            min={0.6}
+            max={1.0}
+            step={0.05}
+            onChange={(v) => handleUpdate({ mildly_harmful_retain_factor: v })}
+            formatValue={(v) => `×${v.toFixed(2)}`}
+          />
+        </ConfigGroup>
+        <InfoBox variant="warning">
+          <strong>📊 示例计算（压力=8.0 时）：</strong>
+          <br />• 基础丢失率 = (8.0 - 2.0) × 2% = 12%
+          <br />• 普通基因保留率 = 88%
+          <br />• 压力匹配基因保留率 = 88% + 10% = 98%
+          <br />• 器官基因丢失率 = 12% × 0.5 = 6%（保留率 94%）
+          <br />• 显性有害突变保留率 = 88% × 0.7 = 62%
+        </InfoBox>
       </Card>
 
       {/* ========== v2.0 新功能卡片 ========== */}

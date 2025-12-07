@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -1479,11 +1480,10 @@ class SpeciationService:
                     turn=turn_index
                 )
             
-            if new_species.genus_code:
-                genus = genus_repository.get_by_code(new_species.genus_code)
-                if genus:
-                    self.gene_library_service.inherit_dormant_genes(ctx["parent"], new_species, genus)
-                    species_repository.upsert(new_species)
+            # 【修复】即使没有 genus 也调用继承方法（处理新突变和额外基因）
+            genus = genus_repository.get_by_code(new_species.genus_code) if new_species.genus_code else None
+            self.gene_library_service.inherit_dormant_genes(ctx["parent"], new_species, genus)
+            species_repository.upsert(new_species)
             
             # 【AI指定基因激活】处理 AI 返回的 activated_genes
             ai_activated_genes = ai_content.get("activated_genes", []) if ai_content else []
@@ -1596,12 +1596,11 @@ class SpeciationService:
                 assigned_tiles=assigned_tiles
             )
             
-            # 【植物基因库】继承休眠基因
+            # 【修复】即使没有 genus 也调用继承方法（处理新突变和额外基因）
             if hasattr(self, 'gene_library_service') and self.gene_library_service:
-                genus = genus_repository.get_by_code(new_species.genus_code)
-                if genus:
-                    self.gene_library_service.inherit_dormant_genes(ctx["parent"], new_species, genus)
-                    species_repository.upsert(new_species)
+                genus = genus_repository.get_by_code(new_species.genus_code) if new_species.genus_code else None
+                self.gene_library_service.inherit_dormant_genes(ctx["parent"], new_species, genus)
+                species_repository.upsert(new_species)
             
             # 【分化突破】背景物种仅激活已有休眠基因（不生成新基因）
             breakthrough_result = self._try_speciation_breakthrough(new_species, turn_index)
@@ -2941,6 +2940,98 @@ class SpeciationService:
                         logger.info(f"[植物分化] {new_code} 触发里程碑: {ai_milestone}")
         
         # 不再继承 ecological_vector，让系统基于 description 自动计算 embedding
+        
+        # 【改进】基于环境压力的基因继承机制
+        # 高压力环境下，不适应的基因更容易丢失（自然选择）
+        # 低压力环境下，基因保留率更高（遗传漂变较弱）
+        import copy
+        inherited_dormant_genes = {"traits": {}, "organs": {}}
+        
+        if parent.dormant_genes:
+            # 获取基因多样性配置参数
+            gene_cfg = self.gene_diversity_service.config if hasattr(self, 'gene_diversity_service') else None
+            pressure_threshold = gene_cfg.gene_loss_pressure_threshold if gene_cfg else 2.0
+            loss_rate_per_pressure = gene_cfg.gene_loss_rate_per_pressure if gene_cfg else 0.02
+            max_loss_rate = gene_cfg.max_gene_loss_rate if gene_cfg else 0.15
+            pressure_match_bonus = gene_cfg.pressure_match_retain_bonus if gene_cfg else 0.10
+            dominant_harmful_factor = gene_cfg.dominant_harmful_retain_factor if gene_cfg else 0.70
+            mildly_harmful_factor = gene_cfg.mildly_harmful_retain_factor if gene_cfg else 0.90
+            organ_stability = gene_cfg.organ_gene_stability_factor if gene_cfg else 0.50
+            
+            # 获取当前环境压力类型（用于判断基因是否匹配当前选择压力）
+            current_pressure_types = getattr(self, '_current_pressure_types', ['adaptive']) or ['adaptive']
+            
+            # 计算基于压力的基础丢失率
+            # average_pressure 范围 0-10，转换为丢失率 0-max_loss_rate
+            # 低压力(< threshold): 丢失率 0，高压力时按 loss_rate_per_pressure 递增
+            base_loss_rate = min(max_loss_rate, max(0.0, (average_pressure - pressure_threshold) * loss_rate_per_pressure))
+            
+            # 继承特质
+            parent_traits = parent.dormant_genes.get("traits", {})
+            lost_traits = []
+            for trait_name, gene_data in parent_traits.items():
+                if not isinstance(gene_data, dict):
+                    continue
+                
+                # 计算该基因的保留概率
+                retain_prob = 1.0 - base_loss_rate
+                
+                # 【压力匹配加成】如果基因与当前环境压力相关，保留概率更高
+                gene_pressure_types = gene_data.get("pressure_types", [])
+                pressure_match = any(pt in current_pressure_types for pt in gene_pressure_types)
+                if pressure_match:
+                    retain_prob = min(1.0, retain_prob + pressure_match_bonus)
+                
+                # 【有害突变更容易丢失】显性有害突变在高压力下更容易被选择掉
+                mutation_effect = gene_data.get("mutation_effect", "beneficial")
+                if mutation_effect in ("harmful", "lethal"):
+                    dominance = gene_data.get("dominance", "codominant")
+                    if dominance != "recessive":  # 显性有害突变更容易丢失
+                        retain_prob *= dominant_harmful_factor
+                elif mutation_effect == "mildly_harmful":
+                    retain_prob *= mildly_harmful_factor
+                
+                # 随机决定是否保留
+                if random.random() < retain_prob:
+                    new_gene = copy.deepcopy(gene_data)
+                    new_gene["exposure_count"] = 0
+                    new_gene["inherited_from"] = parent.lineage_code
+                    inherited_dormant_genes["traits"][trait_name] = new_gene
+                else:
+                    lost_traits.append(trait_name)
+            
+            # 继承器官
+            parent_organs = parent.dormant_genes.get("organs", {})
+            lost_organs = []
+            for organ_name, gene_data in parent_organs.items():
+                if not isinstance(gene_data, dict):
+                    continue
+                
+                # 器官基因通常更稳定，丢失率按配置倍数降低
+                retain_prob = 1.0 - (base_loss_rate * organ_stability)
+                
+                # 压力匹配加成（器官加成减半）
+                gene_pressure_types = gene_data.get("pressure_types", [])
+                pressure_match = any(pt in current_pressure_types for pt in gene_pressure_types)
+                if pressure_match:
+                    retain_prob = min(1.0, retain_prob + pressure_match_bonus * 0.5)
+                
+                if random.random() < retain_prob:
+                    new_gene = copy.deepcopy(gene_data)
+                    new_gene["exposure_count"] = 0
+                    new_gene["inherited_from"] = parent.lineage_code
+                    inherited_dormant_genes["organs"][organ_name] = new_gene
+                else:
+                    lost_organs.append(organ_name)
+            
+            # 记录丢失情况（仅在有丢失时记录）
+            if lost_traits or lost_organs:
+                logger.debug(
+                    f"[基因丢失] {new_code} 在压力{average_pressure:.1f}下丢失: "
+                    f"特质{len(lost_traits)}个, 器官{len(lost_organs)}个 "
+                    f"(保留率: {1.0-base_loss_rate:.0%})"
+                )
+        
         return Species(
             lineage_code=new_code,
             latin_name=latin,
@@ -2971,6 +3062,8 @@ class SpeciationService:
             life_form_stage=new_life_form_stage,
             growth_form=new_growth_form,
             achieved_milestones=new_achieved_milestones,
+            # 【修复】直接继承父代的休眠基因
+            dormant_genes=inherited_dormant_genes,
         )
     
     def _inherit_habitat_distribution(

@@ -95,15 +95,18 @@ class GeneLibraryService:
         self, 
         parent: Species, 
         child: Species,
-        genus: Genus
+        genus: Genus | None = None
     ):
-        """子代继承休眠基因 v2.0 - 支持显隐性、发育阶段、有害突变
+        """子代继承休眠基因 v3.0 - 从基因库补充额外基因 + 新突变
         
-        【v2.0 更新】
-        - 继承显隐性类型
-        - 继承有害突变（遗传负荷）
-        - 器官发育状态重置
-        - 隐性有害突变有更高的继承概率（被自然选择保留）
+        【v3.0 重构】
+        - 父代休眠基因的直接继承已移至 _create_species（深拷贝，100%继承）
+        - 本方法现在只负责：
+          1. 从父代表型特质生成额外的休眠基因潜力
+          2. 从父代器官生成变异潜力
+          3. 新突变（遗传负荷模拟）
+          4. 从属基因库继承额外基因（无数量上限）
+        - genus 参数改为可选，即使没有 genus 也能处理新突变
         """
         # 导入新的基因常量
         try:
@@ -118,6 +121,7 @@ class GeneLibraryService:
             DominanceType = None
             MutationEffect = None
             roll_dominance = None
+            HARMFUL_MUTATIONS = None
         
         if not child.dormant_genes:
             child.dormant_genes = {"traits": {}, "organs": {}}
@@ -125,73 +129,21 @@ class GeneLibraryService:
         child.dormant_genes.setdefault("traits", {})
         child.dormant_genes.setdefault("organs", {})
         
-        inherited_count = 0
-        harmful_inherited = 0
+        added_count = 0
+        harmful_added = 0
         
-        # === 1. 从父代休眠基因继承（保留新字段） ===
-        # 【修复】提高继承概率：确保子代能继承父代 90%+ 的基因
-        if parent.dormant_genes:
-            # 继承特质
-            parent_traits = parent.dormant_genes.get("traits", {})
-            for trait_name, gene_data in parent_traits.items():
-                if gene_data.get("activated"):
-                    continue  # 跳过已激活的
-                
-                # 计算继承概率【提高：基础概率从 0.50 提升到 0.90】
-                inherit_prob = 0.90
-                
-                # 有害突变的继承概率
-                mutation_effect = gene_data.get("mutation_effect", "beneficial")
-                is_harmful = mutation_effect in ("mildly_harmful", "harmful", "lethal")
-                
-                if is_harmful:
-                    dominance = gene_data.get("dominance", "codominant")
-                    if dominance == "recessive":
-                        inherit_prob = 0.85  # 隐性有害突变容易遗传（被自然选择隐藏）
-                    else:
-                        inherit_prob = 0.40  # 显性有害突变难以遗传
-                
-                if random.random() < inherit_prob:
-                    # 复制基因数据并更新
-                    new_gene = dict(gene_data)
-                    new_gene["exposure_count"] = 0
-                    new_gene["activated"] = False
-                    new_gene["inherited_from"] = parent.lineage_code
-                    
-                    child.dormant_genes["traits"][trait_name] = new_gene
-                    inherited_count += 1
-                    if is_harmful:
-                        harmful_inherited += 1
-            
-            # 继承器官【提高：从 0.40 提升到 0.85】
-            parent_organs = parent.dormant_genes.get("organs", {})
-            for organ_name, gene_data in parent_organs.items():
-                if gene_data.get("activated") and gene_data.get("development_stage") == 3:
-                    continue  # 跳过已成熟的器官
-                
-                if random.random() < 0.85:
-                    new_gene = dict(gene_data)
-                    new_gene["exposure_count"] = 0
-                    new_gene["activated"] = False
-                    new_gene["development_stage"] = None  # 重置发育阶段
-                    new_gene["stage_start_turn"] = None
-                    new_gene["inherited_from"] = parent.lineage_code
-                    
-                    child.dormant_genes["organs"][organ_name] = new_gene
-                    inherited_count += 1
-        
-        # === 2. 从父代表型特质生成休眠基因 ===
-        # 【提高】从 0.50 提升到 0.80，确保表型特质也能稳定遗传
+        # === 1. 从父代表型特质生成休眠基因潜力 ===
+        # 这些是父代已表达的特质，子代可以获得更强的变异潜力
         for trait_name, trait_value in (parent.abstract_traits or {}).items():
             if trait_name in child.dormant_genes["traits"]:
-                continue
+                continue  # 已存在则跳过
                 
-            if random.random() < 0.80:
+            if random.random() < 0.80:  # 80% 概率生成变异潜力
                 dominance = roll_dominance("trait") if roll_dominance else "codominant"
                 dom_value = dominance.value if hasattr(dominance, 'value') else dominance
                 
                 child.dormant_genes["traits"][trait_name] = {
-                    "potential_value": min(15.0, trait_value * 1.20),
+                    "potential_value": min(15.0, trait_value * 1.20),  # 潜力值比当前值高20%
                     "activation_threshold": 0.20,
                     "pressure_types": self._infer_pressure_types(trait_name),
                     "exposure_count": 0,
@@ -200,13 +152,12 @@ class GeneLibraryService:
                     "dominance": dom_value,
                     "mutation_effect": "beneficial",
                 }
-                inherited_count += 1
+                added_count += 1
         
-        # === 3. 从父代器官生成变异潜力 ===
-        # 【提高】从 0.40 提升到 0.75，确保器官变异潜力能稳定遗传
+        # === 2. 从父代器官生成变异潜力 ===
         if parent.organs:
             for organ_cat, organ_data in parent.organs.items():
-                if random.random() < 0.75:
+                if random.random() < 0.75:  # 75% 概率生成器官变异潜力
                     organ_name = f"{organ_data.get('type', organ_cat)}_variant"
                     if organ_name not in child.dormant_genes["organs"]:
                         dominance = roll_dominance("organ") if roll_dominance else "codominant"
@@ -227,9 +178,9 @@ class GeneLibraryService:
                             "development_stage": None,
                             "stage_start_turn": None,
                         }
-                        inherited_count += 1
+                        added_count += 1
         
-        # === 4. 新突变：子代独有的有害突变（遗传负荷模拟） ===
+        # === 3. 新突变：子代独有的有害突变（遗传负荷模拟） ===
         if HARMFUL_MUTATIONS and random.random() < 0.10:  # 10% 概率产生新的有害突变
             harmful_list = [m for m in HARMFUL_MUTATIONS 
                           if m["effect"] in (MutationEffect.MILDLY_HARMFUL, MutationEffect.HARMFUL)]
@@ -250,63 +201,61 @@ class GeneLibraryService:
                         "mutation_effect": harmful["effect"].value if hasattr(harmful["effect"], 'value') else str(harmful["effect"]),
                         "description": harmful.get("description", ""),
                     }
-                    harmful_inherited += 1
+                    harmful_added += 1
                     logger.debug(f"[新突变] {child.lineage_code} 产生新有害突变: {harm_name}")
         
-        # === 5. 从基因库继承 ===
+        # === 4. 从基因库继承（无数量上限） ===
         if genus and genus.gene_library:
+            # 特质：继承所有可用的基因库特质（无上限）
             available_traits = list(genus.gene_library.get("traits", {}).keys())
-            if available_traits:
-                inherit_count = min(4, len(available_traits))
-                for trait_name in random.sample(available_traits, inherit_count):
-                    if trait_name not in child.abstract_traits and trait_name not in child.dormant_genes["traits"]:
-                        trait_data = genus.gene_library["traits"][trait_name]
-                        dominance = roll_dominance("trait") if roll_dominance else "codominant"
-                        dom_value = dominance.value if hasattr(dominance, 'value') else dominance
-                        
-                        child.dormant_genes["traits"][trait_name] = {
-                            "potential_value": trait_data["max_value"] * random.uniform(0.8, 1.0),
-                            "activation_threshold": 0.20,
-                            "pressure_types": ["competition", "starvation"],
-                            "exposure_count": 0,
-                            "activated": False,
-                            "inherited_from": trait_data["discovered_by"],
-                            "dominance": dom_value,
-                            "mutation_effect": "beneficial",
-                        }
-                        inherited_count += 1
+            for trait_name in available_traits:
+                if trait_name not in child.abstract_traits and trait_name not in child.dormant_genes["traits"]:
+                    trait_data = genus.gene_library["traits"][trait_name]
+                    dominance = roll_dominance("trait") if roll_dominance else "codominant"
+                    dom_value = dominance.value if hasattr(dominance, 'value') else dominance
+                    
+                    child.dormant_genes["traits"][trait_name] = {
+                        "potential_value": trait_data["max_value"] * random.uniform(0.8, 1.0),
+                        "activation_threshold": 0.20,
+                        "pressure_types": ["competition", "starvation"],
+                        "exposure_count": 0,
+                        "activated": False,
+                        "inherited_from": trait_data["discovered_by"],
+                        "dominance": dom_value,
+                        "mutation_effect": "beneficial",
+                    }
+                    added_count += 1
             
+            # 器官：继承所有可用的基因库器官（无上限）
             available_organs = list(genus.gene_library.get("organs", {}).keys())
-            if available_organs:
-                inherit_count = min(2, len(available_organs))
-                for organ_name in random.sample(available_organs, inherit_count):
-                    if organ_name not in child.dormant_genes["organs"]:
-                        organ_data = genus.gene_library["organs"][organ_name]
-                        dominance = roll_dominance("organ") if roll_dominance else "codominant"
-                        dom_value = dominance.value if hasattr(dominance, 'value') else dominance
-                        
-                        child.dormant_genes["organs"][organ_name] = {
-                            "organ_data": {
-                                "category": organ_data["category"],
-                                "type": organ_data["type"],
-                                "parameters": organ_data["parameters"]
-                            },
-                            "activation_threshold": 0.25,
-                            "pressure_types": ["competition", "predation"],
-                            "exposure_count": 0,
-                            "activated": False,
-                            "inherited_from": organ_data["discovered_by"],
-                            "dominance": dom_value,
-                            "development_stage": None,
-                            "stage_start_turn": None,
-                        }
-                        inherited_count += 1
+            for organ_name in available_organs:
+                if organ_name not in child.dormant_genes["organs"]:
+                    organ_data = genus.gene_library["organs"][organ_name]
+                    dominance = roll_dominance("organ") if roll_dominance else "codominant"
+                    dom_value = dominance.value if hasattr(dominance, 'value') else dominance
+                    
+                    child.dormant_genes["organs"][organ_name] = {
+                        "organ_data": {
+                            "category": organ_data["category"],
+                            "type": organ_data["type"],
+                            "parameters": organ_data["parameters"]
+                        },
+                        "activation_threshold": 0.25,
+                        "pressure_types": ["competition", "predation"],
+                        "exposure_count": 0,
+                        "activated": False,
+                        "inherited_from": organ_data["discovered_by"],
+                        "dominance": dom_value,
+                        "development_stage": None,
+                        "stage_start_turn": None,
+                    }
+                    added_count += 1
         
-        if inherited_count > 0:
-            if harmful_inherited > 0:
-                logger.info(f"[基因遗传] {child.lineage_code} 继承了 {inherited_count} 个休眠基因 (含 {harmful_inherited} 个有害)")
+        if added_count > 0:
+            if harmful_added > 0:
+                logger.info(f"[基因补充] {child.lineage_code} 获得了 {added_count} 个额外休眠基因 (含 {harmful_added} 个新突变)")
             else:
-                logger.info(f"[基因遗传] {child.lineage_code} 继承了 {inherited_count} 个休眠基因")
+                logger.info(f"[基因补充] {child.lineage_code} 获得了 {added_count} 个额外休眠基因")
     
     def update_activation_count(self, genus_code: str, gene_name: str, gene_type: str):
         """更新基因激活计数"""

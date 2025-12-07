@@ -612,10 +612,19 @@ export interface GeneDiversityConfig {
   activation_death_rate_threshold?: number;  // 激活所需的死亡率阈值
   activation_min_exposure?: number;      // 激活所需的最小暴露次数
   
-  // ========== 分化继承参数 ==========
-  dormant_gene_inherit_chance?: number;  // 分化时休眠基因继承概率
-  max_inherit_traits_from_library?: number;  // 从基因库继承最大特质数
-  max_inherit_organs_from_library?: number;  // 从基因库继承最大器官数
+  // ========== v3.0 基于环境压力的基因继承参数 ==========
+  gene_loss_pressure_threshold?: number;     // 基因丢失开始的压力阈值
+  gene_loss_rate_per_pressure?: number;      // 每单位压力增加的丢失率
+  max_gene_loss_rate?: number;               // 最大基因丢失率上限
+  pressure_match_retain_bonus?: number;      // 压力匹配保留率加成
+  dominant_harmful_retain_factor?: number;   // 显性有害突变保留系数
+  mildly_harmful_retain_factor?: number;     // 轻微有害突变保留系数
+  organ_gene_stability_factor?: number;      // 器官基因稳定性系数
+
+  // [DEPRECATED] 以下参数已废弃，保留用于兼容旧存档
+  dormant_gene_inherit_chance?: number;      // [废弃] 分化时休眠基因继承概率
+  max_inherit_traits_from_library?: number;  // [废弃] 从基因库继承最大特质数（已无上限）
+  max_inherit_organs_from_library?: number;  // [废弃] 从基因库继承最大器官数（已无上限）
   
   // ========== v2.0 有害突变（遗传负荷）参数 ==========
   harmful_mutation_chance?: number;           // 新物种携带有害突变概率
