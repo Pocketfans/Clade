@@ -9,7 +9,7 @@
  */
 
 // 主组件 - 暂时从原文件导入
-export { GenealogyGraphView } from "../GenealogyGraphView.tsx";
+export { GenealogyGraphView } from "../GenealogyGraphView";
 
 // 类型
 export type {

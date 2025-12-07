@@ -68,6 +68,9 @@ export function SpeciesLedger({ speciesList, onClose, onSelectSpecies, selectedS
       const valA = a[sortField as keyof typeof a];
       const valB = b[sortField as keyof typeof b];
 
+      if (valA == null && valB == null) return 0;
+      if (valA == null) return sortOrder === "asc" ? -1 : 1;
+      if (valB == null) return sortOrder === "asc" ? 1 : -1;
       if (valA < valB) return sortOrder === "asc" ? -1 : 1;
       if (valA > valB) return sortOrder === "asc" ? 1 : -1;
       return 0;

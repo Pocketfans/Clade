@@ -2,7 +2,7 @@
  * SpeciesPanel 工具函数
  */
 
-import { TrendingUp, TrendingDown, Minus, Skull } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, Skull, type LucideIcon } from "lucide-react";
 import type { TrendInfo } from "./types";
 
 /**

@@ -3,7 +3,7 @@
  */
 
 // 主组件 - 从原文件导入
-export { DivinePowersPanel } from "../DivinePowersPanel.tsx";
+export { DivinePowersPanel } from "../DivinePowersPanel";
 
 // 类型
 export type {

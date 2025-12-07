@@ -61,7 +61,7 @@ export function useMapData(): UseMapDataResult {
       setViewMode(mode as ReturnType<typeof useUI>["viewMode"]);
 
       // 如果有预计算颜色，直接使用；否则需要重新获取
-      if (mapData?.tiles[0]?.precomputed_colors?.[mode]) {
+      if (mapData?.tiles[0]?.colors?.[mode as keyof typeof mapData.tiles[0]['colors']]) {
         // 直接使用预计算颜色，无需重新请求
         if (snapshot) {
           restoreCamera(snapshot);

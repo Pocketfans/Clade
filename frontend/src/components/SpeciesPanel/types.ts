@@ -25,7 +25,9 @@ export type SortOrder = "asc" | "desc";
 export interface FilterOptions {
   searchQuery: string;
   roleFilter: string | null;
-  statusFilter: "all" | "alive" | "extinct";
+  statusFilter: "all" | "alive" | "extinct" | null;
+  sortBy?: "population" | "name" | "trend";
+  sortOrder?: "asc" | "desc";
 }
 
 // ============ 生态角色配置 ============
@@ -51,7 +53,7 @@ export interface EditState {
 
 // ============ 趋势信息 ============
 export interface TrendInfo {
-  icon: React.ComponentType<{ size?: number }>;
+  icon: React.ComponentType<{ size?: number | string }>;
   color: string;
   label: string;
   bg: string;

@@ -9,7 +9,7 @@
 // 主组件 - 新版（默认）
 export { SpeciesPanelNew as SpeciesPanel } from "./SpeciesPanelNew";
 // 原版组件（冻结，计划移除）
-export { SpeciesPanel as SpeciesPanelLegacy } from "../SpeciesPanel.tsx";
+export { SpeciesPanel as SpeciesPanelLegacy } from "../SpeciesPanel";
 
 // 类型
 export type {

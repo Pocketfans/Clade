@@ -5,8 +5,8 @@
 import { http } from "./base";
 import type { TurnReport, PressureDraft, ActionQueueStatus, PressureTemplate } from "../api.types";
 
-// 5分钟超时（回合执行可能很慢）
-const TURN_TIMEOUT = 5 * 60 * 1000;
+// 15分钟超时（回合执行可能很慢）
+const TURN_TIMEOUT = 15 * 60 * 1000;
 
 /**
  * 执行推演（支持多回合）

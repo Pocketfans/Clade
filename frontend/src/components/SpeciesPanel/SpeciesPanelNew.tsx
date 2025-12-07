@@ -303,15 +303,15 @@ export function SpeciesPanelNew({
               <div className="sp-stat-grid">
                 <div className="sp-stat-item">
                   <span className="label">种群数量</span>
-                  <span className="value">{formatPopulation(speciesDetail.population)}</span>
+                  <span className="value">{formatPopulation(selectedSnapshot?.population ?? 0)}</span>
                 </div>
                 <div className="sp-stat-item">
-                  <span className="label">生态位宽度</span>
-                  <span className="value">{speciesDetail.niche_breadth?.toFixed(2) || "N/A"}</span>
+                  <span className="label">营养级</span>
+                  <span className="value">{speciesDetail.trophic_level?.toFixed(2) || "N/A"}</span>
                 </div>
                 <div className="sp-stat-item">
-                  <span className="label">适应度</span>
-                  <span className="value">{speciesDetail.fitness?.toFixed(2) || "N/A"}</span>
+                  <span className="label">基因多样性</span>
+                  <span className="value">{speciesDetail.gene_diversity_radius?.toFixed(2) || "N/A"}</span>
                 </div>
               </div>
               
@@ -320,7 +320,7 @@ export function SpeciesPanelNew({
             </div>
           )}
 
-          {activeTab === "ai" && <SpeciesAITab speciesCode={speciesDetail.lineage_code} />}
+          {activeTab === "ai" && <SpeciesAITab speciesCode={speciesDetail.lineage_code} speciesName={speciesDetail.common_name} />}
 
           {activeTab === "history" && (
             <div className="sp-history">

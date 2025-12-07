@@ -52,7 +52,7 @@ export function AdminPanel({ onClose }: Props) {
     setDropLoading(true);
     try {
       const res = await dropDatabase();
-      alert("✅ " + res.message);
+      alert(res.success ? "✅ 数据库已重置" : "❌ 操作失败");
       window.location.reload();
     } catch (err: unknown) {
       alert("❌ 操作失败: " + (err instanceof Error ? err.message : "未知错误"));

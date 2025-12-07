@@ -12,41 +12,68 @@ const mockReports: TurnReport[] = [
   {
     turn_index: 1,
     global_temperature: 20.0,
-    global_humidity: 50,
     sea_level: 0,
+    pressures_summary: '',
+    narrative: '',
+    background_summary: [],
+    reemergence_events: [],
+    major_events: [],
+    map_changes: [],
+    migration_events: [],
+    branching_events: [],
     species: [
       {
         lineage_code: 'A',
+        latin_name: 'Species A',
         common_name: 'Species A',
         status: 'alive',
         population: 1000,
+        population_share: 0.5,
+        deaths: 0,
+        death_rate: 0,
         ecological_role: 'producer',
+        notes: [],
       },
     ],
-    branching_events: [],
   },
   {
     turn_index: 2,
     global_temperature: 21.0,
-    global_humidity: 52,
     sea_level: 1,
+    pressures_summary: '',
+    narrative: '',
+    background_summary: [],
+    reemergence_events: [],
+    major_events: [],
+    map_changes: [],
+    migration_events: [],
+    branching_events: [{ parent_lineage: 'A', new_lineage: 'B', description: 'Branched', timestamp: '' }],
     species: [
       {
         lineage_code: 'A',
+        latin_name: 'Species A',
         common_name: 'Species A',
         status: 'alive',
         population: 1200,
+        population_share: 0.6,
+        deaths: 0,
+        death_rate: 0,
         ecological_role: 'producer',
+        notes: [],
       },
       {
         lineage_code: 'B',
+        latin_name: 'Species B',
         common_name: 'Species B',
         status: 'alive',
         population: 500,
+        population_share: 0.25,
+        deaths: 0,
+        death_rate: 0,
         ecological_role: 'herbivore',
+        notes: [],
       },
     ],
-    branching_events: [{ parent: 'A', child: 'B' }],
   },
 ];
 
@@ -78,11 +105,20 @@ describe('useTrendsData', () => {
   });
 
   it('切换时间范围应筛选报告', () => {
-    const manyReports = Array.from({ length: 30 }, (_, i) => ({
+    const manyReports: TurnReport[] = Array.from({ length: 30 }, (_, i) => ({
       turn_index: i + 1,
       global_temperature: 20 + i * 0.1,
+      sea_level: 0,
+      pressures_summary: '',
+      narrative: '',
+      background_summary: [],
+      reemergence_events: [],
+      major_events: [],
+      map_changes: [],
+      migration_events: [],
+      branching_events: [],
       species: [],
-    })) as TurnReport[];
+    }));
 
     const { result } = renderHook(() => useTrendsData({ reports: manyReports }));
     

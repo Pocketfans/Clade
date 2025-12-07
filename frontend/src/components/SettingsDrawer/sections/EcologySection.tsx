@@ -464,7 +464,7 @@ export const EcologySection = memo(function EcologySection({
         <ToggleRow
           label="启用新物种优势"
           desc="是否给予新分化物种前3回合的死亡率减免"
-          value={c.enable_new_species_advantage ?? true}
+          checked={c.enable_new_species_advantage ?? true}
           onChange={(v) => handleUpdate({ enable_new_species_advantage: v })}
         />
         {c.enable_new_species_advantage !== false && (

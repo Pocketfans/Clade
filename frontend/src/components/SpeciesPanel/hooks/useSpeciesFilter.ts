@@ -17,7 +17,7 @@ interface UseSpeciesFilterResult {
   filters: FilterOptions;
   setSearchQuery: (query: string) => void;
   setRoleFilter: (role: string | null) => void;
-  setStatusFilter: (status: string | null) => void;
+  setStatusFilter: (status: FilterOptions["statusFilter"]) => void;
   setSortBy: (sortBy: FilterOptions["sortBy"]) => void;
   toggleSortOrder: () => void;
   resetFilters: () => void;
@@ -105,7 +105,7 @@ export function useSpeciesFilter({
     setFilters((prev) => ({ ...prev, roleFilter: role }));
   }, []);
 
-  const setStatusFilter = useCallback((status: string | null) => {
+  const setStatusFilter = useCallback((status: FilterOptions["statusFilter"]) => {
     setFilters((prev) => ({ ...prev, statusFilter: status }));
   }, []);
 

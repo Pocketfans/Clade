@@ -4,7 +4,22 @@
 
 import { useMemo } from "react";
 import type { TurnReport } from "@/services/api.types";
-import type { SummaryStats, TimeRange, EnvironmentChartData, BiodiversityChartData } from "../types";
+import type { SummaryStats, TimeRange } from "../types";
+
+// 图表数据类型（本地定义）
+interface EnvironmentChartData {
+  turn: number;
+  temperature: number;
+  seaLevel: number;
+}
+
+interface BiodiversityChartData {
+  turn: number;
+  speciesCount: number;
+  totalPopulation: number;
+  extinctions: number;
+  branches: number;
+}
 
 /**
  * 根据时间范围筛选报告

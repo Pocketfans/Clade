@@ -3,7 +3,7 @@
  */
 
 // 主组件 - 暂时从原文件导入
-export { HybridizationPanel } from "../HybridizationPanel.tsx";
+export { HybridizationPanel } from "../HybridizationPanel";
 
 // 类型
 export type {
