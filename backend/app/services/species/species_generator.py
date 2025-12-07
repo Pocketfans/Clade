@@ -675,8 +675,8 @@ class SpeciesGenerator:
     def _generate_initial_dormant_genes(self, species) -> None:
         """为新物种生成初始休眠基因
         
-        让物种从创建时就携带潜在可激活的基因，
-        增加基因系统的活跃度。
+        根据物种的生态特性（栖息地、食性、营养级）生成符合其特质的休眠基因，
+        确保每个物种从创建时就携带潜在可激活的休眠基因。
         """
         if species.dormant_genes is None:
             species.dormant_genes = {"traits": {}, "organs": {}}
@@ -684,50 +684,149 @@ class SpeciesGenerator:
         species.dormant_genes.setdefault("traits", {})
         species.dormant_genes.setdefault("organs", {})
         
-        # 基于物种现有特质生成休眠变异版本
-        for trait_name, trait_value in species.abstract_traits.items():
-            # 60% 概率为每个特质生成一个增强版休眠基因
-            if random.random() < 0.60:
+        # 使用物种信息作为种子确保可重复性
+        seed = abs(hash(f"{species.lineage_code}-dormant-gen")) % 1_000_000_007
+        rng = random.Random(seed)
+        
+        # 获取物种生态位信息
+        habitat = getattr(species, 'habitat_type', 'terrestrial') or 'terrestrial'
+        diet = getattr(species, 'diet_type', 'omnivore') or 'omnivore'
+        trophic = getattr(species, 'trophic_level', 2.0) or 2.0
+        
+        is_producer = diet == "autotroph" or trophic < 1.5
+        is_consumer = diet in ("herbivore", "carnivore", "omnivore") or trophic >= 2.0
+        is_predator = diet == "carnivore" or trophic >= 3.0
+        is_aquatic = habitat in ("marine", "freshwater", "deep_sea", "coastal", "hydrothermal")
+        is_terrestrial = habitat in ("terrestrial", "aerial")
+        is_deep_sea = habitat in ("deep_sea", "hydrothermal")
+        is_amphibious = habitat == "amphibious"
+        
+        # ========== 1. 基于现有特质生成强化版休眠基因 ==========
+        for trait_name, trait_value in (species.abstract_traits or {}).items():
+            if rng.random() < 0.60:
                 enhanced_name = f"强化{trait_name}" if not trait_name.startswith("强化") else trait_name
                 if enhanced_name not in species.dormant_genes["traits"]:
                     species.dormant_genes["traits"][enhanced_name] = {
-                        "potential_value": min(15.0, trait_value * 1.25),
-                        "activation_threshold": 0.20,  # 低门槛
+                        "potential_value": min(15.0, float(trait_value) * 1.25),
+                        "activation_threshold": 0.20,
                         "pressure_types": self._infer_pressure_types_for_trait(trait_name),
                         "exposure_count": 0,
                         "activated": False,
                         "inherited_from": "initial"
                     }
         
-        # 为物种生成一些通用的休眠特质
-        universal_dormant_traits = [
-            ("适应性", ["adaptive", "environment"]),
-            ("恢复力", ["stress", "damage"]),
-            ("代谢效率", ["resource", "competition"]),
-        ]
-        for trait_name, pressure_types in universal_dormant_traits:
-            if trait_name not in species.abstract_traits and trait_name not in species.dormant_genes["traits"]:
-                if random.random() < 0.50:  # 50% 概率
+        # ========== 2. 根据生态位生成特化休眠特质 ==========
+        ecological_traits = []
+        
+        if is_producer:
+            ecological_traits.extend([
+                ("光合效率提升", ["light", "resource"], 6.0),
+                ("固碳强化", ["resource", "competition"], 5.5),
+            ])
+        
+        if is_consumer:
+            ecological_traits.extend([
+                ("消化效率", ["resource", "competition"], 5.5),
+                ("感知敏锐", ["predation", "hunting"], 5.0),
+            ])
+        
+        if is_predator:
+            ecological_traits.extend([
+                ("捕猎本能", ["predation", "hunting"], 6.0),
+            ])
+        
+        if is_aquatic:
+            ecological_traits.extend([
+                ("流线型优化", ["predation", "locomotion"], 5.0),
+            ])
+        
+        if is_terrestrial:
+            ecological_traits.extend([
+                ("保水强化", ["drought", "humidity"], 6.0),
+            ])
+        
+        if is_deep_sea:
+            ecological_traits.extend([
+                ("耐压强化", ["pressure", "deep_sea"], 7.0),
+            ])
+        
+        # 通用特质
+        ecological_traits.extend([
+            ("环境适应性", ["adaptive", "environment"], rng.uniform(4.5, 6.5)),
+            ("恢复力", ["stress", "damage"], rng.uniform(4.0, 6.0)),
+        ])
+        
+        for trait_name, pressure_types, base_value in ecological_traits:
+            if trait_name not in (species.abstract_traits or {}) and trait_name not in species.dormant_genes["traits"]:
+                if rng.random() < 0.45:
                     species.dormant_genes["traits"][trait_name] = {
-                        "potential_value": random.uniform(5.0, 8.0),
-                        "activation_threshold": 0.15,
+                        "potential_value": base_value + rng.uniform(-0.5, 1.0),
+                        "activation_threshold": 0.18,
                         "pressure_types": pressure_types,
                         "exposure_count": 0,
                         "activated": False,
-                        "inherited_from": "initial"
+                        "inherited_from": "ecological"
                     }
         
-        # 为物种生成一些休眠器官潜力
-        potential_organs = [
-            {"name": "感光点", "category": "sensory", "type": "photoreceptor", "parameters": {"sensitivity": 0.5}},
-            {"name": "化学感受器", "category": "sensory", "type": "chemoreceptor", "parameters": {"range": 0.3}},
-            {"name": "纤毛", "category": "locomotion", "type": "cilia", "parameters": {"efficiency": 0.4}},
-            {"name": "防护层", "category": "defense", "type": "protective_layer", "parameters": {"resistance": 0.3}},
-        ]
+        # ========== 3. 根据生态位生成符合物种特性的休眠器官 ==========
+        potential_organs = []
+        
+        if is_producer:
+            potential_organs.extend([
+                {"name": "增强叶绿体", "category": "photosynthetic", "type": "enhanced_chloroplast", 
+                 "parameters": {"efficiency": 1.5}, "pressure_types": ["light", "resource"], "prob": 0.50},
+                {"name": "UV防护层", "category": "protection", "type": "uv_shield", 
+                 "parameters": {"uv_resist": 0.7}, "pressure_types": ["radiation", "damage"], "prob": 0.35},
+            ])
+        
+        if is_consumer:
+            if not is_deep_sea:
+                potential_organs.append(
+                    {"name": "原始眼点", "category": "sensory", "type": "eyespot", 
+                     "parameters": {"sensitivity": 0.5}, "pressure_types": ["predation", "hunting"], "prob": 0.40}
+                )
+            potential_organs.extend([
+                {"name": "化学感受器", "category": "sensory", "type": "chemoreceptor", 
+                 "parameters": {"range": 0.4}, "pressure_types": ["predation", "foraging"], "prob": 0.45},
+            ])
+        
+        if is_predator:
+            potential_organs.extend([
+                {"name": "捕食附肢", "category": "attack", "type": "grasping_appendage", 
+                 "parameters": {"grip_strength": 0.6}, "pressure_types": ["predation", "hunting"], "prob": 0.45},
+            ])
+        
+        if is_aquatic:
+            potential_organs.extend([
+                {"name": "纤毛", "category": "locomotion", "type": "cilia", 
+                 "parameters": {"efficiency": 0.5}, "pressure_types": ["predation", "locomotion"], "prob": 0.40},
+                {"name": "浮力调节囊", "category": "buoyancy", "type": "swim_bladder", 
+                 "parameters": {"control": 0.5}, "pressure_types": ["locomotion", "depth"], "prob": 0.30},
+            ])
+        
+        if is_terrestrial:
+            potential_organs.extend([
+                {"name": "角质层强化", "category": "protection", "type": "cuticle", 
+                 "parameters": {"drought_resist": 0.6}, "pressure_types": ["drought", "protection"], "prob": 0.40},
+            ])
+        
+        if is_deep_sea:
+            potential_organs.extend([
+                {"name": "耐压细胞壁", "category": "protection", "type": "pressure_resistant", 
+                 "parameters": {"pressure_resist": 0.8}, "pressure_types": ["pressure", "deep_sea"], "prob": 0.50},
+                {"name": "热感受器", "category": "sensory", "type": "thermoreceptor", 
+                 "parameters": {"range": 0.5}, "pressure_types": ["temperature", "navigation"], "prob": 0.35},
+            ])
+        
+        # 通用防御器官
+        potential_organs.extend([
+            {"name": "防护外壳", "category": "defense", "type": "shell", 
+             "parameters": {"hardness": 0.4}, "pressure_types": ["predation", "defense"], "prob": 0.25},
+        ])
         
         for organ in potential_organs:
-            # 30% 概率生成每个休眠器官
-            if random.random() < 0.30:
+            prob = organ.get("prob", 0.30)
+            if rng.random() < prob:
                 organ_name = organ["name"]
                 if organ_name not in species.dormant_genes["organs"]:
                     species.dormant_genes["organs"][organ_name] = {
@@ -736,16 +835,17 @@ class SpeciesGenerator:
                             "type": organ["type"],
                             "parameters": organ["parameters"]
                         },
-                        "activation_threshold": 0.20,
-                        "pressure_types": ["adaptive", "competition", "predation"],
+                        "activation_threshold": 0.18,
+                        "pressure_types": organ.get("pressure_types", ["adaptive", "competition"]),
                         "exposure_count": 0,
                         "activated": False,
-                        "inherited_from": "initial"
+                        "inherited_from": "ecological"
                     }
         
-        total_dormant = len(species.dormant_genes.get("traits", {})) + len(species.dormant_genes.get("organs", {}))
-        if total_dormant > 0:
-            logger.info(f"[物种生成器] {species.lineage_code} 生成了 {total_dormant} 个初始休眠基因")
+        total_traits = len(species.dormant_genes.get("traits", {}))
+        total_organs = len(species.dormant_genes.get("organs", {}))
+        if total_traits + total_organs > 0:
+            logger.info(f"[物种生成器] {species.lineage_code} 生成了 {total_traits} 个休眠特质, {total_organs} 个休眠器官")
 
     def _infer_pressure_types_for_trait(self, trait_name: str) -> list[str]:
         """根据特质名推断触发压力类型"""
@@ -758,6 +858,10 @@ class SpeciesGenerator:
             "运动能力": ["predation", "competition"],
             "繁殖速度": ["population", "adaptive"],
             "社会性": ["group", "cooperation"],
+            "光合效率": ["light", "resource"],
+            "固碳能力": ["resource", "competition"],
+            "攻击性": ["predation", "competition"],
+            "防御能力": ["predation", "defense"],
         }
         for key, types in mapping.items():
             if key in trait_name:
