@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
+from sklearn.cluster import AgglomerativeClustering, KMeans  # type: ignore
 
 if TYPE_CHECKING:
     from ...models.species import Species
@@ -246,8 +247,6 @@ class TaxonomyService:
         n_clusters: int = 3
     ) -> list[CladeInfo]:
         """顶层聚类（门级）"""
-        from sklearn.cluster import KMeans
-        
         # 限制聚类数量不超过样本数
         n_clusters = min(n_clusters, len(vectors))
         
@@ -358,8 +357,6 @@ class TaxonomyService:
         
         try:
             # 使用层次聚类
-            from sklearn.cluster import AgglomerativeClustering
-            
             n_clusters = min(3, len(vectors) // 2)
             if n_clusters < 2:
                 return []
