@@ -3,11 +3,13 @@
 将固定的演化规则从Prompt提取到代码中：
 1. 预处理：计算约束条件传给LLM
 2. 后验证：验证LLM输出并修正违规内容
+3. 增强预算上下文：为LLM提供边际递减、突破机会等信息
 
 这样做的好处：
 - Prompt从~400行减少到~150行
 - Token消耗减少60%
 - 规则100%强制执行（不依赖LLM理解）
+- LLM可以做出更有策略性的演化决策
 """
 from __future__ import annotations
 
@@ -172,7 +174,10 @@ class SpeciationRules:
         Returns:
             约束条件字典，直接传给LLM
         """
-        from .trait_config import TraitConfig, get_current_era
+        from .trait_config import (
+            TraitConfig, get_current_era,
+            get_diminishing_summary, get_breakthrough_summary, get_bonus_summary
+        )
         
         # 1. 计算属性变化预算（考虑时代上限）
         trait_budget = self._calculate_trait_budget(parent_species, environment_pressure, turn_index)
@@ -194,6 +199,11 @@ class SpeciationRules:
         era_limits = TraitConfig.get_trophic_limits(parent_species.trophic_level, turn_index)
         era_summary = TraitConfig.get_era_limits_summary(turn_index, parent_species.trophic_level)
         
+        # 7. 【新增】获取增强预算上下文
+        enhanced_context = self._get_enhanced_budget_context(
+            parent_species, turn_index, era_limits
+        )
+        
         return {
             "trait_budget_summary": self._format_trait_budget(trait_budget, era_limits),
             "organ_constraints_summary": self._format_organ_constraints(organ_constraints),
@@ -209,11 +219,158 @@ class SpeciationRules:
             "era_description": era["description"],
             "era_single_cap": era_limits["specialized"],
             "era_total_cap": era_limits["total"],
+            # 【新增】增强预算上下文
+            "diminishing_returns_context": enhanced_context["diminishing_text"],
+            "breakthrough_opportunities": enhanced_context["breakthrough_text"],
+            "habitat_specialization_bonus": enhanced_context["bonus_text"],
+            "budget_usage_percent": enhanced_context["usage_percent"],
+            "remaining_budget": enhanced_context["remaining_budget"],
+            "strategy_recommendation": enhanced_context["strategy_recommendation"],
             # 原始数据（供后验证使用）
             "_trait_budget": trait_budget,
             "_organ_constraints": organ_constraints,
             "_turn_index": turn_index,
+            "_enhanced_context": enhanced_context,
         }
+    
+    def _get_enhanced_budget_context(
+        self,
+        species,
+        turn_index: int,
+        era_limits: dict
+    ) -> dict[str, Any]:
+        """生成增强的预算上下文（供 prompt 使用）
+        
+        包含：边际递减警告、突破机会、栖息地加成、策略建议
+        
+        Args:
+            species: 物种对象
+            turn_index: 当前回合数
+            era_limits: 时代上限字典
+            
+        Returns:
+            增强上下文字典
+        """
+        from .trait_config import (
+            get_diminishing_summary, get_breakthrough_summary, 
+            get_bonus_summary, get_single_trait_cap
+        )
+        
+        traits = getattr(species, 'abstract_traits', {}) or {}
+        trophic_level = getattr(species, 'trophic_level', 2.0)
+        habitat_type = getattr(species, 'habitat_type', 'terrestrial')
+        organs = getattr(species, 'organs', {}) or {}
+        
+        # 1. 预算使用情况
+        budget = era_limits.get("total", 100)
+        single_cap = era_limits.get("specialized", 15)
+        current_total = sum(traits.values())
+        usage_percent = current_total / budget if budget > 0 else 0
+        remaining = max(0, budget - current_total)
+        
+        # 2. 边际递减摘要
+        diminishing = get_diminishing_summary(traits, turn_index, trophic_level)
+        diminishing_text = ""
+        if diminishing["warning_text"]:
+            diminishing_text = f"""
+=== ⚖️ 边际递减警告 ===
+{diminishing["warning_text"]}
+{diminishing["strategy_hint"]}
+"""
+        
+        # 3. 突破机会
+        breakthrough = get_breakthrough_summary(traits, turn_index, trophic_level)
+        breakthrough_text = ""
+        if breakthrough["achieved"] or breakthrough["near"]:
+            breakthrough_text = f"""
+=== 🏆 突破机会 ===
+{breakthrough["summary_text"]}
+"""
+        
+        # 4. 栖息地和器官加成
+        bonus = get_bonus_summary(habitat_type, organs)
+        bonus_text = ""
+        if bonus["habitat_bonus"] or bonus["organ_bonus"]:
+            bonus_text = f"""
+=== 🌍 特化加成 ===
+{bonus["summary_text"]}
+提示：强化这些属性可突破普通上限！
+"""
+        
+        # 5. 策略建议
+        strategy_recommendation = self._generate_strategy_recommendation(
+            usage_percent, diminishing, breakthrough, bonus
+        )
+        
+        return {
+            "usage_percent": usage_percent,
+            "remaining_budget": remaining,
+            "current_total": current_total,
+            "budget": budget,
+            "single_cap": single_cap,
+            "diminishing_text": diminishing_text,
+            "breakthrough_text": breakthrough_text,
+            "bonus_text": bonus_text,
+            "strategy_recommendation": strategy_recommendation,
+            # 原始数据
+            "_diminishing": diminishing,
+            "_breakthrough": breakthrough,
+            "_bonus": bonus,
+        }
+    
+    def _generate_strategy_recommendation(
+        self,
+        usage_percent: float,
+        diminishing: dict,
+        breakthrough: dict,
+        bonus: dict
+    ) -> str:
+        """生成演化策略建议
+        
+        Args:
+            usage_percent: 预算使用比例
+            diminishing: 边际递减摘要
+            breakthrough: 突破摘要
+            bonus: 加成摘要
+            
+        Returns:
+            策略建议文本
+        """
+        recommendations = []
+        
+        # 基于预算使用情况
+        if usage_percent < 0.3:
+            recommendations.append("📈 预算充足，可大胆演化新特质")
+        elif usage_percent > 0.85:
+            recommendations.append("⚠️ 预算紧张，优先优化现有特质而非新增")
+        
+        # 基于边际递减
+        high_traits = diminishing.get("high_traits", [])
+        if len(high_traits) >= 3:
+            recommendations.append("🔄 多个属性效率低下，建议分散投资")
+        elif high_traits and high_traits[0][2] >= 0.85:
+            top_trait = high_traits[0][0]
+            recommendations.append(f"🎯 {top_trait}效率极低，可尝试突破或转向其他属性")
+        
+        # 基于突破机会
+        near_breakthroughs = breakthrough.get("near", [])
+        if near_breakthroughs:
+            best = near_breakthroughs[0]
+            if best["gap"] <= 2.0:
+                recommendations.append(
+                    f"🏆 {best['trait']}距「{best['tier_name']}」仅差{best['gap']:.1f}，建议优先突破！"
+                )
+        
+        # 基于栖息地加成
+        habitat_bonus = bonus.get("habitat_bonus", {})
+        if habitat_bonus:
+            bonus_traits = list(habitat_bonus.keys())[:2]
+            recommendations.append(f"🌍 栖息地特化：{', '.join(bonus_traits)}可突破普通上限")
+        
+        if not recommendations:
+            recommendations.append("⚖️ 均衡发展，注意权衡代价")
+        
+        return "\n".join(recommendations)
     
     def _calculate_trait_budget(
         self, 

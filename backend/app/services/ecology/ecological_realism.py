@@ -826,6 +826,28 @@ class EcologicalRealismService:
     # 统计与配置
     # ========================================================================
     
+    def warmup_species_vectors(
+        self, 
+        species_list: Sequence['Species'],
+        force_refresh: bool = False,
+    ) -> int:
+        """批量预热物种向量缓存
+        
+        【关键优化】在进行大量相似度计算前调用此方法，
+        一次性为所有物种生成embedding向量，避免逐个API调用。
+        
+        对于100+物种的场景，这可以将数十万次单独API调用
+        减少为一次批量调用，显著提高性能和稳定性。
+        
+        Args:
+            species_list: 需要预热的物种列表
+            force_refresh: 是否强制刷新（用于物种描述可能已更新的场景）
+            
+        Returns:
+            新生成的向量数量
+        """
+        return self._anchors.warmup_species_vectors(species_list, force_refresh)
+    
     def get_stats(self) -> dict:
         """获取统计信息"""
         return {

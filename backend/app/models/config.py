@@ -124,8 +124,13 @@ class SpeciationConfig(BaseModel):
     # 设为 20,000 kg (2万) 确保新物种有足够的初始规模，避免微型物种
     min_offspring_population: int = 20000
     # 背景物种分化概率惩罚系数（0-1，越小惩罚越重）
-    # 例如 0.2 表示背景物种的分化概率降低到普通物种的 20%
-    background_speciation_penalty: float = 0.2
+    # 设为 0.05 表示背景物种的分化概率降低到普通物种的 5%
+    # 背景物种应该是"被时代淘汰的配角"，极少分化
+    background_speciation_penalty: float = 0.05
+    # 背景物种额外死亡率惩罚（直接叠加到基础死亡率）
+    # 设为 0.08 表示背景物种每回合额外承受 8% 的死亡率
+    # 这使得背景物种在竞争中逐渐被淘汰
+    background_mortality_penalty: float = 0.08
     
     # ========== 杂交参数 ==========
     # 自动杂交检测概率（每回合检测同域近缘物种杂交的概率）

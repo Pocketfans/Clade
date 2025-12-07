@@ -1,7 +1,16 @@
-"""Trait配置和验证工具"""
+"""Trait配置和验证工具
+
+包含：
+- 地质时代配置
+- 属性上限计算（时代+营养级）
+- 边际递减机制
+- 突破系统
+- 栖息地/器官加成
+"""
 from __future__ import annotations
 
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -916,3 +925,518 @@ class PlantTraitConfig:
     def get_stage_name(cls, life_form_stage: int) -> str:
         """获取阶段名称"""
         return cls.LIFE_FORM_STAGE_NAMES.get(life_form_stage, "未知阶段")
+
+
+# ==================== 边际递减机制 ====================
+
+# 边际递减阈值配置
+DIMINISHING_RETURNS_CONFIG = {
+    "t1_ratio": 0.50,   # 第一递减阈值：50%上限
+    "t2_ratio": 0.70,   # 第二递减阈值：70%上限
+    "t3_ratio": 0.85,   # 第三递减阈值：85%上限
+    "t4_ratio": 0.95,   # 第四递减阈值：95%上限
+    "f1": 0.60,         # 第一区间效率：60%
+    "f2": 0.30,         # 第二区间效率：30%
+    "f3": 0.10,         # 第三区间效率：10%
+    "f4": 0.02,         # 第四区间效率：2%
+}
+
+
+def get_single_trait_cap(turn_index: int, trophic_level: float = 2.0) -> float:
+    """获取单属性上限
+    
+    Args:
+        turn_index: 当前回合数
+        trophic_level: 营养级（默认2.0）
+        
+    Returns:
+        单属性上限值
+    """
+    limits = TraitConfig.get_trophic_limits(trophic_level, turn_index)
+    return float(limits["specialized"])
+
+
+def get_diminishing_factor(current_value: float, turn_index: int, trophic_level: float = 2.0) -> float:
+    """计算边际递减因子
+    
+    属性越高，新增益的效率越低。
+    
+    Args:
+        current_value: 当前属性值
+        turn_index: 当前回合数
+        trophic_level: 营养级
+        
+    Returns:
+        增益效率（0.02-1.0）
+    """
+    cap = get_single_trait_cap(turn_index, trophic_level)
+    if cap <= 0:
+        return 1.0
+    
+    config = DIMINISHING_RETURNS_CONFIG
+    
+    # 相对阈值（基于上限的比例）
+    t1 = cap * config["t1_ratio"]
+    t2 = cap * config["t2_ratio"]
+    t3 = cap * config["t3_ratio"]
+    t4 = cap * config["t4_ratio"]
+    
+    if current_value < t1:
+        return 1.0
+    elif current_value < t2:
+        return config["f1"]
+    elif current_value < t3:
+        return config["f2"]
+    elif current_value < t4:
+        return config["f3"]
+    else:
+        return config["f4"]
+
+
+def get_diminishing_summary(traits: dict[str, float], turn_index: int, trophic_level: float = 2.0) -> dict:
+    """获取属性的边际递减摘要
+    
+    Args:
+        traits: 属性字典
+        turn_index: 当前回合数
+        trophic_level: 营养级
+        
+    Returns:
+        {
+            "high_traits": [(trait_name, value, ratio, efficiency), ...],
+            "warning_text": 警告文本,
+            "strategy_hint": 策略建议
+        }
+    """
+    cap = get_single_trait_cap(turn_index, trophic_level)
+    high_traits = []
+    
+    for trait_name, value in traits.items():
+        if cap > 0:
+            ratio = value / cap
+            if ratio >= 0.5:
+                efficiency = get_diminishing_factor(value, turn_index, trophic_level)
+                high_traits.append((trait_name, value, ratio, efficiency))
+    
+    # 按比例降序排序
+    high_traits.sort(key=lambda x: x[2], reverse=True)
+    
+    warning_lines = []
+    for trait_name, value, ratio, efficiency in high_traits:
+        warning_lines.append(f"- {trait_name}: {value:.1f} ({ratio:.0%}上限，增益效率{efficiency:.0%})")
+    
+    warning_text = ""
+    if warning_lines:
+        warning_text = "以下属性已进入递减区域：\n" + "\n".join(warning_lines)
+    
+    strategy_hint = ""
+    if len(high_traits) >= 3:
+        strategy_hint = "💡 建议：多个属性已接近上限，考虑分散投资到其他属性"
+    elif len(high_traits) >= 1 and high_traits[0][2] >= 0.85:
+        strategy_hint = f"💡 建议：{high_traits[0][0]} 效率很低，可尝试突破或转向其他属性"
+    
+    return {
+        "high_traits": high_traits,
+        "warning_text": warning_text,
+        "strategy_hint": strategy_hint,
+    }
+
+
+# ==================== 突破系统 ====================
+
+# 单属性突破阈值
+TRAIT_BREAKTHROUGH_TIERS = {
+    0.50: {
+        "name": "专精",
+        "effect": "该属性生态效果+30%",
+        "bonus": {"eco_effect": 0.30}
+    },
+    0.65: {
+        "name": "大师",
+        "effect": "边际递减减缓50%",
+        "bonus": {"diminishing_reduction": 0.50}
+    },
+    0.80: {
+        "name": "卓越",
+        "effect": "该属性上限+15%",
+        "bonus": {"cap_bonus_percent": 0.15}
+    },
+    0.90: {
+        "name": "传奇",
+        "effect": "免疫边际递减",
+        "bonus": {"no_diminishing": True}
+    },
+    0.98: {
+        "name": "神话",
+        "effect": "该属性可协同增强相关属性",
+        "bonus": {"synergy_unlock": True}
+    },
+}
+
+# 总和突破阈值
+TOTAL_BREAKTHROUGH_TIERS = {
+    0.30: {
+        "name": "简单生物",
+        "effect": "器官槽位+1",
+        "bonus": {"organ_slots": 1}
+    },
+    0.50: {
+        "name": "复杂生物",
+        "effect": "基因激活概率+20%",
+        "bonus": {"activation_bonus": 0.20}
+    },
+    0.70: {
+        "name": "高等生物",
+        "effect": "新基因发现概率+30%",
+        "bonus": {"discovery_bonus": 0.30}
+    },
+    0.85: {
+        "name": "顶级生物",
+        "effect": "竞争压力-15%",
+        "bonus": {"competition_reduce": 0.15}
+    },
+    0.95: {
+        "name": "顶点生物",
+        "effect": "繁殖效率+20%",
+        "bonus": {"reproduction_bonus": 0.20}
+    },
+}
+
+
+def get_trait_breakthrough_status(value: float, cap: float) -> dict | None:
+    """获取单属性的突破状态
+    
+    Args:
+        value: 当前属性值
+        cap: 属性上限
+        
+    Returns:
+        当前已达到的最高突破等级信息，或 None
+    """
+    if cap <= 0:
+        return None
+    
+    ratio = value / cap
+    achieved = None
+    
+    for threshold in sorted(TRAIT_BREAKTHROUGH_TIERS.keys()):
+        if ratio >= threshold:
+            achieved = {
+                "threshold": threshold,
+                "ratio": ratio,
+                **TRAIT_BREAKTHROUGH_TIERS[threshold]
+            }
+    
+    return achieved
+
+
+def get_near_breakthroughs(traits: dict[str, float], turn_index: int, trophic_level: float = 2.0) -> list[dict]:
+    """获取接近突破的属性
+    
+    Args:
+        traits: 属性字典
+        turn_index: 当前回合数
+        trophic_level: 营养级
+        
+    Returns:
+        [{"trait": 属性名, "current": 当前值, "target": 目标值, "gap": 差距, "tier": 突破等级名}, ...]
+    """
+    cap = get_single_trait_cap(turn_index, trophic_level)
+    if cap <= 0:
+        return []
+    
+    near_list = []
+    
+    for trait_name, value in traits.items():
+        ratio = value / cap
+        
+        # 找到下一个未达到的突破阈值
+        for threshold in sorted(TRAIT_BREAKTHROUGH_TIERS.keys()):
+            if ratio < threshold:
+                gap = (threshold * cap) - value
+                # 只显示差距在合理范围内的（比如差距 < 5.0）
+                if gap <= 5.0:
+                    tier_info = TRAIT_BREAKTHROUGH_TIERS[threshold]
+                    near_list.append({
+                        "trait": trait_name,
+                        "current": value,
+                        "target": threshold * cap,
+                        "gap": gap,
+                        "tier_name": tier_info["name"],
+                        "tier_effect": tier_info["effect"],
+                        "threshold": threshold,
+                    })
+                break
+    
+    # 按差距排序
+    near_list.sort(key=lambda x: x["gap"])
+    return near_list
+
+
+def get_breakthrough_summary(traits: dict[str, float], turn_index: int, trophic_level: float = 2.0) -> dict:
+    """获取突破系统摘要
+    
+    Args:
+        traits: 属性字典
+        turn_index: 当前回合数
+        trophic_level: 营养级
+        
+    Returns:
+        {
+            "achieved": 已达成的突破,
+            "near": 接近突破的属性,
+            "summary_text": 摘要文本
+        }
+    """
+    cap = get_single_trait_cap(turn_index, trophic_level)
+    
+    achieved = []
+    for trait_name, value in traits.items():
+        status = get_trait_breakthrough_status(value, cap)
+        if status:
+            achieved.append({
+                "trait": trait_name,
+                "tier": status["name"],
+                "effect": status["effect"],
+            })
+    
+    near = get_near_breakthroughs(traits, turn_index, trophic_level)
+    
+    # 生成摘要文本
+    summary_lines = []
+    
+    if achieved:
+        summary_lines.append("【已达成突破】")
+        for a in achieved:
+            summary_lines.append(f"  - {a['trait']}: 「{a['tier']}」{a['effect']}")
+    
+    if near:
+        summary_lines.append("【接近突破】")
+        for n in near[:3]:  # 只显示前3个
+            summary_lines.append(f"  - {n['trait']}: 再+{n['gap']:.1f}可达「{n['tier_name']}」")
+    
+    summary_text = "\n".join(summary_lines) if summary_lines else "暂无突破进度"
+    
+    return {
+        "achieved": achieved,
+        "near": near,
+        "summary_text": summary_text,
+    }
+
+
+# ==================== 栖息地/器官加成 ====================
+
+# 栖息地特化加成：特定栖息地允许相关属性超过普通上限
+HABITAT_TRAIT_BONUS = {
+    "deep_sea": {
+        "耐高压": 5.0,
+        "暗视觉": 3.0,
+        "耐寒性": 2.0,
+        "耐缺氧": 2.0,
+    },
+    "terrestrial": {
+        "运动能力": 3.0,
+        "耐旱性": 3.0,
+        "耐热性": 2.0,
+    },
+    "aerial": {
+        "运动能力": 5.0,
+        "感知能力": 3.0,
+        "迁徙能力": 3.0,
+    },
+    "marine": {
+        "耐盐性": 4.0,
+        "渗透调节": 3.0,
+        "耐高压": 2.0,
+    },
+    "freshwater": {
+        "渗透调节": 3.0,
+        "耐缺氧": 2.0,
+        "耐涝性": 2.0,
+    },
+    "coastal": {
+        "耐盐性": 3.0,
+        "耐旱性": 2.0,
+        "温度适应范围": 2.0,
+    },
+    "amphibious": {
+        "耐旱性": 3.0,
+        "耐湿性": 3.0,
+        "温度适应范围": 2.0,
+    },
+}
+
+# 器官加成：成熟器官解锁相关属性额外上限
+ORGAN_TRAIT_BONUS = {
+    "sensory": {
+        "警觉性": 4.0,
+        "感知能力": 4.0,
+        "暗视觉": 2.0,
+    },
+    "locomotion": {
+        "运动能力": 5.0,
+        "迁徙能力": 3.0,
+    },
+    "defense": {
+        "防御性": 4.0,
+        "物理防御": 4.0,
+    },
+    "metabolic": {
+        "耐寒性": 2.0,
+        "耐热性": 2.0,
+        "饥饿耐受": 3.0,
+    },
+    "respiratory": {
+        "耐缺氧": 4.0,
+        "高效呼吸": 3.0,
+    },
+    "nervous": {
+        "智力": 5.0,
+        "社会性": 3.0,
+        "警觉性": 2.0,
+    },
+    "digestive": {
+        "杂食性": 3.0,
+        "资源利用效率": 3.0,
+    },
+}
+
+# 器官阶段对加成的缩放
+ORGAN_STAGE_SCALE = {
+    0: 0.0,    # 原基：0%
+    1: 0.25,   # 初级：25%
+    2: 0.60,   # 功能：60%
+    3: 1.00,   # 成熟：100%
+    4: 1.20,   # 完善：120%
+}
+
+
+def get_habitat_trait_bonus(habitat_type: str) -> dict[str, float]:
+    """获取栖息地特化加成
+    
+    Args:
+        habitat_type: 栖息地类型
+        
+    Returns:
+        {属性名: 加成值}
+    """
+    return HABITAT_TRAIT_BONUS.get(habitat_type, {})
+
+
+def get_organ_trait_bonus(organs: dict, trait_name: str) -> float:
+    """获取器官对特定属性的加成
+    
+    Args:
+        organs: 器官字典 {category: {stage: int, ...}}
+        trait_name: 属性名
+        
+    Returns:
+        总加成值
+    """
+    total_bonus = 0.0
+    
+    for category, organ_info in organs.items():
+        if category not in ORGAN_TRAIT_BONUS:
+            continue
+        
+        trait_bonuses = ORGAN_TRAIT_BONUS[category]
+        if trait_name not in trait_bonuses:
+            continue
+        
+        stage = organ_info.get("stage", 0)
+        scale = ORGAN_STAGE_SCALE.get(stage, 0.0)
+        base_bonus = trait_bonuses[trait_name]
+        
+        total_bonus += base_bonus * scale
+    
+    return total_bonus
+
+
+def get_effective_trait_cap(
+    trait_name: str,
+    turn_index: int,
+    trophic_level: float,
+    habitat_type: str = None,
+    organs: dict = None
+) -> float:
+    """获取属性的有效上限（考虑所有加成）
+    
+    Args:
+        trait_name: 属性名
+        turn_index: 当前回合数
+        trophic_level: 营养级
+        habitat_type: 栖息地类型（可选）
+        organs: 器官字典（可选）
+        
+    Returns:
+        有效上限值
+    """
+    base_cap = get_single_trait_cap(turn_index, trophic_level)
+    
+    # 栖息地加成
+    habitat_bonus = 0.0
+    if habitat_type:
+        habitat_bonuses = get_habitat_trait_bonus(habitat_type)
+        habitat_bonus = habitat_bonuses.get(trait_name, 0.0)
+    
+    # 器官加成
+    organ_bonus = 0.0
+    if organs:
+        organ_bonus = get_organ_trait_bonus(organs, trait_name)
+    
+    return base_cap + habitat_bonus + organ_bonus
+
+
+def get_bonus_summary(habitat_type: str, organs: dict = None) -> dict:
+    """获取所有加成的摘要
+    
+    Args:
+        habitat_type: 栖息地类型
+        organs: 器官字典
+        
+    Returns:
+        {
+            "habitat_bonus": 栖息地加成字典,
+            "organ_bonus": 器官加成字典,
+            "summary_text": 摘要文本
+        }
+    """
+    habitat_bonus = get_habitat_trait_bonus(habitat_type)
+    
+    organ_bonus = {}
+    if organs:
+        # 收集所有器官的加成
+        for category, organ_info in organs.items():
+            if category not in ORGAN_TRAIT_BONUS:
+                continue
+            
+            stage = organ_info.get("stage", 0)
+            scale = ORGAN_STAGE_SCALE.get(stage, 0.0)
+            
+            if scale > 0:
+                for trait, base_bonus in ORGAN_TRAIT_BONUS[category].items():
+                    if trait not in organ_bonus:
+                        organ_bonus[trait] = 0.0
+                    organ_bonus[trait] += base_bonus * scale
+    
+    # 生成摘要文本
+    lines = []
+    
+    if habitat_bonus:
+        lines.append(f"【{habitat_type} 栖息地特化】")
+        for trait, bonus in habitat_bonus.items():
+            lines.append(f"  - {trait}: 上限+{bonus:.0f}")
+    
+    if organ_bonus:
+        lines.append("【器官加成】")
+        for trait, bonus in sorted(organ_bonus.items(), key=lambda x: -x[1]):
+            if bonus >= 0.5:
+                lines.append(f"  - {trait}: 上限+{bonus:.1f}")
+    
+    summary_text = "\n".join(lines) if lines else "无特殊加成"
+    
+    return {
+        "habitat_bonus": habitat_bonus,
+        "organ_bonus": organ_bonus,
+        "summary_text": summary_text,
+    }

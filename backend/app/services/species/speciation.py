@@ -1198,6 +1198,17 @@ class SpeciationService:
                     "suggested_decreases": ", ".join(rule_constraints["suggested_decreases"]),
                     "habitat_options": ", ".join(rule_constraints["habitat_options"]),
                     "trophic_range": rule_constraints["trophic_range"],
+                    # 【新增】时代信息
+                    "era_summary": rule_constraints.get("era_summary", ""),
+                    "era_single_cap": rule_constraints.get("era_single_cap", 15),
+                    "era_total_cap": rule_constraints.get("era_total_cap", 100),
+                    # 【新增】增强预算上下文（边际递减、突破机会、栖息地加成）
+                    "diminishing_returns_context": rule_constraints.get("diminishing_returns_context", ""),
+                    "breakthrough_opportunities": rule_constraints.get("breakthrough_opportunities", ""),
+                    "habitat_specialization_bonus": rule_constraints.get("habitat_specialization_bonus", ""),
+                    "strategy_recommendation": rule_constraints.get("strategy_recommendation", ""),
+                    "budget_usage_percent": rule_constraints.get("budget_usage_percent", 0.5),
+                    "remaining_budget": rule_constraints.get("remaining_budget", 50),
                     # 【新增】捕食关系信息
                     "diet_type": species.diet_type or "omnivore",
                     "prey_species_summary": self._summarize_prey_species(species),
@@ -2232,7 +2243,7 @@ class SpeciationService:
             turn_index=turn_index,
         )
         
-        # ========== 1. 生成名称（更丰富的变化）==========
+        # ========== 1. 生成名称（优化：避免累加截断）==========
         parent_latin = parent.latin_name or "Species unknown"
         latin_parts = parent_latin.split()
         genus = latin_parts[0] if latin_parts else "Genus"
@@ -2253,19 +2264,14 @@ class SpeciationService:
         code_suffix = new_code.replace(".", "").lower()[-3:]
         new_species_name = f"{genus} {rng.choice(suffixes)}_{code_suffix}"
         
-        # 中文俗名：更丰富的命名
-        parent_common = parent.common_name or "未知物种"
-        base_name = parent_common[:3] if len(parent_common) > 3 else parent_common
-        
-        chinese_prefix_map = {
-            "环境适应型": ["耐候", "适应", "强韧", "坚毅"],
-            "活动强化型": ["迅捷", "敏锐", "灵巧", "飞速"],
-            "繁殖策略型": ["繁盛", "多产", "群居", "社会"],
-            "防御特化型": ["铠甲", "刺盾", "厚皮", "壳护"],
-            "极端特化型": ["极端", "特化", "专精", "独特"],
-        }
-        chinese_prefixes = chinese_prefix_map.get(evolution_direction, ["演化", "分支", "变异"])
-        new_common_name = f"{rng.choice(chinese_prefixes)}{base_name}"
+        # 中文俗名：【优化】使用独立的名字系统，避免累加截断
+        new_common_name = self._generate_background_species_name(
+            parent=parent,
+            evolution_direction=evolution_direction,
+            habitat_type=parent.habitat_type,
+            trophic_level=parent.trophic_level,
+            rng=rng,
+        )
         
         # ========== 2. 使用规则引擎生成特质变化 ==========
         trait_changes = {}
@@ -2422,6 +2428,98 @@ class SpeciationService:
             "_is_rule_fallback": True,  # 标记为规则生成
             "_evolution_direction": evolution_direction,  # 记录演化方向供后续使用
         }
+    
+    def _generate_background_species_name(
+        self,
+        parent: 'Species',
+        evolution_direction: str,
+        habitat_type: str,
+        trophic_level: float,
+        rng,  # random.Random instance
+    ) -> str:
+        """为背景物种生成独立的中文名称
+        
+        【设计原则】
+        - 不依赖父系名称，避免累加截断问题
+        - 使用栖息地+营养级+特征的组合命名
+        - 名称长度控制在2-5个字
+        - 背景物种使用更朴素的名字，暗示其"配角"地位
+        
+        Args:
+            parent: 父系物种
+            evolution_direction: 演化方向
+            habitat_type: 栖息地类型
+            trophic_level: 营养级
+            rng: 随机数生成器
+            
+        Returns:
+            中文物种名称
+        """
+        # 栖息地前缀词库（1-2字）
+        habitat_prefixes = {
+            "marine": ["海", "洋", "咸水", "远洋"],
+            "deep_sea": ["深海", "渊", "幽暗"],
+            "coastal": ["岸", "滨", "潮间"],
+            "freshwater": ["溪", "河", "淡水", "泽"],
+            "amphibious": ["两栖", "沼", "泥"],
+            "terrestrial": ["陆", "原", "野"],
+            "aerial": ["翔", "天", "空"],
+        }
+        
+        # 营养级相关词库
+        trophic_words = {
+            # T1: 生产者
+            (0.0, 2.0): ["藻", "菌", "苔", "萍", "蕨", "草"],
+            # T2: 初级消费者
+            (2.0, 3.0): ["虫", "螺", "蚌", "介", "甲"],
+            # T3: 次级消费者
+            (3.0, 4.0): ["游", "爬", "蠕", "钳"],
+            # T4+: 高级捕食者
+            (4.0, 6.0): ["齿", "爪", "猎", "噬"],
+        }
+        
+        # 演化方向后缀（1-2字）
+        direction_suffixes = {
+            "环境适应型": ["甲", "壳", "韧", "坚"],
+            "活动强化型": ["捷", "敏", "游", "行"],
+            "繁殖策略型": ["繁", "群", "众", "盛"],
+            "防御特化型": ["刺", "盾", "甲", "棘"],
+            "极端特化型": ["奇", "异", "怪", "特"],
+        }
+        
+        # 通用后缀（当其他条件不满足时）
+        generic_suffixes = ["类", "属", "种", "形", "型"]
+        
+        # 1. 选择栖息地前缀
+        habitat_key = habitat_type or "terrestrial"
+        prefixes = habitat_prefixes.get(habitat_key, habitat_prefixes["terrestrial"])
+        prefix = rng.choice(prefixes)
+        
+        # 2. 选择营养级相关词
+        trophic_word = ""
+        for (low, high), words in trophic_words.items():
+            if low <= trophic_level < high:
+                trophic_word = rng.choice(words)
+                break
+        if not trophic_word:
+            trophic_word = rng.choice(["生", "物", "灵"])
+        
+        # 3. 选择演化方向后缀（50%概率添加）
+        suffix = ""
+        if rng.random() > 0.5:
+            suffixes = direction_suffixes.get(evolution_direction, generic_suffixes)
+            suffix = rng.choice(suffixes)
+        
+        # 4. 组合名称（控制长度）
+        base_name = f"{prefix}{trophic_word}"
+        if suffix and len(base_name) < 8:
+            base_name += suffix
+        
+        # 5. 如果名称太短，添加一个通用后缀
+        if len(base_name) < 2:
+            base_name += rng.choice(generic_suffixes)
+        
+        return base_name
 
     def _next_lineage_code(self, parent_code: str, existing_codes: set[str]) -> str:
         """生成单个子代编码（保留用于向后兼容）"""

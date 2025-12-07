@@ -101,6 +101,15 @@ class EcologicalRealismStage(BaseStage):
         
         self._logger.info(f"[生态拟真] 开始计算，{len(alive_species)} 个物种")
         
+        # 【关键优化】批量预热物种向量，避免后续大量单独的embedding API调用
+        # - force_refresh=True: 确保使用最新的物种描述（进化/杂交后描述可能变化）
+        # - 底层EmbeddingService有基于文本内容的磁盘缓存，未变化的描述不会触发API调用
+        # - 这将把可能的数十万次单独API调用减少为一次批量调用
+        if hasattr(eco_service, 'warmup_species_vectors'):
+            warmup_count = eco_service.warmup_species_vectors(alive_species, force_refresh=True)
+            if warmup_count > 0:
+                self._logger.info(f"[生态拟真] 批量预热 {warmup_count} 个物种向量完成")
+        
         # 1. 追踪环境变化（用于适应滞后）
         self._track_environment(ctx, eco_service)
         

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 import math
@@ -402,6 +402,12 @@ class MortalityEngine:
             # 共生依赖惩罚
             dependency_penalty = self._calculate_dependency_penalty(sp, extinct_codes)
             adj += dependency_penalty
+            
+            # 【新增】背景物种额外死亡率惩罚
+            # 背景物种是"被时代淘汰的配角"，承受额外的生存压力
+            if tier == "background" or getattr(sp, 'is_background', False):
+                background_penalty = self._ecology_config.background_mortality_penalty
+                adj += background_penalty
             
             # 边界约束
             adj = min(0.98, max(0.03, adj))
