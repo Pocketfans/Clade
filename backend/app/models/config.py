@@ -1076,6 +1076,146 @@ class GeneDiversityConfig(BaseModel):
     max_inherit_traits_from_library: int = Field(default=4, description="从基因库继承最大特质数")
     # 分化时从基因库继承的最大器官数
     max_inherit_organs_from_library: int = Field(default=2, description="从基因库继承最大器官数")
+    
+    # ========== v2.0 有害突变（遗传负荷）参数 ==========
+    # 新物种生成时产生有害突变的概率
+    harmful_mutation_chance: float = Field(
+        default=0.15, 
+        description="新物种携带有害突变概率 (15%)"
+    )
+    # 有害突变激活概率倍数（被自然选择抑制）
+    harmful_activation_penalty: float = Field(
+        default=0.30, 
+        description="有害突变激活概率倍数 (×0.3)"
+    )
+    # 隐性有害突变的继承概率（被自然选择隐藏）
+    recessive_harmful_inherit_chance: float = Field(
+        default=0.70, 
+        description="隐性有害突变继承概率 (70%)"
+    )
+    # 显性有害突变的继承概率
+    dominant_harmful_inherit_chance: float = Field(
+        default=0.20, 
+        description="显性有害突变继承概率 (20%)"
+    )
+    # 子代产生新有害突变的概率
+    de_novo_mutation_chance: float = Field(
+        default=0.10, 
+        description="子代新有害突变概率 (10%)"
+    )
+    
+    # ========== v2.0 显隐性遗传参数 ==========
+    # 显性基因表达系数
+    dominant_expression_factor: float = Field(
+        default=1.0, 
+        description="显性基因表达系数 (100%)"
+    )
+    # 共显性基因表达系数
+    codominant_expression_factor: float = Field(
+        default=0.60, 
+        description="共显性基因表达系数 (60%)"
+    )
+    # 隐性基因表达系数
+    recessive_expression_factor: float = Field(
+        default=0.25, 
+        description="隐性基因表达系数 (25%)"
+    )
+    # 超显性基因表达系数（杂合优势）
+    overdominant_expression_factor: float = Field(
+        default=1.15, 
+        description="超显性基因表达系数 (115%)"
+    )
+    
+    # ========== v2.0 器官渐进发育参数 ==========
+    # 启用器官渐进发育系统
+    enable_organ_development: bool = Field(
+        default=True,
+        description="启用器官4阶段渐进发育"
+    )
+    # 原基→初级所需回合数
+    organ_stage_0_turns: int = Field(
+        default=2, 
+        description="原基→初级发育回合数"
+    )
+    # 初级→功能所需回合数
+    organ_stage_1_turns: int = Field(
+        default=3, 
+        description="初级→功能发育回合数"
+    )
+    # 功能→成熟所需回合数
+    organ_stage_2_turns: int = Field(
+        default=5, 
+        description="功能→成熟发育回合数"
+    )
+    # 发育失败退化概率（原基阶段）
+    organ_failure_chance_primordium: float = Field(
+        default=0.15, 
+        description="原基阶段发育失败概率 (15%)"
+    )
+    # 发育失败退化概率（初级阶段）
+    organ_failure_chance_primitive: float = Field(
+        default=0.10, 
+        description="初级阶段发育失败概率 (10%)"
+    )
+    # 发育失败退化概率（功能阶段）
+    organ_failure_chance_functional: float = Field(
+        default=0.05, 
+        description="功能阶段发育失败概率 (5%)"
+    )
+    
+    # ========== v2.0 基因连锁参数 ==========
+    # 启用基因连锁系统
+    enable_gene_linkage: bool = Field(
+        default=True,
+        description="启用基因连锁效应"
+    )
+    # 连锁基因同时激活概率
+    linkage_activation_chance: float = Field(
+        default=0.80, 
+        description="连锁基因同时激活概率 (80%)"
+    )
+    # 连锁代价效果倍数
+    linkage_tradeoff_multiplier: float = Field(
+        default=1.0, 
+        description="连锁代价效果倍数 (×1.0)"
+    )
+    
+    # ========== v2.0 水平基因转移 (HGT) 参数 ==========
+    # 启用 HGT（仅微生物）
+    enable_hgt: bool = Field(
+        default=True,
+        description="启用水平基因转移（微生物）"
+    )
+    # HGT 适用的最大营养级
+    hgt_max_trophic_level: float = Field(
+        default=1.5, 
+        description="HGT最大营养级 (≤1.5)"
+    )
+    # 每回合 HGT 基础概率
+    hgt_base_chance: float = Field(
+        default=0.12, 
+        description="HGT基础概率/回合 (12%)"
+    )
+    # 同域物种 HGT 加成
+    hgt_sympatric_bonus: float = Field(
+        default=0.08, 
+        description="同域物种HGT加成 (+8%)"
+    )
+    # HGT 转移效率范围（最小）
+    hgt_efficiency_min: float = Field(
+        default=0.50, 
+        description="HGT转移效率下限 (50%)"
+    )
+    # HGT 转移效率范围（最大）
+    hgt_efficiency_max: float = Field(
+        default=0.80, 
+        description="HGT转移效率上限 (80%)"
+    )
+    # HGT 整合稳定性
+    hgt_integration_stability: float = Field(
+        default=0.70, 
+        description="HGT整合稳定概率 (70%)"
+    )
 
 
 class TensorUIConfig(BaseModel):

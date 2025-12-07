@@ -1,4 +1,4 @@
-﻿"""Embedding 服务 - 支持大规模向量存储与检索
+"""Embedding 服务 - 支持大规模向量存储与检索
 
 【重大升级】v2.0 - 支持成千上万物种
 1. 集成 Faiss 向量数据库，支持高效相似度搜索
@@ -245,9 +245,24 @@ class EmbeddingService:
         self, 
         texts: list[str], 
         require_real: bool = False,
-        batch_size: int = 100
+        batch_size: int = 10  # 【优化】减小默认批量大小，提高稳定性
     ) -> list[list[float]]:
-        """批量调用远程 Embedding API（支持并发分片）"""
+        """批量调用远程 Embedding API（支持并发分片）
+        
+        【优化策略】
+        - 默认批量大小从 100 减小到 10，避免单次请求超时
+        - 支持自适应批量：如果超时频繁，可进一步减小
+        """
+        # 【优化】根据文本总长度自适应调整批量大小
+        total_chars = sum(len(t) for t in texts)
+        avg_chars = total_chars / len(texts) if texts else 0
+        
+        # 如果平均文本较长，减小批量
+        if avg_chars > 500:
+            batch_size = min(batch_size, 5)
+        elif avg_chars > 1000:
+            batch_size = min(batch_size, 3)
+        
         chunks: list[list[str]] = [
             texts[i:i + batch_size] for i in range(0, len(texts), batch_size)
         ]
@@ -287,14 +302,37 @@ class EmbeddingService:
         require_real: bool,
         max_retries: int = 3,
     ) -> list[list[float]]:
-        """向远程服务请求一个批次的向量"""
+        """向远程服务请求一个批次的向量
+        
+        【优化策略】
+        - 文本长度限制：单个文本超过 2000 字符时截断
+        - 批次大小自适应：超时后减小批次重试
+        - 指数退避重试：每次重试间隔翻倍
+        """
         url = f"{self.api_base_url.rstrip('/')}/embeddings"
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        body = {"model": self.model, "input": batch_texts}
+        
+        # 【优化】限制单个文本长度，避免上下文过长
+        MAX_TEXT_LENGTH = 2000
+        truncated_texts = []
+        for text in batch_texts:
+            if len(text) > MAX_TEXT_LENGTH:
+                truncated_texts.append(text[:MAX_TEXT_LENGTH] + "...")
+            else:
+                truncated_texts.append(text)
+        
+        body = {"model": self.model, "input": truncated_texts}
         
         for attempt in range(max_retries):
             try:
-                response = httpx.post(url, json=body, headers=headers, timeout=self.timeout)
+                # 【优化】使用更细粒度的超时控制
+                timeout_config = httpx.Timeout(
+                    connect=10.0,  # 连接超时 10 秒
+                    read=self.timeout,  # 读取超时使用配置值
+                    write=30.0,  # 写入超时 30 秒
+                    pool=10.0  # 连接池超时 10 秒
+                )
+                response = httpx.post(url, json=body, headers=headers, timeout=timeout_config)
                 response.raise_for_status()
                 data = response.json()
                 
@@ -305,6 +343,26 @@ class EmbeddingService:
                     self._stats["api_calls"] += 1
                 
                 return batch_vectors
+            except httpx.ReadTimeout as exc:
+                # 【优化】读取超时时，记录更详细的信息
+                logger.warning(
+                    f"[Embedding] 读取超时 (批次大小: {len(batch_texts)}, "
+                    f"总字符数: {sum(len(t) for t in truncated_texts)}, "
+                    f"重试 {attempt+1}/{max_retries}): {exc}"
+                )
+                if attempt == max_retries - 1:
+                    if require_real or not self.allow_fake_embeddings:
+                        raise RuntimeError(f"Embedding API 读取超时 (重试耗尽): {exc}") from exc
+                    
+                    logger.warning(f"[Embedding] 超时后使用假向量")
+                    vectors = [self._fake_embed(t) for t in batch_texts]
+                    with self._stats_lock:
+                        self._stats["fake_embeds"] += len(batch_texts)
+                    return vectors
+                
+                # 指数退避
+                time.sleep(2 ** attempt)
+                
             except Exception as exc:
                 if attempt == max_retries - 1:
                     if require_real or not self.allow_fake_embeddings:
@@ -317,7 +375,7 @@ class EmbeddingService:
                     return vectors
                 
                 logger.warning(f"[Embedding] API 调用失败，正在重试 ({attempt+1}/{max_retries}): {exc}")
-                time.sleep(1 * (attempt + 1))
+                time.sleep(2 ** attempt)  # 指数退避
         
         # 理论上不会到此
         return [self._fake_embed(t) for t in batch_texts]

@@ -616,6 +616,42 @@ export interface GeneDiversityConfig {
   dormant_gene_inherit_chance?: number;  // 分化时休眠基因继承概率
   max_inherit_traits_from_library?: number;  // 从基因库继承最大特质数
   max_inherit_organs_from_library?: number;  // 从基因库继承最大器官数
+  
+  // ========== v2.0 有害突变（遗传负荷）参数 ==========
+  harmful_mutation_chance?: number;           // 新物种携带有害突变概率
+  harmful_activation_penalty?: number;        // 有害突变激活概率倍数
+  recessive_harmful_inherit_chance?: number;  // 隐性有害突变继承概率
+  dominant_harmful_inherit_chance?: number;   // 显性有害突变继承概率
+  de_novo_mutation_chance?: number;           // 子代新有害突变概率
+  
+  // ========== v2.0 显隐性遗传参数 ==========
+  dominant_expression_factor?: number;        // 显性基因表达系数
+  codominant_expression_factor?: number;      // 共显性基因表达系数
+  recessive_expression_factor?: number;       // 隐性基因表达系数
+  overdominant_expression_factor?: number;    // 超显性基因表达系数
+  
+  // ========== v2.0 器官渐进发育参数 ==========
+  enable_organ_development?: boolean;         // 启用器官4阶段渐进发育
+  organ_stage_0_turns?: number;               // 原基→初级发育回合数
+  organ_stage_1_turns?: number;               // 初级→功能发育回合数
+  organ_stage_2_turns?: number;               // 功能→成熟发育回合数
+  organ_failure_chance_primordium?: number;   // 原基阶段发育失败概率
+  organ_failure_chance_primitive?: number;    // 初级阶段发育失败概率
+  organ_failure_chance_functional?: number;   // 功能阶段发育失败概率
+  
+  // ========== v2.0 基因连锁参数 ==========
+  enable_gene_linkage?: boolean;              // 启用基因连锁效应
+  linkage_activation_chance?: number;         // 连锁基因同时激活概率
+  linkage_tradeoff_multiplier?: number;       // 连锁代价效果倍数
+  
+  // ========== v2.0 水平基因转移 (HGT) 参数 ==========
+  enable_hgt?: boolean;                       // 启用水平基因转移（微生物）
+  hgt_max_trophic_level?: number;             // HGT最大营养级
+  hgt_base_chance?: number;                   // HGT基础概率/回合
+  hgt_sympatric_bonus?: number;               // 同域物种HGT加成
+  hgt_efficiency_min?: number;                // HGT转移效率下限
+  hgt_efficiency_max?: number;                // HGT转移效率上限
+  hgt_integration_stability?: number;         // HGT整合稳定概率
 }
 
 /**

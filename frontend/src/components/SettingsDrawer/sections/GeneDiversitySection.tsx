@@ -447,6 +447,336 @@ export const GeneDiversitySection = memo(function GeneDiversitySection({
           suffix="个"
         />
       </Card>
+
+      {/* ========== v2.0 新功能卡片 ========== */}
+      
+      {/* 有害突变（遗传负荷） */}
+      <Card title="☠️ 有害突变（遗传负荷）" icon="🧬" desc="模拟真实生物学中的有害基因积累">
+        <InfoBox variant="info">
+          <strong>🔬 生物学背景：</strong>大多数随机突变是中性或有害的，只有少数是有益的。
+          有害突变通常是隐性的，被自然选择"隐藏"起来，但会在种群中积累。
+          <br /><br />
+          <strong>游戏影响：</strong>有害突变激活后会降低物种的适应性（减少某些特质值）。
+          隐性有害突变更容易遗传，显性有害突变会被自然选择快速淘汰。
+        </InfoBox>
+        <SliderRow
+          label="新物种有害突变概率"
+          desc="新创建的物种携带有害休眠基因的概率。值越高，演化越真实但也更具挑战性"
+          value={c.harmful_mutation_chance ?? 0.15}
+          min={0}
+          max={0.40}
+          step={0.05}
+          onChange={(v) => handleUpdate({ harmful_mutation_chance: v })}
+          formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+        />
+        <SliderRow
+          label="有害突变激活惩罚"
+          desc="有害突变的激活概率 = 基础概率 × 此系数。值越低，有害基因越难被激活（被选择抑制）"
+          value={c.harmful_activation_penalty ?? 0.30}
+          min={0.1}
+          max={1.0}
+          step={0.1}
+          onChange={(v) => handleUpdate({ harmful_activation_penalty: v })}
+          formatValue={(v) => `×${v.toFixed(1)}`}
+        />
+        <ConfigGroup title="有害突变遗传概率">
+          <SliderRow
+            label="隐性有害突变继承"
+            desc="隐性有害突变更容易被遗传（被自然选择隐藏），这是遗传负荷积累的原因"
+            value={c.recessive_harmful_inherit_chance ?? 0.70}
+            min={0.3}
+            max={0.95}
+            step={0.05}
+            onChange={(v) => handleUpdate({ recessive_harmful_inherit_chance: v })}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+          <SliderRow
+            label="显性有害突变继承"
+            desc="显性有害突变难以遗传，因为表达出来的个体会被自然选择淘汰"
+            value={c.dominant_harmful_inherit_chance ?? 0.20}
+            min={0.05}
+            max={0.50}
+            step={0.05}
+            onChange={(v) => handleUpdate({ dominant_harmful_inherit_chance: v })}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+        </ConfigGroup>
+        <SliderRow
+          label="子代新突变概率"
+          desc="分化时子代产生全新有害突变的概率（de novo mutation）"
+          value={c.de_novo_mutation_chance ?? 0.10}
+          min={0}
+          max={0.30}
+          step={0.02}
+          onChange={(v) => handleUpdate({ de_novo_mutation_chance: v })}
+          formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+        />
+      </Card>
+
+      {/* 显隐性遗传 */}
+      <Card title="🔠 显隐性遗传" icon="🧪" desc="基因表达效果受显隐性影响">
+        <InfoBox variant="info">
+          <strong>🎓 显隐性类型：</strong>
+          <br />• <strong>显性 (D)</strong>：杂合即表达，100% 潜力值
+          <br />• <strong>共显性 (C)</strong>：中间表型，60% 潜力值
+          <br />• <strong>隐性 (R)</strong>：需要纯合/高压才能表达，25% 潜力值
+          <br />• <strong>超显性 (O)</strong>：杂合优势，115% 潜力值（比纯合更强）
+        </InfoBox>
+        <ConfigGroup title="表达系数（激活后实际获得的特质值比例）">
+          <SliderRow
+            label="显性表达"
+            desc="显性基因激活后，获得潜力值的比例"
+            value={c.dominant_expression_factor ?? 1.0}
+            min={0.8}
+            max={1.2}
+            step={0.05}
+            onChange={(v) => handleUpdate({ dominant_expression_factor: v })}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+          <SliderRow
+            label="共显性表达"
+            desc="共显性基因激活后，获得潜力值的比例（中间表型）"
+            value={c.codominant_expression_factor ?? 0.60}
+            min={0.4}
+            max={0.8}
+            step={0.05}
+            onChange={(v) => handleUpdate({ codominant_expression_factor: v })}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+          <SliderRow
+            label="隐性表达"
+            desc="隐性基因激活后，获得潜力值的比例（表达受限）"
+            value={c.recessive_expression_factor ?? 0.25}
+            min={0.1}
+            max={0.5}
+            step={0.05}
+            onChange={(v) => handleUpdate({ recessive_expression_factor: v })}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+          <SliderRow
+            label="超显性表达"
+            desc="超显性基因激活后，获得潜力值的比例（杂合优势，可超过100%）"
+            value={c.overdominant_expression_factor ?? 1.15}
+            min={1.0}
+            max={1.5}
+            step={0.05}
+            onChange={(v) => handleUpdate({ overdominant_expression_factor: v })}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+        </ConfigGroup>
+      </Card>
+
+      {/* 器官渐进发育 */}
+      <Card title="🔬 器官渐进发育" icon="🌱" desc="复杂器官需要多阶段逐步发育">
+        <InfoBox variant="info">
+          <strong>📈 发育阶段：</strong>
+          <br />0. <strong>原基</strong> (0% 功能) → 细胞开始分化
+          <br />1. <strong>初级结构</strong> (25% 功能) → 基础形态形成
+          <br />2. <strong>功能原型</strong> (60% 功能) → 开始发挥部分作用
+          <br />3. <strong>成熟器官</strong> (100% 功能) → 完整功能
+          <br /><br />
+          每个阶段需要若干回合发育，期间有概率发育失败退化。
+        </InfoBox>
+        <SliderRow
+          label="启用渐进发育"
+          desc="开启后，器官需要经历4个发育阶段才能完全成熟"
+          value={c.enable_organ_development ? 1 : 0}
+          min={0}
+          max={1}
+          step={1}
+          onChange={(v) => handleUpdate({ enable_organ_development: v === 1 })}
+          formatValue={(v) => v === 1 ? "✅ 开启" : "❌ 关闭"}
+        />
+        <ConfigGroup title="各阶段发育所需回合数">
+          <NumberInput
+            label="原基→初级"
+            desc="从原基发育到初级结构需要的回合数"
+            value={c.organ_stage_0_turns ?? 2}
+            min={1}
+            max={10}
+            step={1}
+            onChange={(v) => handleUpdate({ organ_stage_0_turns: v })}
+            suffix="回合"
+          />
+          <NumberInput
+            label="初级→功能"
+            desc="从初级结构发育到功能原型需要的回合数"
+            value={c.organ_stage_1_turns ?? 3}
+            min={1}
+            max={10}
+            step={1}
+            onChange={(v) => handleUpdate({ organ_stage_1_turns: v })}
+            suffix="回合"
+          />
+          <NumberInput
+            label="功能→成熟"
+            desc="从功能原型发育到成熟器官需要的回合数"
+            value={c.organ_stage_2_turns ?? 5}
+            min={1}
+            max={15}
+            step={1}
+            onChange={(v) => handleUpdate({ organ_stage_2_turns: v })}
+            suffix="回合"
+          />
+        </ConfigGroup>
+        <ConfigGroup title="各阶段发育失败（退化）概率">
+          <SliderRow
+            label="原基阶段失败率"
+            desc="原基阶段每回合发育失败的概率，失败则退化消失"
+            value={c.organ_failure_chance_primordium ?? 0.15}
+            min={0}
+            max={0.40}
+            step={0.05}
+            onChange={(v) => handleUpdate({ organ_failure_chance_primordium: v })}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+          <SliderRow
+            label="初级阶段失败率"
+            desc="初级阶段每回合发育失败的概率，失败则退化到原基"
+            value={c.organ_failure_chance_primitive ?? 0.10}
+            min={0}
+            max={0.30}
+            step={0.05}
+            onChange={(v) => handleUpdate({ organ_failure_chance_primitive: v })}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+          <SliderRow
+            label="功能阶段失败率"
+            desc="功能阶段每回合发育失败的概率，失败则退化到初级"
+            value={c.organ_failure_chance_functional ?? 0.05}
+            min={0}
+            max={0.20}
+            step={0.01}
+            onChange={(v) => handleUpdate({ organ_failure_chance_functional: v })}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+        </ConfigGroup>
+      </Card>
+
+      {/* 基因连锁 */}
+      <Card title="🔗 基因连锁" icon="⛓️" desc="相关基因一起激活，伴随演化代价">
+        <InfoBox variant="info">
+          <strong>🧬 连锁效应：</strong>某些基因在染色体上位置相近，会一起遗传和激活。
+          <br /><br />
+          <strong>示例：</strong>
+          <br />• 耐寒性 → 连锁激活代谢调节，但代价是耐热性 -1.5
+          <br />• 运动能力 → 连锁激活肌肉发达，但代价是代谢效率 -1.0
+          <br />• 防护外壳 → 连锁激活表皮强度，但代价是运动能力 -1.5
+        </InfoBox>
+        <SliderRow
+          label="启用基因连锁"
+          desc="开启后，激活某些基因时会自动激活连锁基因，并附带代价"
+          value={c.enable_gene_linkage ? 1 : 0}
+          min={0}
+          max={1}
+          step={1}
+          onChange={(v) => handleUpdate({ enable_gene_linkage: v === 1 })}
+          formatValue={(v) => v === 1 ? "✅ 开启" : "❌ 关闭"}
+        />
+        <SliderRow
+          label="连锁激活概率"
+          desc="当主基因激活时，连锁基因同时激活的概率"
+          value={c.linkage_activation_chance ?? 0.80}
+          min={0.3}
+          max={1.0}
+          step={0.1}
+          onChange={(v) => handleUpdate({ linkage_activation_chance: v })}
+          formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+        />
+        <SliderRow
+          label="连锁代价倍数"
+          desc="连锁触发的代价效果倍数。1.0 = 正常代价，0.5 = 代价减半"
+          value={c.linkage_tradeoff_multiplier ?? 1.0}
+          min={0.5}
+          max={2.0}
+          step={0.1}
+          onChange={(v) => handleUpdate({ linkage_tradeoff_multiplier: v })}
+          formatValue={(v) => `×${v.toFixed(1)}`}
+        />
+      </Card>
+
+      {/* 水平基因转移 */}
+      <Card title="🦠 水平基因转移 (HGT)" icon="↔️" desc="微生物特有的基因获取方式">
+        <InfoBox variant="info">
+          <strong>🔬 HGT 是什么：</strong>不同物种之间直接交换基因的过程，主要发生在原核生物（细菌、古菌）中。
+          这是微生物快速获得抗生素抗性、毒素耐受等能力的重要机制。
+          <br /><br />
+          <strong>游戏中的应用：</strong>仅适用于营养级 ≤ 1.5 的物种（模拟微生物）。
+          每回合有概率从附近的其他微生物获取新特质。
+        </InfoBox>
+        <SliderRow
+          label="启用 HGT"
+          desc="开启后，微生物物种可以通过 HGT 从其他微生物获取基因"
+          value={c.enable_hgt ? 1 : 0}
+          min={0}
+          max={1}
+          step={1}
+          onChange={(v) => handleUpdate({ enable_hgt: v === 1 })}
+          formatValue={(v) => v === 1 ? "✅ 开启" : "❌ 关闭"}
+        />
+        <SliderRow
+          label="HGT 适用营养级上限"
+          desc="只有营养级不超过此值的物种才能进行 HGT。建议 ≤ 1.5（单细胞/简单多细胞）"
+          value={c.hgt_max_trophic_level ?? 1.5}
+          min={1.0}
+          max={2.5}
+          step={0.1}
+          onChange={(v) => handleUpdate({ hgt_max_trophic_level: v })}
+          formatValue={(v) => `T${v.toFixed(1)}`}
+        />
+        <SliderRow
+          label="HGT 基础概率"
+          desc="每回合微生物发生 HGT 的基础概率"
+          value={c.hgt_base_chance ?? 0.12}
+          min={0.05}
+          max={0.30}
+          step={0.02}
+          onChange={(v) => handleUpdate({ hgt_base_chance: v })}
+          formatValue={(v) => `${(v * 100).toFixed(0)}%/回合`}
+        />
+        <SliderRow
+          label="同域物种加成"
+          desc="当有其他微生物在相同地块时，HGT 概率额外增加"
+          value={c.hgt_sympatric_bonus ?? 0.08}
+          min={0}
+          max={0.20}
+          step={0.02}
+          onChange={(v) => handleUpdate({ hgt_sympatric_bonus: v })}
+          formatValue={(v) => `+${(v * 100).toFixed(0)}%`}
+        />
+        <ConfigGroup title="HGT 转移效率（获得原基因值的比例）">
+          <SliderRow
+            label="效率下限"
+            desc="HGT 转移效率的最小值"
+            value={c.hgt_efficiency_min ?? 0.50}
+            min={0.3}
+            max={0.7}
+            step={0.05}
+            onChange={(v) => handleUpdate({ hgt_efficiency_min: v })}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+          <SliderRow
+            label="效率上限"
+            desc="HGT 转移效率的最大值"
+            value={c.hgt_efficiency_max ?? 0.80}
+            min={0.5}
+            max={1.0}
+            step={0.05}
+            onChange={(v) => handleUpdate({ hgt_efficiency_max: v })}
+            formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+        </ConfigGroup>
+        <SliderRow
+          label="整合稳定概率"
+          desc="HGT 获得的基因成功整合到基因组的概率。失败则基因丢失"
+          value={c.hgt_integration_stability ?? 0.70}
+          min={0.3}
+          max={0.95}
+          step={0.05}
+          onChange={(v) => handleUpdate({ hgt_integration_stability: v })}
+          formatValue={(v) => `${(v * 100).toFixed(0)}%`}
+        />
+      </Card>
     </div>
   );
 });

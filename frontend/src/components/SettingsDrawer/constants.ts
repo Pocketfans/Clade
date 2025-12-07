@@ -398,5 +398,41 @@ export const DEFAULT_GENE_DIVERSITY_CONFIG: GeneDiversityConfig = {
   dormant_gene_inherit_chance: 0.50, // 50% 继承概率
   max_inherit_traits_from_library: 4,
   max_inherit_organs_from_library: 2,
+  
+  // v2.0 有害突变（遗传负荷）参数
+  harmful_mutation_chance: 0.15,            // 15% 有害突变概率
+  harmful_activation_penalty: 0.30,         // 有害突变激活概率 ×0.3
+  recessive_harmful_inherit_chance: 0.70,   // 隐性有害突变70%遗传
+  dominant_harmful_inherit_chance: 0.20,    // 显性有害突变20%遗传
+  de_novo_mutation_chance: 0.10,            // 10% 新突变概率
+  
+  // v2.0 显隐性遗传参数
+  dominant_expression_factor: 1.0,          // 显性100%表达
+  codominant_expression_factor: 0.60,       // 共显性60%表达
+  recessive_expression_factor: 0.25,        // 隐性25%表达
+  overdominant_expression_factor: 1.15,     // 超显性115%表达
+  
+  // v2.0 器官渐进发育参数
+  enable_organ_development: true,           // 启用渐进发育
+  organ_stage_0_turns: 2,                   // 原基→初级 2回合
+  organ_stage_1_turns: 3,                   // 初级→功能 3回合
+  organ_stage_2_turns: 5,                   // 功能→成熟 5回合
+  organ_failure_chance_primordium: 0.15,    // 原基失败15%
+  organ_failure_chance_primitive: 0.10,     // 初级失败10%
+  organ_failure_chance_functional: 0.05,    // 功能失败5%
+  
+  // v2.0 基因连锁参数
+  enable_gene_linkage: true,                // 启用基因连锁
+  linkage_activation_chance: 0.80,          // 80%连锁激活
+  linkage_tradeoff_multiplier: 1.0,         // 代价×1.0
+  
+  // v2.0 水平基因转移 (HGT) 参数
+  enable_hgt: true,                         // 启用HGT
+  hgt_max_trophic_level: 1.5,               // HGT限制营养级≤1.5
+  hgt_base_chance: 0.12,                    // 12%基础概率
+  hgt_sympatric_bonus: 0.08,                // 同域+8%
+  hgt_efficiency_min: 0.50,                 // 效率50-80%
+  hgt_efficiency_max: 0.80,
+  hgt_integration_stability: 0.70,          // 70%整合成功
 };
 
