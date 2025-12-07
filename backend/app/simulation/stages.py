@@ -1872,7 +1872,10 @@ class GeneticDriftStage(BaseStage):
 class AutoHybridizationStage(BaseStage):
     """自动杂交阶段
     
-    【实现】检测同域、近缘物种，触发自动杂交。
+    【张量化优化】使用批量矩阵计算替代 O(n²) 循环：
+    - 批量计算同域矩阵（地块重叠）
+    - 批量计算遗传距离矩阵
+    - 向量化筛选杂交候选
     
     杂交条件：
     - 两个物种分布在相同地块（同域）
@@ -1907,27 +1910,17 @@ class AutoHybridizationStage(BaseStage):
         
         ctx.auto_hybrids = []
         
-        # 从 SpeciationConfig 读取杂交参数（与分化配置统一管理）
+        # 从 SpeciationConfig 读取杂交参数
         spec_config = engine.speciation._config
-        base_chance = spec_config.auto_hybridization_chance  # 基础杂交概率
-        success_rate = spec_config.hybridization_success_rate  # 杂交成功率
-        max_hybrids = spec_config.max_hybrids_per_turn  # 每回合最多杂交数
-        min_pop_for_hybrid = spec_config.min_population_for_hybridization  # 杂交所需最小种群
+        base_chance = spec_config.auto_hybridization_chance
+        success_rate = spec_config.hybridization_success_rate
+        max_hybrids = spec_config.max_hybrids_per_turn
+        min_pop_for_hybrid = spec_config.min_population_for_hybridization
         
         # 获取所有存活物种
         alive_species = [sp for sp in ctx.species_batch if sp.status == "alive"]
         if len(alive_species) < 2:
             logger.debug("[自动杂交] 物种数量不足，跳过")
-            return
-        
-        # 筛选种群足够大的物种（使用配置中的门槛）
-        candidate_species = [
-            sp for sp in alive_species
-            if (sp.morphology_stats.get("population", 0) or 0) >= min_pop_for_hybrid
-        ]
-        
-        if len(candidate_species) < 2:
-            logger.debug("[自动杂交] 候选物种不足，跳过")
             return
         
         # 初始化杂交服务
@@ -1936,27 +1929,38 @@ class AutoHybridizationStage(BaseStage):
             genetic_calculator, engine.router, gene_diversity_service=engine.gene_diversity_service
         )
         
-        # 构建 species_id -> lineage_code 映射
-        id_to_code: dict[int, str] = {}
-        for sp in ctx.species_batch:
-            if sp.id is not None:
-                id_to_code[sp.id] = sp.lineage_code
-        
-        # 构建物种的栖息地映射 {lineage_code: set(tile_ids)}
-        species_tiles: dict[str, set[int]] = {}
-        if ctx.all_habitats:
-            for hab in ctx.all_habitats:
-                # HabitatPopulation 只有 species_id，需要通过映射获取 lineage_code
-                code = id_to_code.get(hab.species_id)
-                if not code:
-                    continue
-                if code not in species_tiles:
-                    species_tiles[code] = set()
-                species_tiles[code].add(hab.tile_id)
+        # 【张量化】使用批量计算查找杂交候选
+        try:
+            from ..tensor.hybridization_tensor import get_hybridization_tensor_compute
+            
+            tensor_compute = get_hybridization_tensor_compute()
+            candidates, metrics = tensor_compute.find_hybrid_candidates(
+                species_list=alive_species,
+                habitat_data=ctx.all_habitats,
+                min_population=min_pop_for_hybrid,
+                max_genetic_distance=0.70,
+                min_shared_tiles=1,
+                max_candidates=max_hybrids * 5,  # 获取更多候选以供骰点
+            )
+            
+            if metrics.total_time_ms > 10:
+                logger.info(
+                    f"[自动杂交-张量] 物种={metrics.species_count}, "
+                    f"候选={metrics.candidate_pairs}, 筛选={metrics.filtered_pairs}, "
+                    f"耗时={metrics.total_time_ms:.1f}ms"
+                )
+            
+            # 构建 lineage_code -> species 映射
+            code_to_species = {sp.lineage_code: sp for sp in alive_species}
+            
+        except ImportError:
+            logger.debug("[自动杂交] 张量模块不可用，使用原循环方法")
+            candidates = None
+            code_to_species = None
         
         existing_codes = {sp.lineage_code for sp in ctx.species_batch}
         hybrids_created = 0
-        checked_pairs = set()
+        
         # 共享分化/杂交的本回合子代计数
         from collections import Counter
         turn_offspring_counts = getattr(ctx, "turn_offspring_counts", None)
@@ -1972,32 +1976,15 @@ class AutoHybridizationStage(BaseStage):
                 pass
         max_hybrids_per_parent = spec_config.max_hybrids_per_parent_per_turn
         
-        # 遍历所有物种对
-        for i, sp1 in enumerate(candidate_species):
-            if hybrids_created >= max_hybrids:
-                break
-                
-            for sp2 in candidate_species[i+1:]:
+        # 【张量化路径】使用预筛选的候选
+        if candidates is not None and code_to_species is not None:
+            for candidate in candidates:
                 if hybrids_created >= max_hybrids:
                     break
                 
-                # 避免重复检查
-                pair_key = tuple(sorted([sp1.lineage_code, sp2.lineage_code]))
-                if pair_key in checked_pairs:
-                    continue
-                checked_pairs.add(pair_key)
-                
-                # 检查是否同域（至少有一个共同地块）
-                tiles1 = species_tiles.get(sp1.lineage_code, set())
-                tiles2 = species_tiles.get(sp2.lineage_code, set())
-                shared_tiles = tiles1 & tiles2
-                
-                if not shared_tiles:
-                    continue  # 无共同分布区域，跳过
-                
-                # 计算遗传距离，判断是否可杂交
-                can_hybrid, fertility = hybridization_service.can_hybridize(sp1, sp2)
-                if not can_hybrid:
+                sp1 = code_to_species.get(candidate.species1_code)
+                sp2 = code_to_species.get(candidate.species2_code)
+                if not sp1 or not sp2:
                     continue
                 
                 # 亲本杂交子代数量上限检查
@@ -2008,135 +1995,234 @@ class AutoHybridizationStage(BaseStage):
                 if turn_offspring_counts.get(p2_code, 0) >= max_hybrids_per_parent:
                     continue
                 
-                # 【步骤1】计算杂交检测概率
-                # 基础概率 + 同域程度加成 + 可育性加成
-                sympatry_ratio = len(shared_tiles) / max(1, min(len(tiles1), len(tiles2)))
+                # 计算杂交检测概率
                 hybrid_chance = (
                     base_chance 
-                    + self.SYMPATRIC_BONUS * sympatry_ratio
-                    + 0.03 * fertility  # 可育性越高，概率越高
+                    + self.SYMPATRIC_BONUS * candidate.sympatry_ratio
+                    + 0.03 * candidate.fertility
                 )
                 
                 # 检测概率骰点
                 if random.random() > hybrid_chance:
                     continue
                 
-                # 【步骤2】杂交成功率骰点（类似分化的成功率机制）
+                # 杂交成功率骰点
                 if random.random() > success_rate:
-                    logger.debug(
-                        f"[自动杂交] 骰点失败: {sp1.common_name} × {sp2.common_name} "
-                        f"(成功率={success_rate:.0%})"
-                    )
+                    continue
+                
+                # 使用精确的 can_hybridize 检查（确保一致性）
+                can_hybrid, fertility = hybridization_service.can_hybridize(sp1, sp2)
+                if not can_hybrid:
                     continue
                 
                 # 创建杂交种
-                logger.info(
-                    f"[自动杂交] 尝试杂交: {sp1.common_name} × {sp2.common_name} "
-                    f"(可育性={fertility:.1%}, 共享地块={len(shared_tiles)})"
-                )
-                
-                hybrid = hybridization_service.create_hybrid(
-                    sp1, sp2, ctx.turn_index, 
-                    existing_codes=existing_codes
+                hybrid = await self._create_hybrid(
+                    sp1, sp2, fertility, ctx, engine, spec_config,
+                    hybridization_service, species_repository, existing_codes,
+                    turn_offspring_counts, max_hybrids_per_parent
                 )
                 
                 if hybrid:
-                    # 设置初始种群（从两个亲本中分出一部分）
-                    pop1 = sp1.morphology_stats.get("population", 0) or 0
-                    pop2 = sp2.morphology_stats.get("population", 0) or 0
-                    
-                    # 杂交种初始种群 = 两亲本各贡献 10% × 可育性
-                    # 亲本各损失 10% × 可育性（零和游戏，不再凭空创造种群）
-                    contribution_rate = 0.10  # 每个亲本贡献10%
-                    
-                    pop1_contribution = int(pop1 * contribution_rate * fertility)
-                    pop2_contribution = int(pop2 * contribution_rate * fertility)
-                    hybrid_pop = pop1_contribution + pop2_contribution
-                    
-                    # 【修复】使用配置中的最小种群门槛，避免产生微型物种
-                    min_hybrid_pop = spec_config.min_offspring_population
-                    if hybrid_pop < min_hybrid_pop:
-                        # 种群不足，放弃杂交
-                        logger.debug(
-                            f"[自动杂交] 种群不足放弃: {sp1.common_name} × {sp2.common_name} "
-                            f"(计算种群={hybrid_pop:,} < 门槛={min_hybrid_pop:,})"
-                        )
-                        continue
-                    
-                    hybrid.morphology_stats["population"] = hybrid_pop
-                    
-                    # 从亲本中减少种群（与贡献相等，零和）
-                    sp1.morphology_stats["population"] = max(100, pop1 - pop1_contribution)
-                    sp2.morphology_stats["population"] = max(100, pop2 - pop2_contribution)
-                    
-                    # 保存杂交种
-                    species_repository.upsert(hybrid)
-                    species_repository.upsert(sp1)
-                    species_repository.upsert(sp2)
-                    
-                    ctx.auto_hybrids.append(hybrid)
-                    existing_codes.add(hybrid.lineage_code)
                     hybrids_created += 1
-                    turn_offspring_counts[p1_code] = turn_offspring_counts.get(p1_code, 0) + 1
-                    turn_offspring_counts[p2_code] = turn_offspring_counts.get(p2_code, 0) + 1
-                    try:
-                        ctx.turn_offspring_counts = turn_offspring_counts  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
-                    
-                    logger.info(
-                        f"[自动杂交] 成功: {hybrid.common_name} "
-                        f"(种群={hybrid_pop:,}, 可育性={fertility:.1%})"
-                    )
-                    ctx.emit_event(
-                        "speciation", 
-                        f"🧬 杂交诞生: {hybrid.common_name}", 
-                        "进化"
-                    )
+        else:
+            # 【后备路径】使用原循环方法
+            hybrids_created = await self._execute_loop_fallback(
+                ctx, engine, alive_species, spec_config, hybridization_service,
+                species_repository, existing_codes, turn_offspring_counts,
+                max_hybrids, max_hybrids_per_parent, base_chance, success_rate, min_pop_for_hybrid
+            )
         
         if ctx.auto_hybrids:
             logger.info(f"[自动杂交] 本回合产生了 {len(ctx.auto_hybrids)} 个杂交种")
-            # 将杂交种加入物种列表
             ctx.species_batch.extend(ctx.auto_hybrids)
             
             # 【描述增强】为杂交种进行LLM描述增强
+            await self._enhance_hybrid_descriptions(ctx, engine, species_repository)
+    
+    async def _create_hybrid(
+        self, sp1, sp2, fertility, ctx, engine, spec_config,
+        hybridization_service, species_repository, existing_codes,
+        turn_offspring_counts, max_hybrids_per_parent
+    ):
+        """创建杂交种"""
+        logger.info(
+            f"[自动杂交] 尝试杂交: {sp1.common_name} × {sp2.common_name} "
+            f"(可育性={fertility:.1%})"
+        )
+        
+        hybrid = hybridization_service.create_hybrid(
+            sp1, sp2, ctx.turn_index, 
+            existing_codes=existing_codes
+        )
+        
+        if hybrid:
+            pop1 = sp1.morphology_stats.get("population", 0) or 0
+            pop2 = sp2.morphology_stats.get("population", 0) or 0
+            
+            contribution_rate = 0.10
+            pop1_contribution = int(pop1 * contribution_rate * fertility)
+            pop2_contribution = int(pop2 * contribution_rate * fertility)
+            hybrid_pop = pop1_contribution + pop2_contribution
+            
+            min_hybrid_pop = spec_config.min_offspring_population
+            if hybrid_pop < min_hybrid_pop:
+                logger.debug(
+                    f"[自动杂交] 种群不足放弃: {sp1.common_name} × {sp2.common_name} "
+                    f"(计算种群={hybrid_pop:,} < 门槛={min_hybrid_pop:,})"
+                )
+                return None
+            
+            hybrid.morphology_stats["population"] = hybrid_pop
+            sp1.morphology_stats["population"] = max(100, pop1 - pop1_contribution)
+            sp2.morphology_stats["population"] = max(100, pop2 - pop2_contribution)
+            
+            species_repository.upsert(hybrid)
+            species_repository.upsert(sp1)
+            species_repository.upsert(sp2)
+            
+            ctx.auto_hybrids.append(hybrid)
+            existing_codes.add(hybrid.lineage_code)
+            
+            p1_code = sp1.lineage_code
+            p2_code = sp2.lineage_code
+            turn_offspring_counts[p1_code] = turn_offspring_counts.get(p1_code, 0) + 1
+            turn_offspring_counts[p2_code] = turn_offspring_counts.get(p2_code, 0) + 1
             try:
-                from ..services.species.description_enhancer import DescriptionEnhancerService
+                ctx.turn_offspring_counts = turn_offspring_counts
+            except Exception:
+                pass
+            
+            logger.info(
+                f"[自动杂交] 成功: {hybrid.common_name} "
+                f"(种群={hybrid_pop:,}, 可育性={fertility:.1%})"
+            )
+            ctx.emit_event("speciation", f"🧬 杂交诞生: {hybrid.common_name}", "进化")
+            
+            return hybrid
+        return None
+    
+    async def _execute_loop_fallback(
+        self, ctx, engine, alive_species, spec_config, hybridization_service,
+        species_repository, existing_codes, turn_offspring_counts,
+        max_hybrids, max_hybrids_per_parent, base_chance, success_rate, min_pop_for_hybrid
+    ):
+        """后备方法：使用原循环遍历物种对"""
+        import random
+        
+        candidate_species = [
+            sp for sp in alive_species
+            if (sp.morphology_stats.get("population", 0) or 0) >= min_pop_for_hybrid
+        ]
+        
+        if len(candidate_species) < 2:
+            return 0
+        
+        # 构建栖息地映射
+        id_to_code: dict[int, str] = {}
+        for sp in ctx.species_batch:
+            if sp.id is not None:
+                id_to_code[sp.id] = sp.lineage_code
+        
+        species_tiles: dict[str, set[int]] = {}
+        if ctx.all_habitats:
+            for hab in ctx.all_habitats:
+                code = id_to_code.get(hab.species_id)
+                if code:
+                    if code not in species_tiles:
+                        species_tiles[code] = set()
+                    species_tiles[code].add(hab.tile_id)
+        
+        hybrids_created = 0
+        checked_pairs = set()
+        
+        for i, sp1 in enumerate(candidate_species):
+            if hybrids_created >= max_hybrids:
+                break
                 
-                enhancer = DescriptionEnhancerService(engine.router)
+            for sp2 in candidate_species[i+1:]:
+                if hybrids_created >= max_hybrids:
+                    break
                 
-                for hybrid in ctx.auto_hybrids:
-                    # 获取杂交亲本信息
-                    hybrid_parents = getattr(hybrid, 'hybrid_parent_codes', [])
-                    parent1 = None
-                    parent2 = None
-                    if hybrid_parents and len(hybrid_parents) >= 2:
-                        for sp in ctx.species_batch:
-                            if sp.lineage_code == hybrid_parents[0]:
-                                parent1 = sp
-                            elif sp.lineage_code == hybrid_parents[1]:
-                                parent2 = sp
-                    
-                    enhancer.queue_for_enhancement(
-                        species=hybrid,
-                        parent=parent1,
-                        parent2=parent2,
-                        is_hybrid=True,
-                        fertility=getattr(hybrid, 'hybrid_fertility', 1.0),
-                    )
+                pair_key = tuple(sorted([sp1.lineage_code, sp2.lineage_code]))
+                if pair_key in checked_pairs:
+                    continue
+                checked_pairs.add(pair_key)
                 
-                # 批量处理增强
-                enhanced_list = await enhancer.process_queue_async(
-                    max_items=10,  # 每回合最多处理10个杂交种描述
-                    timeout_per_item=25.0,
+                tiles1 = species_tiles.get(sp1.lineage_code, set())
+                tiles2 = species_tiles.get(sp2.lineage_code, set())
+                shared_tiles = tiles1 & tiles2
+                
+                if not shared_tiles:
+                    continue
+                
+                can_hybrid, fertility = hybridization_service.can_hybridize(sp1, sp2)
+                if not can_hybrid:
+                    continue
+                
+                p1_code = sp1.lineage_code
+                p2_code = sp2.lineage_code
+                if turn_offspring_counts.get(p1_code, 0) >= max_hybrids_per_parent:
+                    continue
+                if turn_offspring_counts.get(p2_code, 0) >= max_hybrids_per_parent:
+                    continue
+                
+                sympatry_ratio = len(shared_tiles) / max(1, min(len(tiles1), len(tiles2)))
+                hybrid_chance = base_chance + self.SYMPATRIC_BONUS * sympatry_ratio + 0.03 * fertility
+                
+                if random.random() > hybrid_chance:
+                    continue
+                
+                if random.random() > success_rate:
+                    continue
+                
+                hybrid = await self._create_hybrid(
+                    sp1, sp2, fertility, ctx, engine, spec_config,
+                    hybridization_service, species_repository, existing_codes,
+                    turn_offspring_counts, max_hybrids_per_parent
                 )
                 
-                if enhanced_list:
-                    for enhanced_sp in enhanced_list:
-                        species_repository.upsert(enhanced_sp)
-                    logger.info(f"[杂交描述增强] 完成 {len(enhanced_list)}/{len(ctx.auto_hybrids)} 个杂交种描述增强")
-            except Exception as e:
-                logger.warning(f"[杂交描述增强] 处理失败（不影响杂交结果）: {e}")
+                if hybrid:
+                    hybrids_created += 1
+        
+        return hybrids_created
+    
+    async def _enhance_hybrid_descriptions(self, ctx, engine, species_repository):
+        """为杂交种进行描述增强"""
+        try:
+            from ..services.species.description_enhancer import DescriptionEnhancerService
+            
+            enhancer = DescriptionEnhancerService(engine.router)
+            
+            for hybrid in ctx.auto_hybrids:
+                hybrid_parents = getattr(hybrid, 'hybrid_parent_codes', [])
+                parent1 = None
+                parent2 = None
+                if hybrid_parents and len(hybrid_parents) >= 2:
+                    for sp in ctx.species_batch:
+                        if sp.lineage_code == hybrid_parents[0]:
+                            parent1 = sp
+                        elif sp.lineage_code == hybrid_parents[1]:
+                            parent2 = sp
+                
+                enhancer.queue_for_enhancement(
+                    species=hybrid,
+                    parent=parent1,
+                    parent2=parent2,
+                    is_hybrid=True,
+                    fertility=getattr(hybrid, 'hybrid_fertility', 1.0),
+                )
+            
+            enhanced_list = await enhancer.process_queue_async(
+                max_items=10,
+                timeout_per_item=25.0,
+            )
+            
+            if enhanced_list:
+                for enhanced_sp in enhanced_list:
+                    species_repository.upsert(enhanced_sp)
+                logger.info(f"[杂交描述增强] 完成 {len(enhanced_list)}/{len(ctx.auto_hybrids)} 个杂交种描述增强")
+        except Exception as e:
+            logger.warning(f"[杂交描述增强] 处理失败（不影响杂交结果）: {e}")
 
 
 class SubspeciesPromotionStage(BaseStage):

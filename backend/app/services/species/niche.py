@@ -112,11 +112,11 @@ class NicheAnalyzer:
         species_list: Sequence[Species], 
         similarity: np.ndarray
     ) -> np.ndarray:
-        """【关键新增】应用地块重叠因子
+        """【张量化优化】应用地块重叠因子
         
         只有在同一地块上的物种才会真正竞争。
         
-        地块重叠因子计算：
+        地块重叠因子计算（使用矩阵运算）：
         - overlap_factor = |共享地块数| / |两物种地块总数|
         - 如果没有共享地块，factor = 0.1（保留少量潜在竞争）
         - 如果完全重叠，factor = 1.0
@@ -127,6 +127,46 @@ class NicheAnalyzer:
         if n <= 1:
             return similarity.copy()
         
+        species_list = list(species_list)
+        
+        # 【张量化】使用 NicheTensorCompute 进行批量计算
+        try:
+            from ...tensor.niche_tensor import get_niche_tensor_compute
+            
+            tensor_compute = get_niche_tensor_compute()
+            
+            # 提取物种 ID 列表
+            species_ids = [sp.id for sp in species_list]
+            
+            # 批量计算地块重叠因子矩阵
+            overlap_matrix, metrics = tensor_compute.compute_tile_overlap_matrix(
+                species_ids=species_ids,
+                habitat_cache=self._habitat_cache,
+                min_overlap_factor=0.1,  # 无共享地块时的最小竞争
+            )
+            
+            if metrics.total_time_ms > 10:
+                logger.debug(
+                    f"[生态位-地块重叠] 张量计算: {n}物种, "
+                    f"{metrics.tile_count}地块, {metrics.total_time_ms:.1f}ms"
+                )
+            
+            # 应用地块重叠因子
+            adjusted = similarity * overlap_matrix
+            
+            return adjusted
+            
+        except ImportError:
+            logger.debug("[生态位-地块重叠] 张量模块不可用，使用原循环方法")
+            return self._apply_tile_overlap_factor_loop(species_list, similarity)
+    
+    def _apply_tile_overlap_factor_loop(
+        self, 
+        species_list: Sequence[Species], 
+        similarity: np.ndarray
+    ) -> np.ndarray:
+        """【后备方法】使用循环计算地块重叠因子"""
+        n = len(species_list)
         species_list = list(species_list)
         adjusted = similarity.copy()
         
@@ -144,19 +184,15 @@ class NicheAnalyzer:
                     total_tiles = tiles_i | tiles_j
                     
                     if total_tiles:
-                        # Jaccard 系数：共享地块 / 总地块
                         overlap_factor = len(shared_tiles) / len(total_tiles)
                     else:
                         overlap_factor = 0.1
                     
-                    # 如果没有共享地块，保留少量"潜在竞争"（可能会迁徙到同一地块）
                     if len(shared_tiles) == 0:
-                        overlap_factor = 0.1  # 10%的潜在竞争
+                        overlap_factor = 0.1
                 else:
-                    # 没有栖息地数据，假设中等重叠
                     overlap_factor = 0.5
                 
-                # 应用地块重叠因子
                 adjusted[i, j] *= overlap_factor
                 adjusted[j, i] *= overlap_factor
         
@@ -334,15 +370,25 @@ class NicheAnalyzer:
         )
         
         # 规则2：同栖息地类型（基于 habitat_type，不用关键词）
-        # 构建栖息地类型矩阵
-        habitat_bonus = np.zeros((n, n))
-        for i in range(n):
-            for j in range(i + 1, n):
-                if habitat_types[i] == habitat_types[j]:
-                    habitat_bonus[i, j] = 0.10
-                elif self._habitats_compatible(habitat_types[i], habitat_types[j]):
-                    habitat_bonus[i, j] = 0.05  # 兼容栖息地给部分bonus
-                habitat_bonus[j, i] = habitat_bonus[i, j]
+        # 【张量化】使用 NicheTensorCompute 进行批量计算
+        try:
+            from ...tensor.niche_tensor import get_niche_tensor_compute
+            tensor_compute = get_niche_tensor_compute()
+            habitat_bonus, _ = tensor_compute.compute_habitat_bonus_matrix(
+                habitat_types=habitat_types,
+                same_habitat_bonus=0.10,
+                compatible_bonus=0.05,
+            )
+        except ImportError:
+            # 后备方法：使用循环
+            habitat_bonus = np.zeros((n, n))
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if habitat_types[i] == habitat_types[j]:
+                        habitat_bonus[i, j] = 0.10
+                    elif self._habitats_compatible(habitat_types[i], habitat_types[j]):
+                        habitat_bonus[i, j] = 0.05
+                    habitat_bonus[j, i] = habitat_bonus[i, j]
         
         # 规则3：体型相近（5倍以内）
         sizes = np.maximum(sizes, 0.001)  # 防止除零
@@ -387,10 +433,36 @@ class NicheAnalyzer:
         return False
     
     def _compute_lineage_bonus_matrix(self, lineage_codes: list[str]) -> np.ndarray:
-        """计算谱系前缀匹配的bonus矩阵
+        """【张量化优化】计算谱系前缀匹配的bonus矩阵
         
         如果两个物种共享>=2个前缀字符，bonus=0.15
         """
+        n = len(lineage_codes)
+        if n <= 1:
+            return np.zeros((n, n))
+        
+        # 【张量化】使用 NicheTensorCompute 进行批量计算
+        try:
+            from ...tensor.niche_tensor import get_niche_tensor_compute
+            
+            tensor_compute = get_niche_tensor_compute()
+            bonus, time_ms = tensor_compute.compute_lineage_bonus_matrix(
+                lineage_codes=lineage_codes,
+                min_common_prefix=2,
+                bonus_value=0.15,
+            )
+            
+            if time_ms > 5:
+                logger.debug(f"[生态位-谱系bonus] 张量计算: {n}物种, {time_ms:.1f}ms")
+            
+            return bonus
+            
+        except ImportError:
+            logger.debug("[生态位-谱系bonus] 张量模块不可用，使用原循环方法")
+            return self._compute_lineage_bonus_matrix_loop(lineage_codes)
+    
+    def _compute_lineage_bonus_matrix_loop(self, lineage_codes: list[str]) -> np.ndarray:
+        """【后备方法】使用循环计算谱系bonus矩阵"""
         n = len(lineage_codes)
         bonus = np.zeros((n, n))
         
@@ -403,7 +475,6 @@ class NicheAnalyzer:
                 if len(code_j) < 2:
                     continue
                 
-                # 计算共同前缀长度
                 common_len = 0
                 for ci, cj in zip(code_i, code_j):
                     if ci == cj:

@@ -27,6 +27,7 @@ class TensorMetrics:
         mortality_time_ms: 死亡率计算耗时（毫秒）
         speciation_detection_time_ms: 分化检测耗时（毫秒）
         tradeoff_time_ms: 代价计算耗时（毫秒）
+            migration_time_ms: 迁徙计算耗时（毫秒）
         tensor_triggers: 张量检测产生的分化触发数
         ai_fallback_count: AI 回退次数
         isolation_detections: 地理隔离检测次数
@@ -36,6 +37,7 @@ class TensorMetrics:
     mortality_time_ms: float = 0.0
     speciation_detection_time_ms: float = 0.0
     tradeoff_time_ms: float = 0.0
+    migration_time_ms: float = 0.0
     tensor_triggers: int = 0
     ai_fallback_count: int = 0
     isolation_detections: int = 0
@@ -47,6 +49,7 @@ class TensorMetrics:
             self.mortality_time_ms
             + self.speciation_detection_time_ms
             + self.tradeoff_time_ms
+            + self.migration_time_ms
         )
     
     def trigger_hit_rate(self, total_speciations: int) -> float:
@@ -68,6 +71,7 @@ class TensorMetrics:
             "mortality_time_ms": round(self.mortality_time_ms, 2),
             "speciation_detection_time_ms": round(self.speciation_detection_time_ms, 2),
             "tradeoff_time_ms": round(self.tradeoff_time_ms, 2),
+            "migration_time_ms": round(self.migration_time_ms, 2),
             "total_time_ms": round(self.total_time_ms(), 2),
             "tensor_triggers": self.tensor_triggers,
             "ai_fallback_count": self.ai_fallback_count,
@@ -80,6 +84,7 @@ class TensorMetrics:
         logger.info(
             f"[张量监控] 回合{turn}: "
             f"死亡率={self.mortality_time_ms:.1f}ms, "
+            f"迁徙={self.migration_time_ms:.1f}ms, "
             f"分化检测={self.speciation_detection_time_ms:.1f}ms, "
             f"代价计算={self.tradeoff_time_ms:.1f}ms, "
             f"触发数={self.tensor_triggers}, "
