@@ -129,6 +129,7 @@ class GeneLibraryService:
         harmful_inherited = 0
         
         # === 1. 从父代休眠基因继承（保留新字段） ===
+        # 【修复】提高继承概率：确保子代能继承父代 90%+ 的基因
         if parent.dormant_genes:
             # 继承特质
             parent_traits = parent.dormant_genes.get("traits", {})
@@ -136,8 +137,8 @@ class GeneLibraryService:
                 if gene_data.get("activated"):
                     continue  # 跳过已激活的
                 
-                # 计算继承概率
-                inherit_prob = 0.50
+                # 计算继承概率【提高：基础概率从 0.50 提升到 0.90】
+                inherit_prob = 0.90
                 
                 # 有害突变的继承概率
                 mutation_effect = gene_data.get("mutation_effect", "beneficial")
@@ -146,9 +147,9 @@ class GeneLibraryService:
                 if is_harmful:
                     dominance = gene_data.get("dominance", "codominant")
                     if dominance == "recessive":
-                        inherit_prob = 0.70  # 隐性有害突变更容易遗传（被自然选择隐藏）
+                        inherit_prob = 0.85  # 隐性有害突变容易遗传（被自然选择隐藏）
                     else:
-                        inherit_prob = 0.20  # 显性有害突变难以遗传
+                        inherit_prob = 0.40  # 显性有害突变难以遗传
                 
                 if random.random() < inherit_prob:
                     # 复制基因数据并更新
@@ -162,13 +163,13 @@ class GeneLibraryService:
                     if is_harmful:
                         harmful_inherited += 1
             
-            # 继承器官
+            # 继承器官【提高：从 0.40 提升到 0.85】
             parent_organs = parent.dormant_genes.get("organs", {})
             for organ_name, gene_data in parent_organs.items():
                 if gene_data.get("activated") and gene_data.get("development_stage") == 3:
                     continue  # 跳过已成熟的器官
                 
-                if random.random() < 0.40:
+                if random.random() < 0.85:
                     new_gene = dict(gene_data)
                     new_gene["exposure_count"] = 0
                     new_gene["activated"] = False
@@ -180,11 +181,12 @@ class GeneLibraryService:
                     inherited_count += 1
         
         # === 2. 从父代表型特质生成休眠基因 ===
+        # 【提高】从 0.50 提升到 0.80，确保表型特质也能稳定遗传
         for trait_name, trait_value in (parent.abstract_traits or {}).items():
             if trait_name in child.dormant_genes["traits"]:
                 continue
                 
-            if random.random() < 0.50:
+            if random.random() < 0.80:
                 dominance = roll_dominance("trait") if roll_dominance else "codominant"
                 dom_value = dominance.value if hasattr(dominance, 'value') else dominance
                 
@@ -201,9 +203,10 @@ class GeneLibraryService:
                 inherited_count += 1
         
         # === 3. 从父代器官生成变异潜力 ===
+        # 【提高】从 0.40 提升到 0.75，确保器官变异潜力能稳定遗传
         if parent.organs:
             for organ_cat, organ_data in parent.organs.items():
-                if random.random() < 0.40:
+                if random.random() < 0.75:
                     organ_name = f"{organ_data.get('type', organ_cat)}_variant"
                     if organ_name not in child.dormant_genes["organs"]:
                         dominance = roll_dominance("organ") if roll_dominance else "codominant"

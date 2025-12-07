@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from typing import Sequence
@@ -68,6 +68,11 @@ class SpeciesSnapshot(BaseModel):
     
     # 【新增v4】生态拟真状态
     ecological_realism: EcologicalRealismSnapshot | None = None
+    
+    # 【新增】基因数据（用于基因库显示）
+    abstract_traits: dict[str, float] | None = None
+    organs: dict[str, dict] | None = None
+    capabilities: list[str] | None = None
 
 
 class BranchingEvent(BaseModel):

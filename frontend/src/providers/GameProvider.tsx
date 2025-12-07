@@ -126,25 +126,25 @@ export function GameProvider({ children, viewMode, onViewModeChange }: GameProvi
   }, [previousReport]);
 
   // 合并物种列表（报告 + 实时）
+  // 【修复】用 freshSpeciesList 中的数据覆盖 reportSpecies 中的同名物种
   const speciesList = useMemo(() => {
     const reportSpecies = latestReport?.species || [];
     if (freshSpeciesList.length === 0) return reportSpecies;
 
-    const merged: SpeciesSnapshot[] = [];
-    const seen = new Set<string>();
-
+    // 使用 Map 确保唯一性，freshSpeciesList 优先（更新的数据）
+    const speciesMap = new Map<string, SpeciesSnapshot>();
+    
+    // 先添加报告中的数据
     for (const s of reportSpecies) {
-      merged.push(s);
-      seen.add(s.lineage_code);
+      speciesMap.set(s.lineage_code, s);
     }
-
+    
+    // 用实时数据覆盖（freshSpeciesList 是最新的）
     for (const s of freshSpeciesList) {
-      if (!seen.has(s.lineage_code)) {
-        merged.push(s);
-      }
+      speciesMap.set(s.lineage_code, s);
     }
 
-    return merged;
+    return Array.from(speciesMap.values());
   }, [freshSpeciesList, latestReport]);
 
   // ============ Actions ============

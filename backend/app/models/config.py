@@ -1043,8 +1043,8 @@ class GeneDiversityConfig(BaseModel):
     archean_initial_radius: float = Field(default=0.50, description="太古宙初始半径")
     # 每回合增长率
     archean_growth_rate: float = Field(default=0.03, description="太古宙增长率/回合 (3%)")
-    # 分化时半径继承范围（最小值）
-    archean_inherit_min: float = Field(default=0.95, description="太古宙继承系数最小值")
+    # 分化时半径继承范围（最小值）【调高：确保继承90%+】
+    archean_inherit_min: float = Field(default=0.98, description="太古宙继承系数最小值")
     # 分化时半径继承范围（最大值）
     archean_inherit_max: float = Field(default=1.00, description="太古宙继承系数最大值")
     # 突变发现概率
@@ -1053,15 +1053,17 @@ class GeneDiversityConfig(BaseModel):
     # ========== 元古宙参数（50-150回合）==========
     proterozoic_initial_radius: float = Field(default=0.40, description="元古宙初始半径")
     proterozoic_growth_rate: float = Field(default=0.02, description="元古宙增长率/回合 (2%)")
-    proterozoic_inherit_min: float = Field(default=0.90, description="元古宙继承系数最小值")
-    proterozoic_inherit_max: float = Field(default=0.98, description="元古宙继承系数最大值")
+    # 【调高：确保继承90%+】
+    proterozoic_inherit_min: float = Field(default=0.95, description="元古宙继承系数最小值")
+    proterozoic_inherit_max: float = Field(default=1.00, description="元古宙继承系数最大值")
     proterozoic_mutation_chance: float = Field(default=0.10, description="元古宙突变发现概率 (10%)")
     
     # ========== 古生代及以后参数（>150回合）==========
     phanerozoic_initial_radius: float = Field(default=0.35, description="古生代初始半径")
     phanerozoic_growth_rate: float = Field(default=0.015, description="古生代增长率/回合 (1.5%)")
-    phanerozoic_inherit_min: float = Field(default=0.85, description="古生代继承系数最小值")
-    phanerozoic_inherit_max: float = Field(default=0.95, description="古生代继承系数最大值")
+    # 【调高：从0.85提升到0.92，确保继承90%+】
+    phanerozoic_inherit_min: float = Field(default=0.92, description="古生代继承系数最小值")
+    phanerozoic_inherit_max: float = Field(default=0.98, description="古生代继承系数最大值")
     phanerozoic_mutation_chance: float = Field(default=0.08, description="古生代突变发现概率 (8%)")
     
     # ========== 激活机制参数 ==========
@@ -1075,8 +1077,8 @@ class GeneDiversityConfig(BaseModel):
     activation_death_rate_threshold: float = Field(default=0.25, description="激活所需死亡率阈值 (25%)")
     # 激活所需的最小暴露次数（降低门槛）
     activation_min_exposure: int = Field(default=1, description="激活所需最小暴露次数 (1次)")
-    # 分化时继承休眠基因的概率（大幅提升）
-    dormant_gene_inherit_chance: float = Field(default=0.50, description="分化时休眠基因继承概率 (50%)")
+    # 分化时继承休眠基因的概率【调高：确保继承90%+】
+    dormant_gene_inherit_chance: float = Field(default=0.90, description="分化时休眠基因继承概率 (90%)")
     # 分化时从基因库继承的最大特质数
     max_inherit_traits_from_library: int = Field(default=4, description="从基因库继承最大特质数")
     # 分化时从基因库继承的最大器官数

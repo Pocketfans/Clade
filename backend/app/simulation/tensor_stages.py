@@ -485,31 +485,36 @@ class TensorMigrationStage(BaseStage):
     
     使用 GPU 加速的张量引擎批量计算所有物种的迁徙。
     
+    【完全替代旧系统】
+    - 位置：order=60（原 MigrationStage 位置）
+    - 启用时：跳过旧的 MigrationStage
+    - 性能：比旧系统快 10-50x
+    
     【性能优化核心】
     - 原方案：逐物种循环，~50ms/物种
     - 新方案：全物种并行，~5ms 总计
-    - 加速比：10-50x
     
     工作流程：
     1. 从 ctx.tensor_state 获取种群和环境张量
-    2. 从 ctx.combined_results 获取死亡率数据
+    2. 从 ctx.preliminary_mortality 获取死亡率数据
     3. 使用 TensorMigrationEngine 批量计算迁徙
     4. 更新 tensor_state.pop
+    5. 同步迁徙结果到栖息地数据库
     """
     
     def __init__(self):
-        # 在张量竞争之后执行
+        # 【修改】移到 order=60，完全替代旧 MigrationStage
         super().__init__(
-            StageOrder.POPULATION_UPDATE.value + 4,
+            StageOrder.MIGRATION.value,  # order=60
             "张量迁徙计算"
         )
     
     def get_dependency(self) -> StageDependency:
         return StageDependency(
-            requires_stages={"张量种间竞争"},
-            requires_fields={"tensor_state", "combined_results"},
-            optional_fields={"species_batch"},
-            writes_fields={"tensor_state", "tensor_metrics"},
+            requires_stages={"初步死亡率评估"},  # 在初步死亡率之后执行
+            requires_fields={"tensor_state", "preliminary_mortality"},
+            optional_fields={"species_batch", "all_habitats"},
+            writes_fields={"tensor_state", "tensor_metrics", "migration_events", "migration_count"},
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
@@ -519,18 +524,38 @@ class TensorMigrationStage(BaseStage):
             extract_species_preferences,
             extract_habitat_mask,
         )
+        from ..repositories.environment_repository import environment_repository
+        from ..services.species.habitat_manager import habitat_manager
+        
+        logger.info("【阶段2】张量迁徙计算...")
+        ctx.emit_event("stage", "🦅 【阶段2】张量迁徙计算", "生态")
+        
+        # 初始化迁徙事件列表和共生追随计数
+        ctx.migration_events = []
+        ctx.migration_count = 0
+        ctx.symbiotic_follow_count = getattr(ctx, "symbiotic_follow_count", 0)
         
         # 检查是否启用张量计算
         if not getattr(engine, "_use_tensor_mortality", False):
-            logger.debug("[张量迁徙] 张量计算未启用，跳过")
+            logger.debug("[张量迁徙] 张量计算未启用，回退到旧系统")
+            # 设置标志让旧系统执行
+            ctx._tensor_migration_skipped = True
             return
+        
+        # 标记张量迁徙已执行，旧系统应跳过
+        ctx._tensor_migration_executed = True
         
         tensor_state = getattr(ctx, "tensor_state", None)
         if tensor_state is None:
-            logger.warning("[张量迁徙] 缺少 tensor_state，跳过")
+            logger.warning("[张量迁徙] 缺少 tensor_state，回退到旧系统")
+            ctx._tensor_migration_skipped = True
             return
         
         start_time = time.perf_counter()
+        
+        # 更新猎物分布缓存（保持与旧系统兼容）
+        ctx.all_habitats = environment_repository.latest_habitats()
+        habitat_manager.update_prey_distribution_cache(ctx.species_batch, ctx.all_habitats)
         
         # 获取迁徙引擎
         migration_engine = get_migration_engine()
@@ -545,17 +570,47 @@ class TensorMigrationStage(BaseStage):
             logger.debug("[张量迁徙] 无物种，跳过")
             return
         
-        # 提取死亡率
+        # 创建物种索引 -> 物种对象映射
+        species_batch = getattr(ctx, "species_batch", []) or []
+        code_to_species = {sp.lineage_code: sp for sp in species_batch}
+        idx_to_species = {}
+        for lineage, idx in species_map.items():
+            sp = code_to_species.get(lineage)
+            if sp:
+                idx_to_species[idx] = sp
+        
+        # 从 preliminary_mortality 提取死亡率
         death_rates = np.zeros(S, dtype=np.float32)
-        combined_results = getattr(ctx, "combined_results", []) or []
-        for result in combined_results:
+        preliminary = getattr(ctx, "preliminary_mortality", []) or []
+        for result in preliminary:
             lineage = result.species.lineage_code
             idx = species_map.get(lineage)
             if idx is not None and idx < S:
                 death_rates[idx] = result.death_rate
         
+        # 【猎物追踪】提取营养级数组
+        trophic_levels = np.ones(S, dtype=np.float32)
+        for idx, sp in idx_to_species.items():
+            if idx < S:
+                trophic_levels[idx] = getattr(sp, 'trophic_level', 1.0) or 1.0
+        
+        # 【冷却期】构建冷却期掩码 (True=允许迁徙, False=冷却中)
+        turn_index = getattr(ctx, "turn_index", 0)
+        cooldown_mask = np.ones(S, dtype=bool)
+        cooldown_species_set = set()
+        for idx, sp in idx_to_species.items():
+            if idx < S:
+                is_on_cooldown = habitat_manager.is_migration_on_cooldown(
+                    sp.lineage_code, turn_index, cooldown_turns=2
+                )
+                if is_on_cooldown:
+                    cooldown_mask[idx] = False
+                    cooldown_species_set.add(sp.lineage_code)
+        
+        if cooldown_species_set:
+            logger.debug(f"[冷却期] {len(cooldown_species_set)} 个物种处于迁徙冷却期")
+        
         # 提取物种偏好
-        species_batch = getattr(ctx, "species_batch", []) or []
         if species_batch:
             species_prefs = extract_species_preferences(species_batch, species_map)
         else:
@@ -566,18 +621,37 @@ class TensorMigrationStage(BaseStage):
         # 生成栖息地掩码
         habitat_mask = extract_habitat_mask(env, species_prefs)
         
-        # 执行迁徙计算
+        # 记录迁徙前的种群分布
+        old_pop = pop.copy()
+        
+        # 执行迁徙计算（包含猎物追踪和冷却期）
         new_pop, metrics = migration_engine.process_migration(
             pop=pop,
             env=env,
             species_prefs=species_prefs,
             death_rates=death_rates,
             habitat_mask=habitat_mask,
+            trophic_levels=trophic_levels,
+            cooldown_mask=cooldown_mask,
         )
         
         # 更新张量状态
         tensor_state.pop = new_pop
         ctx.tensor_state = tensor_state
+        
+        # 计算迁徙变化并同步到栖息地数据库，返回已迁徙的物种列表
+        migrating_count, migrated_species = self._sync_migration_to_database(
+            old_pop, new_pop, species_map, species_batch, ctx, habitat_manager, turn_index
+        )
+        
+        # 【共生追随】处理共生物种追随迁徙
+        symbiotic_count = 0
+        if migrated_species:
+            symbiotic_count = self._handle_symbiotic_following(
+                migrated_species, species_batch, habitat_manager,
+                environment_repository, turn_index
+            )
+            ctx.symbiotic_follow_count = symbiotic_count
         
         duration_ms = (time.perf_counter() - start_time) * 1000
         
@@ -586,10 +660,157 @@ class TensorMigrationStage(BaseStage):
             ctx.tensor_metrics = TensorMetrics()
         ctx.tensor_metrics.migration_time_ms = duration_ms
         
+        ctx.migration_count = migrating_count
+        
+        log_msg = f"【阶段2】张量迁徙完成: {S}物种, {migrating_count}个有显著迁徙"
+        if symbiotic_count > 0:
+            log_msg += f", {symbiotic_count}个共生物种追随"
+        logger.info(log_msg)
         logger.info(
-            f"[张量迁徙] 完成: {S}物种, {metrics.migrating_species}迁徙, "
-            f"耗时={duration_ms:.1f}ms, 后端={metrics.backend}"
+            f"[张量迁徙] 耗时={duration_ms:.1f}ms, 后端={metrics.backend}"
         )
+        
+        if migrating_count > 0:
+            ctx.emit_event("info", f"🦅 {migrating_count} 个物种完成迁徙扩散", "生态")
+        if symbiotic_count > 0:
+            ctx.emit_event("info", f"🤝 {symbiotic_count} 个共生物种追随迁徙", "生态")
+    
+    def _sync_migration_to_database(
+        self,
+        old_pop: np.ndarray,
+        new_pop: np.ndarray,
+        species_map: dict,
+        species_batch: list,
+        ctx,
+        habitat_manager,
+        turn_index: int,
+    ) -> tuple[int, list]:
+        """同步迁徙结果到栖息地数据库
+        
+        检测种群分布变化，更新栖息地记录。
+        
+        Args:
+            old_pop: 迁徙前种群 (S, H, W)
+            new_pop: 迁徙后种群 (S, H, W)
+            species_map: {lineage_code: index}
+            species_batch: 物种列表
+            ctx: 上下文
+            habitat_manager: 栖息地管理器
+            turn_index: 当前回合
+        
+        Returns:
+            (有显著迁徙的物种数, 已迁徙物种列表)
+        """
+        from ..repositories.environment_repository import environment_repository
+        
+        migrating_count = 0
+        migrated_species = []
+        code_to_species = {sp.lineage_code: sp for sp in species_batch}
+        
+        # 计算每个物种的种群变化
+        for lineage_code, idx in species_map.items():
+            if idx >= old_pop.shape[0]:
+                continue
+            
+            species = code_to_species.get(lineage_code)
+            if not species or not species.id:
+                continue
+            
+            old_dist = old_pop[idx]
+            new_dist = new_pop[idx]
+            
+            # 计算变化量
+            diff = np.abs(new_dist - old_dist)
+            change_ratio = diff.sum() / (old_dist.sum() + 1e-6)
+            
+            # 如果变化超过 5%，认为有显著迁徙
+            if change_ratio > 0.05:
+                migrating_count += 1
+                migrated_species.append(species)
+                
+                # 设置迁徙冷却期
+                habitat_manager.set_migration_cooldown(lineage_code, turn_index)
+                
+                # 更新栖息地记录
+                H, W = new_dist.shape
+                new_tile_ids = []
+                
+                for i in range(H):
+                    for j in range(W):
+                        tile_idx = i * W + j
+                        old_val = old_dist[i, j]
+                        new_val = new_dist[i, j]
+                        
+                        # 新增栖息地（从无到有）
+                        if old_val < 1 and new_val >= 1:
+                            new_tile_ids.append(tile_idx)
+                            try:
+                                habitat_manager.add_habitat_population(
+                                    species_id=species.id,
+                                    tile_id=tile_idx,
+                                    population=int(new_val),
+                                    suitability=0.5,  # 默认适宜度
+                                )
+                            except Exception:
+                                pass  # 忽略已存在的记录
+                
+                # 记录新迁入的地块（用于共生追随）
+                species._new_tile_ids = new_tile_ids
+        
+        return migrating_count, migrated_species
+    
+    def _handle_symbiotic_following(
+        self,
+        migrated_species: list,
+        all_species: list,
+        habitat_manager,
+        environment_repository,
+        turn_index: int,
+    ) -> int:
+        """处理共生物种追随迁徙
+        
+        当一个物种迁徙后，检查是否有共生依赖物种需要追随。
+        
+        Args:
+            migrated_species: 已迁徙的物种列表
+            all_species: 所有物种列表
+            habitat_manager: 栖息地管理器
+            environment_repository: 环境仓库
+            turn_index: 当前回合
+        
+        Returns:
+            追随迁徙的物种数
+        """
+        symbiotic_count = 0
+        tiles = environment_repository.list_tiles()
+        
+        for leader in migrated_species:
+            # 获取领导者的新地块
+            new_tile_ids = getattr(leader, '_new_tile_ids', [])
+            if not new_tile_ids:
+                continue
+            
+            # 获取应该追随的物种
+            followers = habitat_manager.get_symbiotic_followers(leader, all_species)
+            
+            for follower in followers:
+                try:
+                    success = habitat_manager.execute_symbiotic_following(
+                        leader_species=leader,
+                        follower_species=follower,
+                        leader_new_tiles=new_tile_ids,
+                        all_tiles=tiles,
+                        turn_index=turn_index,
+                    )
+                    if success:
+                        symbiotic_count += 1
+                        logger.info(
+                            f"[共生追随] {follower.common_name} 追随 {leader.common_name} 迁徙"
+                        )
+                except Exception as e:
+                    logger.warning(f"[共生追随] 执行失败: {e}")
+        
+        return symbiotic_count
 
 
 # ============================================================================
@@ -728,24 +949,24 @@ def get_tensor_stages() -> list[BaseStage]:
     
     阶段执行顺序：
     1. PressureTensorStage (order=11): 压力张量化
-    2. TensorMortalityStage (order=81): 多因子死亡率
-    3. TensorDiffusionStage (order=91): 种群扩散
-    4. TensorReproductionStage (order=92): 繁殖计算
-    5. TensorCompetitionStage (order=93): 种间竞争
-    6. TensorMigrationStage (order=94): 迁徙计算 [新增 - GPU 加速]
-    7. TensorStateSyncStage (order=159): 状态同步
-    8. TensorMetricsStage (order=139): 监控指标
+    2. TensorMigrationStage (order=60): 迁徙计算 [完全替代旧 MigrationStage]
+    3. TensorMortalityStage (order=81): 多因子死亡率
+    4. TensorDiffusionStage (order=91): 种群扩散
+    5. TensorReproductionStage (order=92): 繁殖计算
+    6. TensorCompetitionStage (order=93): 种间竞争
+    7. TensorMetricsStage (order=139): 监控指标
+    8. TensorStateSyncStage (order=159): 状态同步
     
     Returns:
         张量阶段列表
     """
     return [
-        PressureTensorStage(),   # 压力张量化（在压力解析后立即执行）
+        PressureTensorStage(),     # 压力张量化（在压力解析后立即执行）
+        TensorMigrationStage(),    # 迁徙计算（order=60，替代旧系统）
         TensorMortalityStage(),
         TensorDiffusionStage(),
         TensorReproductionStage(),
         TensorCompetitionStage(),
-        TensorMigrationStage(),   # 迁徙计算（GPU 加速）
         TensorStateSyncStage(),
         TensorMetricsStage(),
     ]

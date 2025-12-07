@@ -610,6 +610,10 @@ async def create_save(
                     worst_tile_rate=0.0,
                     has_refuge=True,
                     distribution_status="初始",
+                    # 【新增】基因数据（用于基因库显示）
+                    abstract_traits=getattr(species, 'abstract_traits', None),
+                    organs=getattr(species, 'organs', None),
+                    capabilities=getattr(species, 'capabilities', None),
                 ))
             
             map_state = env_repo.get_state()

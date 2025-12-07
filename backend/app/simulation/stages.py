@@ -1033,6 +1033,11 @@ class MigrationStage(BaseStage):
         from ..repositories.environment_repository import environment_repository
         from ..services.species.habitat_manager import habitat_manager
         
+        # 【张量化重构】检查是否已由 TensorMigrationStage 执行
+        if getattr(ctx, "_tensor_migration_executed", False):
+            logger.debug("[迁徙] 已由张量迁徙阶段处理，跳过旧系统")
+            return
+        
         logger.info("【阶段2】迁徙建议与执行...")
         ctx.emit_event("stage", "🦅 【阶段2】迁徙建议与执行", "生态")
         
@@ -2687,6 +2692,10 @@ class BuildReportStage(BaseStage):
                         initial_population=initial_pop,
                         births=births,
                         survivors=getattr(result, 'survivors', 0),
+                        # 【新增】基因数据（用于基因库显示）
+                        abstract_traits=getattr(species, 'abstract_traits', None),
+                        organs=getattr(species, 'organs', None),
+                        capabilities=getattr(species, 'capabilities', None),
                     ))
         
         # 如果没有 combined_results，尝试从 species_batch 构建
@@ -2710,6 +2719,10 @@ class BuildReportStage(BaseStage):
                     initial_population=pop,
                     births=0,
                     survivors=pop,
+                    # 【新增】基因数据（用于基因库显示）
+                    abstract_traits=getattr(species, 'abstract_traits', None),
+                    organs=getattr(species, 'organs', None),
+                    capabilities=getattr(species, 'capabilities', None),
                 ))
         
         # 添加灭绝物种
@@ -2734,6 +2747,10 @@ class BuildReportStage(BaseStage):
                         initial_population=0,
                         births=0,
                         survivors=0,
+                        # 【新增】基因数据（用于基因库显示）
+                        abstract_traits=getattr(species, 'abstract_traits', None),
+                        organs=getattr(species, 'organs', None),
+                        capabilities=getattr(species, 'capabilities', None),
                     ))
         
         logger.info(f"[报告] 简单模式构建物种数据: {len(species_data)} 个物种")

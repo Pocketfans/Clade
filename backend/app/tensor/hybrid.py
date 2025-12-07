@@ -358,7 +358,7 @@ class HybridCompute:
         max_vals = pop.max(axis=(1, 2), keepdims=True)
         max_vals = np.where(max_vals > 0, max_vals, 1)
         return pop / max_vals
-    
+
     # ========================================================================
     # 迁徙相关操作 [Taichi 加速]
     # ========================================================================

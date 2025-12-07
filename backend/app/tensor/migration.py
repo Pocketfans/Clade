@@ -88,6 +88,14 @@ class MigrationConfig:
     score_threshold: float = 0.08
     # 适宜度引导扩散率
     guided_diffusion_rate: float = 0.1
+    
+    # === 猎物追踪配置 ===
+    # 猎物稀缺阈值（低于此值触发追踪迁徙）
+    prey_scarcity_threshold: float = 0.40
+    # 猎物追踪权重（在迁徙决策中的占比）
+    prey_tracking_weight: float = 0.3
+    # 消费者最低营养级（T2+才追踪猎物）
+    consumer_trophic_threshold: float = 2.0
 
 
 @dataclass
@@ -292,27 +300,41 @@ class TensorMigrationEngine:
         pop: np.ndarray,
         max_distance: float,
     ) -> np.ndarray:
-        """NumPy 距离权重计算"""
+        """NumPy 距离权重计算 - 向量化版本"""
         S, H, W = pop.shape
-        result = np.zeros((S, H, W), dtype=np.float32)
         
-        # 创建坐标网格
+        # 创建坐标网格 (H, W)
         i_coords, j_coords = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
+        i_coords = i_coords.astype(np.float32)
+        j_coords = j_coords.astype(np.float32)
         
-        for s in range(S):
-            # 计算质心
-            total_pop = pop[s].sum()
-            if total_pop > 0:
-                center_i = (pop[s] * i_coords).sum() / total_pop
-                center_j = (pop[s] * j_coords).sum() / total_pop
-                
-                # 曼哈顿距离
-                dist = np.abs(i_coords - center_i) + np.abs(j_coords - center_j)
-                
-                # 转换为权重
-                result[s] = np.maximum(0.0, 1.0 - dist / max_distance)
-            else:
-                result[s] = 1.0
+        # 扩展为 (1, H, W) 用于广播
+        i_coords_3d = i_coords[np.newaxis, :, :]  # (1, H, W)
+        j_coords_3d = j_coords[np.newaxis, :, :]  # (1, H, W)
+        
+        # 计算每个物种的总种群 (S,)
+        total_pop = pop.sum(axis=(1, 2))  # (S,)
+        total_pop = np.maximum(total_pop, 1e-8)  # 避免除零
+        
+        # 计算质心 (S,)
+        # center_i[s] = sum(pop[s] * i_coords) / total_pop[s]
+        center_i = (pop * i_coords_3d).sum(axis=(1, 2)) / total_pop  # (S,)
+        center_j = (pop * j_coords_3d).sum(axis=(1, 2)) / total_pop  # (S,)
+        
+        # 扩展为 (S, 1, 1) 用于广播
+        center_i_3d = center_i[:, np.newaxis, np.newaxis]  # (S, 1, 1)
+        center_j_3d = center_j[:, np.newaxis, np.newaxis]  # (S, 1, 1)
+        
+        # 计算曼哈顿距离 (S, H, W)
+        dist = np.abs(i_coords_3d - center_i_3d) + np.abs(j_coords_3d - center_j_3d)
+        
+        # 转换为权重
+        result = np.maximum(0.0, 1.0 - dist / max_distance)
+        
+        # 对于没有种群的物种，设置为全 1
+        no_pop_mask = pop.sum(axis=(1, 2)) < 1e-6  # (S,)
+        no_pop_mask_3d = no_pop_mask[:, np.newaxis, np.newaxis]  # (S, 1, 1)
+        result = np.where(no_pop_mask_3d, 1.0, result)
         
         return result.astype(np.float32)
     
@@ -322,6 +344,8 @@ class TensorMigrationEngine:
         suitability: np.ndarray,
         distance_weights: np.ndarray,
         death_rates: np.ndarray,
+        prey_density: np.ndarray | None = None,
+        trophic_levels: np.ndarray | None = None,
     ) -> np.ndarray:
         """批量计算所有物种的迁徙决策分数
         
@@ -332,6 +356,8 @@ class TensorMigrationEngine:
             suitability: 适宜度张量 (S, H, W)
             distance_weights: 距离权重张量 (S, H, W)
             death_rates: 死亡率数组 (S,)
+            prey_density: 猎物密度张量 (S, H, W)，用于消费者追踪猎物
+            trophic_levels: 营养级数组 (S,)
         
         Returns:
             迁徙分数张量 (S, H, W)
@@ -349,13 +375,124 @@ class TensorMigrationEngine:
                 float(self.config.pressure_threshold),
                 float(self.config.saturation_threshold),
             )
+            # Taichi 目前不支持猎物追踪，使用后处理融合
+            if prey_density is not None and trophic_levels is not None:
+                prey_weight = self.config.prey_tracking_weight
+                for s in range(S):
+                    if trophic_levels[s] >= self.config.consumer_trophic_threshold:
+                        migration_scores[s] = (
+                            migration_scores[s] * (1.0 - prey_weight) +
+                            prey_density[s] * suitability[s] * prey_weight
+                        )
         else:
             # NumPy 回退
             migration_scores = self._numpy_migration_decision(
-                pop, suitability, distance_weights, death_rates
+                pop, suitability, distance_weights, death_rates,
+                prey_density, trophic_levels
             )
         
         return migration_scores
+    
+    def compute_prey_density(
+        self,
+        pop: np.ndarray,
+        trophic_levels: np.ndarray,
+    ) -> np.ndarray:
+        """批量计算每个地块的猎物密度 - 向量化版本
+        
+        【猎物追踪核心】计算消费者可获取的猎物分布
+        
+        对于每个消费者（T2+），猎物是比它低一个营养级的物种。
+        
+        Args:
+            pop: 种群张量 (S, H, W)
+            trophic_levels: 营养级数组 (S,)
+        
+        Returns:
+            猎物密度张量 (S, H, W)
+            - 对于生产者 (T<2)，返回全 1（不需要追踪）
+            - 对于消费者 (T>=2)，返回低营养级物种的种群密度
+        """
+        S, H, W = pop.shape
+        prey_density = np.ones((S, H, W), dtype=np.float32)
+        
+        # 计算每个地块的总种群（用于归一化）
+        total_pop = pop.sum(axis=0) + 1e-6  # (H, W)
+        
+        # 构建猎物矩阵：prey_matrix[i, j] = True 表示物种 j 是物种 i 的猎物
+        # 猎物营养级范围：比当前物种低 0.5-1.5 级
+        trophic_2d = trophic_levels[:, np.newaxis]  # (S, 1)
+        trophic_t = trophic_levels[np.newaxis, :]   # (1, S)
+        
+        prey_min = trophic_2d - 1.5  # (S, 1)
+        prey_max = trophic_2d - 0.5  # (S, 1)
+        
+        prey_matrix = (trophic_t >= prey_min) & (trophic_t <= prey_max)  # (S, S)
+        
+        # 消费者掩码
+        consumer_mask = trophic_levels >= self.config.consumer_trophic_threshold  # (S,)
+        
+        # 向量化计算每个消费者的猎物密度
+        # prey_matrix @ pop.reshape(S, H*W) -> (S, H*W) 每个物种在每个地块的猎物总量
+        pop_flat = pop.reshape(S, H * W)  # (S, H*W)
+        prey_pop_flat = prey_matrix.astype(np.float32) @ pop_flat  # (S, H*W)
+        prey_pop = prey_pop_flat.reshape(S, H, W)  # (S, H, W)
+        
+        # 归一化到 [0, 1]
+        prey_normalized = prey_pop / total_pop  # (S, H, W)
+        
+        # 对消费者应用计算结果，生产者保持 1.0
+        consumer_mask_3d = consumer_mask[:, np.newaxis, np.newaxis]
+        prey_density = np.where(consumer_mask_3d, prey_normalized, 1.0)
+        
+        # 检查有没有猎物的消费者（设为 0）
+        has_prey = prey_matrix.any(axis=1)  # (S,)
+        no_prey_consumer = consumer_mask & ~has_prey  # (S,)
+        no_prey_mask_3d = no_prey_consumer[:, np.newaxis, np.newaxis]
+        prey_density = np.where(no_prey_mask_3d, 0.0, prey_density)
+        
+        return prey_density.astype(np.float32)
+    
+    def compute_consumer_prey_shortage(
+        self,
+        pop: np.ndarray,
+        trophic_levels: np.ndarray,
+    ) -> np.ndarray:
+        """计算每个消费者物种的猎物短缺程度 - 向量化版本
+        
+        Args:
+            pop: 种群张量 (S, H, W)
+            trophic_levels: 营养级数组 (S,)
+        
+        Returns:
+            猎物短缺数组 (S,)
+            - 0.0 表示猎物充足
+            - 1.0 表示猎物极度匮乏
+        """
+        S = pop.shape[0]
+        
+        # 计算猎物密度 (S, H, W)
+        prey_density = self.compute_prey_density(pop, trophic_levels)
+        
+        # 计算每个物种的总种群 (S,)
+        total_pop = pop.sum(axis=(1, 2))  # (S,)
+        total_pop = np.maximum(total_pop, 1e-8)  # 避免除零
+        
+        # 加权平均猎物密度 (S,)
+        weighted_prey = (prey_density * pop).sum(axis=(1, 2)) / total_pop  # (S,)
+        
+        # 计算短缺程度
+        shortage = np.where(
+            weighted_prey < self.config.prey_scarcity_threshold,
+            1.0 - weighted_prey / self.config.prey_scarcity_threshold,
+            0.0
+        )
+        
+        # 只有消费者才有短缺问题，生产者设为 0
+        consumer_mask = trophic_levels >= self.config.consumer_trophic_threshold
+        shortage = np.where(consumer_mask, shortage, 0.0)
+        
+        return shortage.astype(np.float32)
     
     def _numpy_migration_decision(
         self,
@@ -363,31 +500,61 @@ class TensorMigrationEngine:
         suitability: np.ndarray,
         distance_weights: np.ndarray,
         death_rates: np.ndarray,
+        prey_density: np.ndarray | None = None,
+        trophic_levels: np.ndarray | None = None,
     ) -> np.ndarray:
-        """NumPy 迁徙决策计算"""
+        """NumPy 迁徙决策计算 - 完全向量化版本
+        
+        Args:
+            pop: 种群张量 (S, H, W)
+            suitability: 适宜度张量 (S, H, W)
+            distance_weights: 距离权重张量 (S, H, W)
+            death_rates: 死亡率数组 (S,)
+            prey_density: 猎物密度张量 (S, H, W)，可选
+            trophic_levels: 营养级数组 (S,)，可选
+        """
         S, H, W = pop.shape
         
-        # 基础分数
+        # 基础分数 (S, H, W)
         base_score = suitability * 0.5 + distance_weights * 0.5
         
-        # 压力调整
-        pressure_mask = death_rates > self.config.pressure_threshold
-        pressure_boost = np.minimum(0.5, (death_rates - self.config.pressure_threshold) * 2.0)
+        # 压力调整（向量化）
+        pressure_mask = death_rates > self.config.pressure_threshold  # (S,)
+        pressure_boost = np.minimum(0.5, (death_rates - self.config.pressure_threshold) * 2.0)  # (S,)
         
-        # 调整分数
-        for s in range(S):
-            if pressure_mask[s]:
-                base_score[s] = (
-                    suitability[s] * (0.6 + pressure_boost[s] * 0.2) +
-                    distance_weights[s] * (0.4 - pressure_boost[s] * 0.2)
-                )
+        # 广播到 (S, 1, 1) 用于向量化计算
+        pressure_mask_3d = pressure_mask[:, np.newaxis, np.newaxis]  # (S, 1, 1)
+        pressure_boost_3d = pressure_boost[:, np.newaxis, np.newaxis]  # (S, 1, 1)
+        
+        # 高压力时的分数
+        pressure_score = (
+            suitability * (0.6 + pressure_boost_3d * 0.2) +
+            distance_weights * (0.4 - pressure_boost_3d * 0.2)
+        )
+        
+        # 根据压力掩码选择分数
+        base_score = np.where(pressure_mask_3d, pressure_score, base_score)
+        
+        # 【猎物追踪】消费者优先迁往猎物密集区（向量化）
+        if prey_density is not None and trophic_levels is not None:
+            prey_weight = self.config.prey_tracking_weight
+            consumer_mask = trophic_levels >= self.config.consumer_trophic_threshold  # (S,)
+            consumer_mask_3d = consumer_mask[:, np.newaxis, np.newaxis]  # (S, 1, 1)
+            
+            # 融合猎物密度到迁徙分数
+            prey_adjusted_score = (
+                base_score * (1.0 - prey_weight) +
+                prey_density * suitability * prey_weight
+            )
+            
+            base_score = np.where(consumer_mask_3d, prey_adjusted_score, base_score)
         
         # 已有种群的地块不需要迁入
         has_pop = pop > 0
         base_score = np.where(has_pop, 0.0, base_score)
         
         # 添加随机扰动
-        noise = np.random.uniform(0.85, 1.15, base_score.shape)
+        noise = np.random.uniform(0.85, 1.15, base_score.shape).astype(np.float32)
         migration_scores = base_score * noise
         
         return migration_scores.astype(np.float32)
@@ -413,16 +580,11 @@ class TensorMigrationEngine:
         S, H, W = pop.shape
         new_pop = np.zeros((S, H, W), dtype=np.float32)
         
-        # 计算每个物种的迁徙率
-        migration_rates = np.zeros(S, dtype=np.float32)
+        # 计算每个物种的迁徙率（向量化）
         base_rate = self.config.base_migration_rate
-        
-        for s in range(S):
-            if death_rates[s] > self.config.pressure_threshold:
-                # 高压力时迁徙率提高
-                migration_rates[s] = min(0.8, base_rate * self.config.pressure_migration_boost)
-            else:
-                migration_rates[s] = base_rate
+        boosted_rate = np.minimum(0.8, base_rate * self.config.pressure_migration_boost)
+        high_pressure_mask = death_rates > self.config.pressure_threshold
+        migration_rates = np.where(high_pressure_mask, boosted_rate, base_rate).astype(np.float32)
         
         if self._taichi_ready and _taichi_kernels is not None:
             _taichi_kernels.kernel_execute_migration(
@@ -446,30 +608,36 @@ class TensorMigrationEngine:
         migration_scores: np.ndarray,
         migration_rates: np.ndarray,
     ) -> np.ndarray:
-        """NumPy 迁徙执行"""
+        """NumPy 迁徙执行 - 完全向量化版本"""
         S, H, W = pop.shape
-        new_pop = np.zeros((S, H, W), dtype=np.float32)
         
-        for s in range(S):
-            # 计算该物种的总种群和总迁徙分数
-            total_pop = pop[s].sum()
-            valid_scores = migration_scores[s] > self.config.score_threshold
-            total_score = migration_scores[s][valid_scores].sum()
-            
-            # 迁徙量
-            migrate_amount = total_pop * migration_rates[s]
-            
-            # 保留原有种群
-            new_pop[s] = pop[s] * (1.0 - migration_rates[s])
-            
-            # 按分数比例分配迁入种群
-            if total_score > 0:
-                score_ratio = np.where(
-                    valid_scores,
-                    migration_scores[s] / total_score,
-                    0.0
-                )
-                new_pop[s] += migrate_amount * score_ratio
+        # 1. 计算每个物种的总种群 (S,)
+        total_pop = pop.sum(axis=(1, 2))  # (S,)
+        
+        # 2. 计算有效迁徙分数掩码 (S, H, W)
+        valid_mask = migration_scores > self.config.score_threshold
+        
+        # 3. 计算每个物种的总有效分数 (S,)
+        masked_scores = np.where(valid_mask, migration_scores, 0.0)
+        total_scores = masked_scores.sum(axis=(1, 2))  # (S,)
+        total_scores = np.maximum(total_scores, 1e-8)  # 避免除零
+        
+        # 4. 计算迁徙量 (S,)
+        migrate_amounts = total_pop * migration_rates  # (S,)
+        
+        # 5. 保留原有种群 (S, H, W)
+        # 广播 migration_rates 到 (S, 1, 1)
+        rates_3d = migration_rates[:, np.newaxis, np.newaxis]
+        new_pop = pop * (1.0 - rates_3d)
+        
+        # 6. 按分数比例分配迁入种群 (S, H, W)
+        # 广播 total_scores 到 (S, 1, 1)
+        total_scores_3d = total_scores[:, np.newaxis, np.newaxis]
+        score_ratio = masked_scores / total_scores_3d  # (S, H, W)
+        
+        # 广播 migrate_amounts 到 (S, 1, 1)
+        migrate_3d = migrate_amounts[:, np.newaxis, np.newaxis]
+        new_pop += migrate_3d * score_ratio
         
         return new_pop.astype(np.float32)
     
@@ -538,6 +706,8 @@ class TensorMigrationEngine:
         species_prefs: np.ndarray,
         death_rates: np.ndarray,
         habitat_mask: np.ndarray | None = None,
+        trophic_levels: np.ndarray | None = None,
+        cooldown_mask: np.ndarray | None = None,
     ) -> tuple[np.ndarray, MigrationMetrics]:
         """完整的迁徙处理流程
         
@@ -549,6 +719,8 @@ class TensorMigrationEngine:
             species_prefs: 物种偏好矩阵 (S, 7)
             death_rates: 死亡率数组 (S,)
             habitat_mask: 栖息地掩码 (S, H, W)，可选
+            trophic_levels: 营养级数组 (S,)，用于猎物追踪
+            cooldown_mask: 冷却期掩码 (S,)，True=允许迁徙, False=冷却中
         
         Returns:
             (迁徙后的种群张量, 性能指标)
@@ -558,6 +730,8 @@ class TensorMigrationEngine:
             species_count=pop.shape[0],
             backend=self.backend,
         )
+        
+        S = pop.shape[0]
         
         # 1. 批量计算适宜度
         t0 = time.perf_counter()
@@ -571,25 +745,54 @@ class TensorMigrationEngine:
         distance_weights = self.compute_batch_distance_weights(pop)
         metrics.distance_time_ms = (time.perf_counter() - t0) * 1000
         
-        # 3. 计算迁徙决策
+        # 2.5 【猎物追踪】计算猎物密度
+        prey_density = None
+        if trophic_levels is not None:
+            prey_density = self.compute_prey_density(pop, trophic_levels)
+            # 记录猎物短缺的消费者
+            prey_shortage = self.compute_consumer_prey_shortage(pop, trophic_levels)
+            for s in range(S):
+                if prey_shortage[s] > 0.5:
+                    logger.debug(f"[猎物追踪] 物种{s} 猎物短缺={prey_shortage[s]:.2f}")
+        
+        # 3. 计算迁徙决策（融合猎物追踪）
         t0 = time.perf_counter()
         migration_scores = self.compute_migration_decisions(
-            pop, suitability, distance_weights, death_rates
+            pop, suitability, distance_weights, death_rates,
+            prey_density, trophic_levels
         )
         metrics.decision_time_ms = (time.perf_counter() - t0) * 1000
+        
+        # 3.5 【冷却期】应用冷却期掩码
+        effective_death_rates = death_rates.copy()
+        if cooldown_mask is not None:
+            # 冷却中的物种：将死亡率设为 0，抑制迁徙
+            for s in range(S):
+                if not cooldown_mask[s]:  # False = 冷却中
+                    migration_scores[s] = 0.0
+                    effective_death_rates[s] = 0.0
+                    logger.debug(f"[冷却期] 物种{s} 处于迁徙冷却期，跳过")
         
         # 4. 执行迁徙
         t0 = time.perf_counter()
         new_pop = self.execute_batch_migration(
-            pop, migration_scores, death_rates
+            pop, migration_scores, effective_death_rates
         )
         metrics.execution_time_ms = (time.perf_counter() - t0) * 1000
         
         # 5. 带引导的扩散（可选）
         new_pop = self.guided_diffusion(new_pop, suitability)
         
+        # 6. 【冷却期】恢复冷却中物种的原始分布
+        if cooldown_mask is not None:
+            for s in range(S):
+                if not cooldown_mask[s]:
+                    new_pop[s] = pop[s]
+        
         # 统计迁徙物种数
-        for s in range(pop.shape[0]):
+        for s in range(S):
+            if cooldown_mask is not None and not cooldown_mask[s]:
+                continue
             if death_rates[s] > self.config.pressure_threshold:
                 metrics.migrating_species += 1
         
