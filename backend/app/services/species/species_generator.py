@@ -10,6 +10,7 @@ from .population_calculator import PopulationCalculator
 from .trait_config import TraitConfig
 from .predation import PredationService
 from .gene_diversity import GeneDiversityService
+from .naming_hints import NamingHintGenerator, get_habitat_naming_hint
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,85 @@ class SpeciesGenerator:
         self.pop_calc = PopulationCalculator()
         self.predation_service = PredationService()
         self.gene_diversity_service = GeneDiversityService()
+        self.naming_hint_generator = NamingHintGenerator()
+
+    def _should_generate_name(self, name: str | None, min_len: int = 4) -> bool:
+        """判断名称是否需要替换"""
+        if not name:
+            return True
+        if len(name) < min_len:
+            return True
+        lowered = name.lower()
+        if lowered.startswith("species "):
+            return True
+        if name.startswith("物种"):
+            return True
+        return False
+
+    def _generate_names(self, data: dict, lineage_code: str) -> dict[str, str]:
+        """基于特征生成更生动的学名和俗名"""
+        habitat = data.get("habitat_type", "")
+        diet = data.get("diet_type", "")
+        seed = abs(hash(f"{lineage_code}-{habitat}-{diet}")) % 1_000_000_007
+        rng = random.Random(seed)
+
+        # 俗名：环境意象 + 形态/行为 + 类群后缀
+        env_prefixes = [
+            "风崖", "暮林", "霜岭", "碧潭", "玄渊", "焰原",
+            "云脊", "雾沼", "潮湾", "石林", "幽谷", "寒潭",
+        ]
+        feature_tokens = [
+            "长鳍", "厚甲", "尖吻", "羽鳍", "裂唇", "刺背",
+            "盘尾", "滑翔", "潜沙", "逐雾", "攀枝", "钻泥",
+        ]
+        suffix_tokens = ["鱼", "兽", "蟹", "螈", "蜥", "鳗", "鸟", "蛾", "虫", "龙"]
+
+        common_name = None
+        for _ in range(6):
+            candidate = (
+                rng.choice(env_prefixes)
+                + rng.choice(feature_tokens)
+                + rng.choice(suffix_tokens)
+            )
+            if 4 <= len(candidate) <= 8:
+                common_name = candidate
+                break
+        if not common_name:
+            common_name = rng.choice(env_prefixes) + rng.choice(suffix_tokens)
+
+        # 学名：根据栖息地/食性选择属名前缀 + 特征词根
+        genus_roots = {
+            "marine": ["Pelago", "Thalasso", "Aqua"],
+            "deep_sea": ["Abysso", "Bathyo"],
+            "coastal": ["Littoro", "Rupio"],
+            "freshwater": ["Lacusto", "Fluvio"],
+            "amphibious": ["Amphio", "Paludo"],
+            "terrestrial": ["Silvestro", "Terrano"],
+            "aerial": ["Aero", "Volu"],
+        }
+        trait_roots = {
+            "autotroph": ["viridis", "luminis", "photos"],
+            "herbivore": ["herbidus", "folivora"],
+            "carnivore": ["raptor", "vorax", "venator"],
+            "omnivore": ["omnivora", "versicolor"],
+            "detritivore": ["detritus", "humilis"],
+        }
+        genus_choices = genus_roots.get(habitat, ["Neo", "Proto"])
+        genus = f"{rng.choice(genus_choices)}{rng.choice(['sa', 'ta', 'ra', 'nia'])}"
+        genus = genus.capitalize()
+
+        species_roots = [
+            "longus", "brevis", "pinnatus", "gracilis", "spinosus", "barbatus",
+            "maculatus", "aureus", "caeruleus", "glacialis", "errans", "natans",
+            "littoralis", "montanus", "orientalis", "noctis", "abyssalis", "volans",
+        ]
+        diet_suffixes = trait_roots.get(diet, [])
+        epithet_pool = species_roots + diet_suffixes
+        epithet = rng.choice(epithet_pool) if epithet_pool else rng.choice(species_roots)
+
+        latin_name = f"{genus} {epithet}"
+
+        return {"latin_name": latin_name, "common_name": common_name}
 
     def generate_from_prompt(
         self, 
@@ -74,11 +154,17 @@ class SpeciesGenerator:
         else:
             existing_species_context = "暂无现有物种"
         
+        # 生成命名提示（基于lineage_code作为种子，确保可复现性）
+        naming_seed = abs(hash(f"{lineage_code}-{prompt[:50]}")) % 1_000_000_007
+        self.naming_hint_generator.set_seed(naming_seed)
+        naming_hints = self.naming_hint_generator.generate_compact_hint()
+        
         # 构建AI请求
         payload = {
             "user_prompt": prompt,
             "lineage_code": lineage_code,
             "existing_species_context": existing_species_context,
+            "naming_hints": naming_hints,
             "requirements": {
                 "latin_name": "拉丁学名（Genus species格式）",
                 "common_name": "中文俗名",
@@ -126,6 +212,13 @@ class SpeciesGenerator:
 
         # 确保必需字段存在
         species_data = self._ensure_required_fields(species_data, lineage_code, prompt)
+
+        # 如果缺少名称或名称过短，用规则生成更丰富的命名
+        generated_names = self._generate_names(species_data, lineage_code)
+        if self._should_generate_name(species_data.get("latin_name"), min_len=6):
+            species_data["latin_name"] = generated_names["latin_name"]
+        if self._should_generate_name(species_data.get("common_name"), min_len=4):
+            species_data["common_name"] = generated_names["common_name"]
 
         # 直接从species_data中获取名称和栖息地类型
         description = species_data.get("description", prompt)

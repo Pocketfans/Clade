@@ -92,8 +92,12 @@ SPECIES_PROMPTS = {
 当前生态系统中的物种（用于推断食物关系）：
 {existing_species_context}
 
-返回JSON对象（不要学名和俗名，系统会单独生成）：
+{naming_hints}
+
+返回JSON对象（必须包含学名latin_name和中文俗名common_name，遵守命名规则）：
 {{
+    "latin_name": "Genus species 格式，属名大写，体现特征（例如长鳍选用pinna/longus/velox等词根组合）",
+    "common_name": "4-8字中文俗名，有画面感，不要使用“物种/生物/动物/植物”这类泛化词；可组合环境意象+形态或行为+类群后缀，如“风崖长鳍鱼”“暮林攀枝兽”",
     "description": "生物学描述（100-120字），包含：体型大小、形态特征、运动方式、食性、繁殖方式、栖息环境、生态位角色",
     "habitat_type": "栖息地类型（从下列选择一个）",
     "diet_type": "食性类型：autotroph(自养)/herbivore(草食)/carnivore(肉食)/omnivore(杂食)/detritivore(腐食)",
@@ -352,22 +356,12 @@ SPECIES_PROMPTS = {
 - 发展根系 → 降低散布能力
 
 === 命名规则（重要！）===
-名字应像真实生物那样"有依据"，给人"可能真实存在"的感觉。以下为参考，可自由组合创造！
+名字应像真实生物那样"有依据"，给人"可能真实存在"的感觉。
 
-【拉丁学名】保留属名，种加词用拉丁/希腊词根体现特征（可自由组合词根）：
-- 地理：borealis(北)、australis(南)、montanus(山)、fluvialis(河)、oceanicus(洋)、lacustris(湖)、insularis(岛)、orientalis(东)
-- 形态：longus(长)、brevis(短)、crassus(厚)、gracilis(细长)、spinosus(多刺)、pinnatus(鳍状)、cornuta(有角)、squamosus(鳞片)、barbatus(有须)
-- 颜色：ruber/rubra(红)、niger(黑)、albus/alba(白)、viridis(绿)、aureus(金)、caeruleus(蓝)、griseus(灰)、maculatus(斑点)
-- 生态：noctis(夜)、abyssalis(深渊)、thermalis(热泉)、glacialis(冰川)、fossoria(穴居)、pelagicus(远洋)、littoralis(沿岸)
-- 行为：velox(快速)、vorax(贪食)、raptor(掠食)、errans(漫游)、natans(游泳)、volans(飞行)
-- 组合示例：Aurecosteus(金肋)、Cryopinna(冰鳍)、Talpaptera(掘翼)、Abyssognathus(深渊颌)、Nivalisaurus(雪蜥)
+{naming_hints}
 
-【中文俗名】自然、有画面感、有叙述性（4-8字）：
-- 可用环境意象：风崖、暮林、霜岭、赤湾、玄渊、碧潭、烟谷、云脊、寒泽、焰原、幽谷、晨滩、雾沼、断崖、深壑、荒漠、冰原...
-- 可用形态特征：长鳍、厚甲、弯棘、尖吻、阔口、细足、羽鳍、裂唇、环纹、刺背、扁躯、盘尾...
-- 可用行为习性：潜沙、逐雾、碎岩、钻泥、追波、伏底、漂游、穴居、攀岩、滑翔...
-- 可用类群后缀：—鱼、—虫、—兽、—螈、—蜥、—蟹、—贝、—龙、—鳗、—鸟、—蛾...
-- 示例：风崖长鳍鱼、暮林攀枝兽、霜岭游鹿、玄渊盲螈、碧潭钻泥蟹、焰原厚甲蜥、云脊滑翔蛾
+【拉丁学名】保留属名，种加词用拉丁/希腊词根体现特征，可自由组合词根。
+【中文俗名】自然、有画面感（4-8字），可组合为"[地理]+[形态/行为]+[后缀]"。
 - 避免：搞笑/卡通化/纯音译/无意义随机组合
 - 目标：读起来自然、有生态画面感、像真实物种名
 
@@ -636,12 +630,7 @@ SPECIES_PROMPTS = {
   ]
 }}
 
-=== 命名提示（中文俗名可选风格）===
-- 环境+形态+类群：风崖长鳍鱼、玄渊盲螈、霜脊游龙
-- 人名+氏+类群：邓氏鱼、李氏螈、陈氏虫
-- 地名+类群：澄江虫、热河鸟、辽西龙
-- 特征直译：三叶虫、盾皮鱼、棘皮动物
-- 行为/习性：伏击蟹、滤食贝、穴居蛇
+{naming_hints}
 
 严格输出 JSON，不要使用 Markdown，不要包含代价或负向改动。""",
 

@@ -5,8 +5,22 @@
 import { http } from "./base";
 import type { TurnReport, PressureDraft, ActionQueueStatus, PressureTemplate } from "../api.types";
 
-// 15分钟超时（回合执行可能很慢）
-const TURN_TIMEOUT = 15 * 60 * 1000;
+// 基础超时（单回合）：10分钟
+const BASE_TURN_TIMEOUT = 10 * 60 * 1000;
+// 每额外一回合增加的超时：3分钟
+const TIMEOUT_PER_EXTRA_ROUND = 3 * 60 * 1000;
+// 最大超时限制：60分钟
+const MAX_TURN_TIMEOUT = 60 * 60 * 1000;
+
+/**
+ * 根据回合数计算动态超时时间
+ * @param rounds 回合数
+ * @returns 超时时间（毫秒）
+ */
+function calculateTimeout(rounds: number): number {
+  const timeout = BASE_TURN_TIMEOUT + Math.max(0, rounds - 1) * TIMEOUT_PER_EXTRA_ROUND;
+  return Math.min(timeout, MAX_TURN_TIMEOUT);
+}
 
 /**
  * 执行推演（支持多回合）
@@ -19,13 +33,14 @@ export async function runTurn(
   rounds = 1,
   autoReports = true
 ): Promise<TurnReport[]> {
+  const timeout = calculateTimeout(rounds);
   console.log("🚀 [演化] 发送推演请求...");
-  console.log("📋 [演化] 压力数量:", pressures.length, "生成报告:", autoReports);
+  console.log("📋 [演化] 压力数量:", pressures.length, "回合数:", rounds, "超时:", Math.round(timeout / 1000), "秒", "生成报告:", autoReports);
 
   const data = await http.post<TurnReport[]>(
     "/api/turns/run",
     { rounds, pressures, auto_reports: autoReports },
-    { timeout: TURN_TIMEOUT }
+    { timeout }
   );
 
   if (data && data.length > 0) {

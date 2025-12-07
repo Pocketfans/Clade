@@ -25,6 +25,7 @@ from .plant_evolution import plant_evolution_service, PLANT_MILESTONES  # 【植
 from .plant_competition import plant_competition_calculator  # 【植物竞争】
 from .description_enhancer import DescriptionEnhancerService  # 【描述增强】
 from .gene_diversity import GeneDiversityService
+from .naming_hints import NamingHintGenerator
 from ...tensor.tradeoff import TradeoffCalculator
 from ...core.config import get_settings
 from ...simulation.constants import get_time_config
@@ -58,6 +59,7 @@ class SpeciationService:
         # [DEPRECATED] GeneLibraryService 惰性初始化，仅用于旧存档兼容
         self._gene_library_service: "GeneLibraryService | None" = None
         self.gene_diversity_service = GeneDiversityService()
+        self.naming_hint_generator = NamingHintGenerator()  # 【命名提示】
         self.rules = speciation_rules  # 【新增】规则引擎实例
         self.description_enhancer = DescriptionEnhancerService(router)  # 【描述增强】LLM增强规则生成的描述
         self.max_speciation_per_turn = 20
@@ -1148,6 +1150,11 @@ class SpeciationService:
                     pressure_context=pressure_summary,
                 )
                 
+                # 【命名提示】生成随机命名参考
+                naming_seed = abs(hash(f"{new_code}-{species.lineage_code}-{idx}")) % 1_000_000_007
+                self.naming_hint_generator.set_seed(naming_seed)
+                naming_hints = self.naming_hint_generator.generate_compact_hint()
+                
                 ai_payload = {
                     "parent_lineage": species.lineage_code,
                     "latin_name": species.latin_name,
@@ -1195,6 +1202,8 @@ class SpeciationService:
                     "organ_key_catalog": "\n".join(
                         [f"- {c['organ_key']} ({c['category']})：{c['default_name']}" for c in self._organ_catalog]
                     ),
+                    # 【命名提示】随机命名参考
+                    "naming_hints": naming_hints,
                 }
                 
                 entries.append({
@@ -1724,6 +1733,11 @@ class SpeciationService:
             f"演化指导原则：{time_config.get('evolution_guide', 'Standard')}\n"
         )
 
+        # 【命名提示】为批量分化生成随机命名参考
+        batch_naming_seed = abs(hash(f"batch-{turn_index}-{len(entries)}")) % 1_000_000_007
+        self.naming_hint_generator.set_seed(batch_naming_seed)
+        naming_hints = self.naming_hint_generator.generate_naming_prompt(samples_per_category=2)
+        
         payload_data = {
             "average_pressure": average_pressure,
             "pressure_summary": pressure_summary,
@@ -1734,6 +1748,7 @@ class SpeciationService:
             "species_list": species_list_escaped,
             "batch_size": len(entries),
             "time_context": time_context,
+            "naming_hints": naming_hints,
         }
         first_payload = entries[0]["payload"] if entries else {}
         payload_data.update(
