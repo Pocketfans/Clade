@@ -19,7 +19,7 @@ from typing import Sequence, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from ...models.species import Species
+    from ..models.species import Species
 
 logger = logging.getLogger(__name__)
 
@@ -403,3 +403,4 @@ def reset_niche_tensor_compute() -> None:
     """重置生态位张量计算引擎"""
     global _niche_tensor_compute
     _niche_tensor_compute = None
+

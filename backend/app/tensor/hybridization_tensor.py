@@ -19,8 +19,8 @@ from typing import Sequence, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from ...models.species import Species
-    from ...models.environment import HabitatPopulation
+    from ..models.species import Species
+    from ..models.environment import HabitatPopulation
 
 logger = logging.getLogger(__name__)
 
