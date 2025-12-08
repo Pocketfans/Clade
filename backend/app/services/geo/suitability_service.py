@@ -3,13 +3,21 @@
 结合语义向量和特征向量计算物种-地块宜居度。
 
 架构:
-1. 语义相似度 (50%): 使用在线 Embedding API 获取语义理解
-2. 特征相似度 (50%): 使用 12 维数值向量计算精确匹配
+1. 语义相似度 (40%): 使用在线 Embedding API 获取语义理解
+2. 特征相似度 (60%): 使用 12 维数值向量计算精确匹配
+
+【v2.0 增强适宜度】
+集成 Taichi GPU 加速的张量化计算，实现生态位分化：
+- 收紧环境容忍度 - 温度/湿度等指标更敏感
+- 生态位拥挤惩罚 - 同营养级物种越多适宜度越低
+- 资源分割因子 - 相似物种必须分割资源
+- 专化度/泛化度权衡 - 专化高分窄范围，泛化低分宽范围
 
 优化:
 - 矩阵计算: 一次性计算 N物种 × M地块
-- 缓存机制: 向量缓存 + 矩阵缓存
+- 缓存机制: 向量缓存 + 矩阵缓存 + 生态位相似度缓存
 - 增量更新: 只重算变化的部分
+- GPU 加速: Taichi 并行计算
 """
 from __future__ import annotations
 
@@ -78,8 +86,10 @@ DIMENSION_WEIGHTS = np.array([
 ])
 
 # 语义 vs 特征的权重
-SEMANTIC_WEIGHT = 0.4
-FEATURE_WEIGHT = 0.6
+# 【v2.1】降低语义权重，让环境指标主导
+# 这样当环境各项都合格(~95%)时，即使语义分数一般(50%)也能达到90%+
+SEMANTIC_WEIGHT = 0.15
+FEATURE_WEIGHT = 0.85
 
 
 @dataclass
@@ -97,6 +107,13 @@ class SuitabilityService:
     """混合 Embedding 宜居度服务
     
     结合语义向量(在线API)和特征向量(12D)计算宜居度。
+    
+    【v2.0 增强】
+    集成张量化适宜度计算，实现：
+    - 收紧环境容忍度
+    - 生态位拥挤惩罚
+    - 资源分割因子
+    - 专化度/泛化度权衡
     """
     
     def __init__(
@@ -108,6 +125,7 @@ class SuitabilityService:
         semantic_hotspot_only: bool = False,
         semantic_hotspot_limit: int = 512,
         tile_cache_path: Path | None = None,
+        enable_enhanced_suitability: bool = True,
     ):
         self.embeddings = embedding_service
         self.use_semantic = use_semantic and embedding_service is not None
@@ -117,6 +135,12 @@ class SuitabilityService:
         self.semantic_hotspot_limit = max(1, semantic_hotspot_limit)
         self._recent_hotspot_ids: set[int] = set()
         self._hotspot_resource_threshold: float = 0.0
+        
+        # 【v2.0】增强适宜度计算
+        self.enable_enhanced_suitability = enable_enhanced_suitability
+        self._tensor_calculator = None
+        self._suitability_config = None
+        self._init_tensor_calculator()
         
         # 向量缓存
         self._species_semantic_cache: dict[str, np.ndarray] = {}  # lineage_code -> vector
@@ -135,12 +159,17 @@ class SuitabilityService:
         self._cache_tile_ids: list[int] = []
         self._cache_turn: int = -1
         
+        # 【v2.0】增强适宜度缓存
+        self._enhanced_suitability_cache: np.ndarray | None = None
+        self._niche_similarity_cache: np.ndarray | None = None
+        
         # 统计
         self._stats = {
             "compute_calls": 0,
             "cache_hits": 0,
             "semantic_calls": 0,
             "matrix_computes": 0,
+            "enhanced_computes": 0,
         }
         
         # 持久化语义存储
@@ -148,6 +177,25 @@ class SuitabilityService:
         self._tile_semantic_store_path.parent.mkdir(parents=True, exist_ok=True)
         self._semantic_store_dirty = False
         self._load_tile_semantic_store()
+    
+    def _init_tensor_calculator(self) -> None:
+        """初始化张量化适宜度计算器"""
+        if not self.enable_enhanced_suitability:
+            return
+        
+        try:
+            from ...tensor.suitability import get_tensor_suitability_calculator
+            self._tensor_calculator = get_tensor_suitability_calculator()
+            logger.info("[SuitabilityService] 张量化适宜度计算器初始化成功")
+        except Exception as e:
+            logger.warning(f"[SuitabilityService] 张量化计算器初始化失败，使用传统模式: {e}")
+            self._tensor_calculator = None
+    
+    def reload_suitability_config(self, config) -> None:
+        """重新加载适宜度配置"""
+        self._suitability_config = config
+        if self._tensor_calculator is not None:
+            self._tensor_calculator.reload_config(config)
 
     # ============ 配置与缓存管理 ============
 
@@ -506,10 +554,60 @@ class SuitabilityService:
     
     # ============ 特征向量提取 ============
     
+    # 水生环境参考向量缓存（用于语义判断）
+    _aquatic_reference_vector: np.ndarray | None = None
+    
+    def _compute_aquatic_score_by_embedding(self, species: "Species") -> float:
+        """使用 embedding 语义相似度判断物种的水生程度
+        
+        当 habitat_type 未知时作为兜底判断。
+        计算物种描述与"水生生物"概念的语义相似度。
+        
+        Returns:
+            0.0-1.0 的水生程度分数
+            - > 0.7: 很可能是水生物种
+            - 0.4-0.7: 可能是两栖或半水生
+            - < 0.4: 很可能是陆生物种
+        """
+        if self.embeddings is None:
+            return 0.5  # 无 embedding 服务时返回中性值
+        
+        try:
+            # 获取或生成水生参考向量
+            if self._aquatic_reference_vector is None:
+                aquatic_text = (
+                    "水生生物，生活在水中，海洋生物，淡水生物，"
+                    "鱼类，藻类，浮游生物，深海生物，"
+                    "aquatic organism, marine life, fish, algae"
+                )
+                vec = self.embeddings.embed_single(aquatic_text)
+                self._aquatic_reference_vector = np.array(vec, dtype=np.float32)
+            
+            # 获取物种文本向量
+            lineage_code = getattr(species, 'lineage_code', '')
+            if lineage_code and lineage_code in self._species_semantic_cache:
+                species_vec = self._species_semantic_cache[lineage_code]
+            else:
+                species_text = self._build_species_text(species)
+                vec = self.embeddings.embed_single(species_text)
+                species_vec = np.array(vec, dtype=np.float32)
+            
+            # 计算余弦相似度
+            ref_norm = self._aquatic_reference_vector / (np.linalg.norm(self._aquatic_reference_vector) + 1e-8)
+            sp_norm = species_vec / (np.linalg.norm(species_vec) + 1e-8)
+            similarity = float(np.dot(ref_norm, sp_norm))
+            
+            # 映射到 [0, 1]
+            return (similarity + 1) / 2
+            
+        except Exception as e:
+            logger.warning(f"[SuitabilityService] Embedding水生判断失败: {e}")
+            return 0.5
+    
     def _extract_species_features(self, species: "Species") -> np.ndarray:
         """从物种属性提取 12 维特征向量
         
-        【改进】综合多个属性判断水生/陆生，而不仅仅依赖 habitat_type
+        【v3.0】基于结构化数据(habitat_type) + embedding语义兜底
         """
         traits = getattr(species, 'abstract_traits', {}) or {}
         habitat = (getattr(species, 'habitat_type', '') or '').lower()
@@ -519,49 +617,45 @@ class SuitabilityService:
         common_name = (getattr(species, 'common_name', '') or '').lower()
         desc = (getattr(species, 'description', '') or '').lower()
         
-        # 【智能判断】物种是否为水生
-        # 综合考虑: habitat_type, growth_form, common_name, description, capabilities
+        # 【v3.0 重构】基于结构化数据判断物种类型
+        # habitat_type 是AI生成时确定的，是最可靠的来源
+        # 
+        # habitat_type 枚举值:
+        # - marine: 海洋生物
+        # - freshwater: 淡水生物  
+        # - terrestrial: 陆生生物
+        # - amphibious: 两栖生物
+        # - aerial: 空中生物
+        # - deep_sea: 深海生物
+        # - coastal: 海岸生物
+        # - hydrothermal: 热泉生物
+        
         is_aquatic_species = False
         is_deep_sea = False
         is_freshwater = False
-        is_hydrothermal = False  # 热泉生物
+        is_hydrothermal = False
         
-        # 1. 从 habitat_type 判断
-        # 【修复】添加 hydrothermal（热泉）类型的识别
-        if habitat in ("marine", "deep_sea", "freshwater", "coastal", "hydrothermal"):
+        # === 1. 主要判断：基于 habitat_type（结构化数据）===
+        AQUATIC_HABITATS = {"marine", "deep_sea", "freshwater", "coastal", "hydrothermal"}
+        DEEP_SEA_HABITATS = {"deep_sea", "hydrothermal"}
+        
+        if habitat in AQUATIC_HABITATS:
             is_aquatic_species = True
-            is_deep_sea = habitat in ("deep_sea", "hydrothermal")  # 热泉也是深海环境
+            is_deep_sea = habitat in DEEP_SEA_HABITATS
             is_freshwater = habitat == "freshwater"
             is_hydrothermal = habitat == "hydrothermal"
+        elif habitat == "amphibious":
+            # 两栖生物：半水生
+            is_aquatic_species = False  # 不是纯水生，但能适应水
+        elif habitat in ("terrestrial", "aerial", ""):
+            # 陆生/空中生物
+            is_aquatic_species = False
         
-        # 2. 从 growth_form 判断 (水生植物)
+        # === 2. 补充判断：从 growth_form 判断水生植物 ===
         if growth == "aquatic" and trophic < 2.0:
             is_aquatic_species = True
         
-        # 3. 从名称/描述判断
-        aquatic_keywords = ["藻", "浮游", "海洋", "深海", "水生", "海", "鱼", "虾", "蟹", "贝", 
-                          "珊瑚", "水母", "海星", "海胆", "鲸", "鲨", "细菌"]
-        freshwater_keywords = ["淡水", "河", "湖", "溪"]
-        deep_keywords = ["深海", "热泉", "硫", "化能", "热液", "喷口"]
-        
-        for kw in aquatic_keywords:
-            if kw in common_name or kw in desc:
-                is_aquatic_species = True
-                break
-        
-        for kw in freshwater_keywords:
-            if kw in common_name or kw in desc:
-                is_freshwater = True
-                is_aquatic_species = True
-                break
-        
-        for kw in deep_keywords:
-            if kw in common_name or kw in desc:
-                is_deep_sea = True
-                is_aquatic_species = True
-                break
-        
-        # 4. 从能力判断（同时检查中英文）
+        # === 3. 从能力判断深海/热泉 ===
         caps_lower = [c.lower() for c in caps] if caps else []
         caps_set = set(caps_lower + list(caps if caps else []))
         if "chemosynthesis" in caps_set or "化能合成" in caps_set:
@@ -569,10 +663,20 @@ class SuitabilityService:
             is_aquatic_species = True
             is_hydrothermal = True
         
-        # 5. 【新增】从 diet_type 判断
+        # === 4. Embedding语义兜底（仅当 habitat_type 未知时）===
+        # 如果 habitat_type 为空或未知，使用 embedding 判断
+        if habitat not in AQUATIC_HABITATS | {"terrestrial", "aerial", "amphibious"}:
+            # 尝试使用 embedding 判断水生性
+            aquatic_score = self._compute_aquatic_score_by_embedding(species)
+            if aquatic_score > 0.7:
+                is_aquatic_species = True
+            elif aquatic_score > 0.4:
+                # 可能是两栖
+                pass  # 保持默认
+        
+        # === 5. 从 diet_type 补充判断 ===
         diet_type = (getattr(species, 'diet_type', '') or '').lower()
         if diet_type == "autotroph" and is_deep_sea:
-            # 深海自养生物 = 化能自养
             is_hydrothermal = True
         
         # D0: 热量偏好 (0=极寒, 0.5=温和, 1=极热)
@@ -886,13 +990,14 @@ class SuitabilityService:
         if is_aquatic_species and is_land_tile:
             # 两栖物种（0.3-0.6）有一定适应性
             if is_amphibious:
-                return (0.4, "两栖物种在陆地受限")
+                return (0.3, "两栖物种在陆地受限")
             # 深海/热泉物种在陆地完全无法生存
             if is_deep_sea_species or is_hydrothermal_species:
-                return (0.0, "深海/热泉物种无法在陆地生存")
-            # 一般水生物种
-            # 水域性越高，惩罚越重
-            penalty = max(0.02, 0.15 * (1 - species_aquatic))
+                return (0.01, "深海/热泉物种无法在陆地生存")
+            # 一般水生物种 - 严厉惩罚！
+            # 水域性1.0 -> 惩罚0.02 (宜居度2%)
+            # 水域性0.7 -> 惩罚0.05 (宜居度5%)
+            penalty = max(0.02, 0.1 * (1.0 - species_aquatic))
             return (penalty, "水生物种无法在陆地生存")
         
         # 规则2: 陆生物种（水域性 < 0.3）不能在水中生存
@@ -900,10 +1005,10 @@ class SuitabilityService:
             # 如果是浅水区（深度 < 0.4），给一点点机会
             if tile_depth < 0.4:
                 # 水域性越低，惩罚越重
-                penalty = max(0.1, 0.3 * species_aquatic)
+                penalty = max(0.05, 0.2 * species_aquatic)
                 return (penalty, "陆生物种在浅水区受限")
             # 深水区完全无法生存
-            return (0.0, "陆生物种无法在水中生存")
+            return (0.01, "陆生物种无法在水中生存")
         
         # 规则3: 深海物种（深度偏好 > 0.7）需要深水环境
         if is_deep_sea_species and is_water_tile and not is_deep_water_tile:
@@ -941,7 +1046,13 @@ class SuitabilityService:
         species: "Species", 
         tile: "MapTile"
     ) -> SuitabilityResult:
-        """计算单个物种-地块的宜居度"""
+        """计算单个物种-地块的宜居度 (v2.1 平衡版)
+        
+        【v2.1 设计目标】
+        - 各项指标都合格时（单维度>80%），综合宜居度应该>90%
+        - 单维度使用相同的计算标准
+        - 只有极端不匹配时才会大幅降低宜居度
+        """
         self._stats["compute_calls"] += 1
         
         lineage_code = getattr(species, 'lineage_code', '')
@@ -959,18 +1070,37 @@ class SuitabilityService:
         sp_features = self._species_feature_cache[lineage_code]
         tile_features = self._tile_feature_cache[tile_id]
         
+        # 【v2.1】调整高斯核标准差
+        # 标准差0.25：差异0.1时得分97%，差异0.2时得分85%，差异0.3时得分70%
+        GAUSSIAN_SIGMA = 0.25
+        SINGLE_DIM_SIGMA = 0.25  # 与综合计算使用相同标准
+        
         # 计算特征相似度 (高斯距离)
         diff = sp_features - tile_features
         weighted_sq_diff = DIMENSION_WEIGHTS * (diff ** 2)
         distance = np.sqrt(np.sum(weighted_sq_diff))
-        feature_score = float(np.exp(-distance ** 2 / (2 * 0.4 ** 2)))
+        feature_score = float(np.exp(-distance ** 2 / (2 * GAUSSIAN_SIGMA ** 2)))
         
-        # 特征分解
+        # 【v2.1】只在极端情况下应用额外惩罚
+        # 温度差异 > 0.4 或 湿度差异 > 0.5 时才惩罚（极端不匹配）
+        thermal_diff = abs(sp_features[0] - tile_features[0])
+        moisture_diff = abs(sp_features[1] - tile_features[1])
+        
+        extreme_penalty = 1.0
+        if thermal_diff > 0.4:
+            # 极端温度不匹配：差异0.4时惩罚开始，差异0.6时归零
+            extreme_penalty *= max(0.1, 1.0 - (thermal_diff - 0.4) * 4.5)
+        if moisture_diff > 0.5:
+            # 极端湿度不匹配
+            extreme_penalty *= max(0.2, 1.0 - (moisture_diff - 0.5) * 3.0)
+        
+        feature_score *= extreme_penalty
+        
+        # 特征分解 - 使用相同的标准差确保一致性
         feature_breakdown = {}
         for i, name in enumerate(DIMENSION_NAMES):
-            # 单维度相似度
             single_diff = abs(sp_features[i] - tile_features[i])
-            single_score = float(np.exp(-single_diff ** 2 / (2 * 0.3 ** 2)))
+            single_score = float(np.exp(-single_diff ** 2 / (2 * SINGLE_DIM_SIGMA ** 2)))
             feature_breakdown[name] = round(single_score, 3)
         
         # 语义相似度 (如果启用)
@@ -1234,6 +1364,205 @@ class SuitabilityService:
         self._cache_turn = -1
         self._recent_hotspot_ids.clear()
         self._semantic_store_dirty = False
+        # 【v2.0】清除增强适宜度缓存
+        self._enhanced_suitability_cache = None
+        self._niche_similarity_cache = None
+        if self._tensor_calculator is not None:
+            self._tensor_calculator.clear_cache()
+    
+    # ========================================================================
+    # 【v2.0】增强适宜度计算接口
+    # ========================================================================
+    
+    def compute_enhanced_suitability(
+        self,
+        species_list: Sequence["Species"],
+        env_tensor: np.ndarray,
+        pop_tensor: np.ndarray,
+        habitat_mask: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """计算增强适宜度（Taichi GPU 加速）
+        
+        综合实现：
+        1. 收紧环境容忍度 - 温度/湿度/盐度等
+        2. 生态位拥挤惩罚 - 同营养级竞争排斥
+        3. 资源分割因子 - 相似物种分割资源
+        4. 专化度/泛化度权衡
+        
+        Args:
+            species_list: 物种列表
+            env_tensor: 环境张量 (C, H, W)
+            pop_tensor: 种群张量 (S, H, W)
+            habitat_mask: 栖息地掩码 (S, H, W)
+            
+        Returns:
+            增强适宜度矩阵 (S, H, W)
+        """
+        self._stats["enhanced_computes"] += 1
+        
+        if self._tensor_calculator is None:
+            # 降级到传统计算
+            logger.warning("[SuitabilityService] 张量计算器不可用，使用传统适宜度")
+            return self._compute_traditional_suitability(species_list, env_tensor, pop_tensor, habitat_mask)
+        
+        try:
+            result = self._tensor_calculator.compute_all(
+                species_list=species_list,
+                env_tensor=env_tensor,
+                pop_tensor=pop_tensor,
+                habitat_mask=habitat_mask,
+            )
+            
+            # 缓存相似度矩阵（用于竞争计算）
+            self._niche_similarity_cache = result.niche_similarity
+            self._enhanced_suitability_cache = result.suitability
+            
+            logger.info(
+                f"[SuitabilityService] 增强适宜度计算完成: "
+                f"avg={result.metrics.avg_suitability:.3f}, "
+                f"range=[{result.metrics.min_suitability:.3f}, {result.metrics.max_suitability:.3f}], "
+                f"time={result.metrics.total_time_ms:.1f}ms"
+            )
+            
+            return result.suitability
+            
+        except Exception as e:
+            logger.error(f"[SuitabilityService] 增强适宜度计算失败: {e}", exc_info=True)
+            return self._compute_traditional_suitability(species_list, env_tensor, pop_tensor, habitat_mask)
+    
+    def _compute_traditional_suitability(
+        self,
+        species_list: Sequence["Species"],
+        env_tensor: np.ndarray,
+        pop_tensor: np.ndarray,
+        habitat_mask: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """传统适宜度计算（后备方案）"""
+        S = len(species_list)
+        _, H, W = env_tensor.shape
+        
+        if S == 0:
+            return np.array([], dtype=np.float32)
+        
+        result = np.ones((S, H, W), dtype=np.float32) * 0.5
+        
+        if habitat_mask is not None:
+            result *= habitat_mask
+        
+        return result
+    
+    def get_niche_similarity_matrix(self) -> np.ndarray | None:
+        """获取缓存的生态位相似度矩阵
+        
+        用于竞争计算等场景。
+        
+        Returns:
+            (S, S) 相似度矩阵，或 None 如果未计算
+        """
+        return self._niche_similarity_cache
+    
+    def apply_crowding_penalty(
+        self,
+        base_suitability: np.ndarray,
+        species_list: Sequence["Species"],
+        pop_tensor: np.ndarray,
+        penalty_per_species: float = 0.15,
+        max_penalty: float = 0.50,
+        trophic_tolerance: float = 0.5,
+    ) -> np.ndarray:
+        """单独应用生态位拥挤惩罚
+        
+        可用于对现有适宜度矩阵进行后处理。
+        
+        Args:
+            base_suitability: 基础适宜度 (S, H, W)
+            species_list: 物种列表
+            pop_tensor: 种群张量 (S, H, W)
+            penalty_per_species: 每个竞争者的惩罚
+            max_penalty: 最大惩罚
+            trophic_tolerance: 营养级容忍度
+            
+        Returns:
+            调整后适宜度 (S, H, W)
+        """
+        S = len(species_list)
+        if S == 0:
+            return base_suitability
+        
+        trophic_levels = np.array([sp.trophic_level for sp in species_list], dtype=np.float32)
+        
+        result = base_suitability.copy()
+        
+        for s in range(S):
+            my_trophic = trophic_levels[s]
+            
+            # 找同营养级竞争者
+            same_trophic_mask = np.abs(trophic_levels - my_trophic) <= trophic_tolerance
+            same_trophic_mask[s] = False
+            
+            # 计算每个地块的竞争者数量
+            competitor_pop = pop_tensor[same_trophic_mask]
+            if competitor_pop.shape[0] > 0:
+                competitor_count = np.sum(competitor_pop > 0, axis=0)
+                crowding_factor = 1.0 / (1.0 + competitor_count * penalty_per_species)
+                crowding_factor = np.maximum(1.0 - max_penalty, crowding_factor)
+                result[s] *= crowding_factor
+        
+        return result
+    
+    def apply_resource_split(
+        self,
+        base_suitability: np.ndarray,
+        species_list: Sequence["Species"],
+        pop_tensor: np.ndarray,
+        split_coefficient: float = 0.3,
+        min_factor: float = 0.3,
+    ) -> np.ndarray:
+        """单独应用资源分割惩罚
+        
+        Args:
+            base_suitability: 基础适宜度 (S, H, W)
+            species_list: 物种列表
+            pop_tensor: 种群张量 (S, H, W)
+            split_coefficient: 分割系数
+            min_factor: 最小分割因子
+            
+        Returns:
+            调整后适宜度 (S, H, W)
+        """
+        S = len(species_list)
+        if S == 0:
+            return base_suitability
+        
+        # 获取或计算生态位相似度
+        niche_sim = self._niche_similarity_cache
+        if niche_sim is None or niche_sim.shape[0] != S:
+            # 简化计算：基于营养级和栖息地类型
+            niche_sim = np.zeros((S, S), dtype=np.float32)
+            trophic_levels = np.array([sp.trophic_level for sp in species_list])
+            for i in range(S):
+                for j in range(S):
+                    if i != j:
+                        trophic_diff = abs(trophic_levels[i] - trophic_levels[j])
+                        niche_sim[i, j] = max(0, 1.0 - trophic_diff * 0.5)
+        
+        result = base_suitability.copy()
+        _, H, W = base_suitability.shape
+        
+        for s in range(S):
+            total_overlap = np.zeros((H, W), dtype=np.float32)
+            
+            for other in range(S):
+                if other == s:
+                    continue
+                overlap_contrib = niche_sim[s, other] * (pop_tensor[other] > 0).astype(np.float32)
+                total_overlap += overlap_contrib
+            
+            split_factor = 1.0 / (1.0 + total_overlap * split_coefficient)
+            split_factor = np.maximum(min_factor, split_factor)
+            result[s] *= split_factor
+        
+        return result
     
     def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
@@ -1244,6 +1573,10 @@ class SuitabilityService:
             "semantic_species_cached": len(self._species_semantic_cache),
             "semantic_tiles_cached": len(self._tile_semantic_cache),
             "matrix_cached": self._matrix_cache is not None,
+            # 【v2.0】增强适宜度统计
+            "enhanced_suitability_cached": self._enhanced_suitability_cache is not None,
+            "niche_similarity_cached": self._niche_similarity_cache is not None,
+            "tensor_calculator_available": self._tensor_calculator is not None,
         }
 
 

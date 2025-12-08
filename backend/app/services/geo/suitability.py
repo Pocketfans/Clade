@@ -136,43 +136,50 @@ def compute_suitability_matrix(
     humidities = np.array([t.humidity for t in tiles])
     resources = np.array([t.resources for t in tiles])
     
-    # ============ 向量化计算温度适应度 ============
-    # 热带（>20°C）：使用耐热性
-    # 寒冷（<5°C）：使用耐寒性
-    # 温和（5-20°C）：基础分0.8
+    # ============ v2.0 参数配置（极端收紧版）============
+    TEMP_COEF = 1.0          # 温度容忍系数（5-10°C范围）
+    TEMP_PENALTY = 0.4       # 温度惩罚率
+    HUMIDITY_PENALTY = 4.0   # 湿度惩罚率
+    RESOURCE_THRESHOLD = 900.0  # 资源门槛
     
-    # 创建温度分数矩阵 (N, M)
-    temp_score = np.zeros((n_species, n_tiles))
+    # ============ 向量化计算温度适应度 (v2.0 收紧版) ============
+    # 最优温度 = 15 + (heat - cold) * 2
+    # 容忍范围 = (cold + heat) * coef，默认5-10°C
     
-    # 使用广播计算
-    hot_mask = temperatures > 20  # (M,)
-    cold_mask = temperatures < 5  # (M,)
-    mild_mask = ~hot_mask & ~cold_mask  # (M,)
+    optimal_temp = 15.0 + (heat_pref - cold_pref) * 2.0  # (N,)
+    tolerance_range = (cold_pref + heat_pref) * TEMP_COEF  # (N,)
     
-    # 热区：temp_score = heat_pref / 10
-    temp_score[:, hot_mask] = (heat_pref[:, np.newaxis] / 10.0)[:, :np.sum(hot_mask)]
+    min_temp = optimal_temp - tolerance_range / 2  # (N,)
+    max_temp = optimal_temp + tolerance_range / 2  # (N,)
     
-    # 冷区：temp_score = cold_pref / 10
-    temp_score[:, cold_mask] = (cold_pref[:, np.newaxis] / 10.0)[:, :np.sum(cold_mask)]
+    # 计算温度分数矩阵 (N, M)
+    temp_diff_low = np.maximum(0, min_temp[:, np.newaxis] - temperatures[np.newaxis, :])
+    temp_diff_high = np.maximum(0, temperatures[np.newaxis, :] - max_temp[:, np.newaxis])
+    temp_diff = np.minimum(temp_diff_low, temp_diff_high)  # 取较小的偏差
+    temp_diff = np.where(
+        (temperatures[np.newaxis, :] >= min_temp[:, np.newaxis]) & 
+        (temperatures[np.newaxis, :] <= max_temp[:, np.newaxis]),
+        0.0,
+        np.maximum(temp_diff_low, temp_diff_high)
+    )
     
-    # 温和区：固定0.8
-    temp_score[:, mild_mask] = 0.8
+    # 每度扣0.4，超过2.5度归零
+    temp_score = np.maximum(0.0, 1.0 - temp_diff * TEMP_PENALTY)
     
-    # ============ 向量化计算湿度适应度 ============
-    # 物种偏好湿度 = 1 - drought_pref/10（耐旱性越高，偏好越干燥）
-    species_humidity_pref = 1.0 - drought_pref / 10.0  # (N,)
+    # ============ 向量化计算湿度适应度 (v2.0 收紧版) ============
+    # 物种偏好湿度 = 1 - drought_pref*0.08
+    species_humidity_pref = 1.0 - drought_pref * 0.08  # (N,)
     
-    # 湿度匹配度 = 1 - |实际湿度 - 偏好湿度|
+    # 湿度匹配度（v2.0：系数从1.0提升到4.0）
     humidity_diff = np.abs(humidities[np.newaxis, :] - species_humidity_pref[:, np.newaxis])
-    humidity_score = 1.0 - humidity_diff  # (N, M)
-    humidity_score = np.clip(humidity_score, 0.0, 1.0)
+    humidity_score = np.maximum(0.0, 1.0 - humidity_diff * HUMIDITY_PENALTY)  # (N, M)
     
-    # ============ 向量化计算资源适应度 ============
-    # 使用对数归一化（资源是指数分布的）
-    resource_score = np.minimum(1.0, np.log(resources + 1) / np.log(1001))  # (M,)
+    # ============ 向量化计算资源适应度 (v2.0 收紧版) ============
+    # 资源门槛从500提升到900
+    resource_score = np.minimum(1.0, resources / RESOURCE_THRESHOLD)  # (M,)
     resource_score = resource_score[np.newaxis, :].repeat(n_species, axis=0)  # (N, M)
     
-    # ============ 组合得分 ============
+    # ============ 组合得分 (v2.0 调整权重) ============
     suitability = (
         temp_score * weights["temp"] +
         humidity_score * weights["humidity"] +
@@ -190,7 +197,13 @@ def compute_suitability_for_species(
     tiles: Sequence['MapTile'],
     include_resource: bool = True
 ) -> np.ndarray:
-    """计算单个物种对所有地块的适宜度（向量化）
+    """计算单个物种对所有地块的适宜度 (v2.0 收紧版)
+    
+    【v2.0 改进】
+    - 温度范围：5-10°C（极窄）
+    - 温度惩罚：0.4/度
+    - 湿度惩罚：4.0系数
+    - 资源门槛：900
     
     Args:
         species: 目标物种
@@ -205,6 +218,12 @@ def compute_suitability_for_species(
     
     n_tiles = len(tiles)
     
+    # v2.0 参数配置
+    TEMP_COEF = 1.0
+    TEMP_PENALTY = 0.4
+    HUMIDITY_PENALTY = 4.0
+    RESOURCE_THRESHOLD = 900.0
+    
     # 提取物种属性
     heat_pref = species.abstract_traits.get("耐热性", 5)
     cold_pref = species.abstract_traits.get("耐寒性", 5)
@@ -214,25 +233,29 @@ def compute_suitability_for_species(
     temperatures = np.array([t.temperature for t in tiles])
     humidities = np.array([t.humidity for t in tiles])
     
-    # 温度适应度
-    temp_score = np.zeros(n_tiles)
-    hot_mask = temperatures > 20
-    cold_mask = temperatures < 5
-    mild_mask = ~hot_mask & ~cold_mask
+    # 温度适应度 (v2.0 收紧版)
+    optimal_temp = 15.0 + (heat_pref - cold_pref) * 2.0
+    tolerance_range = (cold_pref + heat_pref) * TEMP_COEF
+    min_temp = optimal_temp - tolerance_range / 2
+    max_temp = optimal_temp + tolerance_range / 2
     
-    temp_score[hot_mask] = heat_pref / 10.0
-    temp_score[cold_mask] = cold_pref / 10.0
-    temp_score[mild_mask] = 0.8
+    in_range = (temperatures >= min_temp) & (temperatures <= max_temp)
+    temp_diff = np.where(
+        temperatures < min_temp,
+        min_temp - temperatures,
+        np.where(temperatures > max_temp, temperatures - max_temp, 0.0)
+    )
+    temp_score = np.where(in_range, 1.0, np.maximum(0.0, 1.0 - temp_diff * TEMP_PENALTY))
     
-    # 湿度适应度
-    humidity_pref = 1.0 - drought_pref / 10.0
-    humidity_score = 1.0 - np.abs(humidities - humidity_pref)
-    humidity_score = np.clip(humidity_score, 0.0, 1.0)
+    # 湿度适应度 (v2.0 收紧版)
+    humidity_pref = 1.0 - drought_pref * 0.08
+    humidity_diff = np.abs(humidities - humidity_pref)
+    humidity_score = np.maximum(0.0, 1.0 - humidity_diff * HUMIDITY_PENALTY)
     
     if include_resource:
         resources = np.array([t.resources for t in tiles])
-        resource_score = np.minimum(1.0, resources / 500.0)
-        suitability = temp_score * 0.4 + humidity_score * 0.3 + resource_score * 0.3
+        resource_score = np.minimum(1.0, resources / RESOURCE_THRESHOLD)
+        suitability = temp_score * 0.35 + humidity_score * 0.25 + resource_score * 0.40
     else:
         suitability = temp_score * 0.5 + humidity_score * 0.5
     

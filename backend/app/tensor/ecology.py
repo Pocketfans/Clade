@@ -81,7 +81,10 @@ def _load_ecology_kernels():
 
 @dataclass
 class EcologyConfig:
-    """生态计算配置"""
+    """生态计算配置
+    
+    【v2.1】参数参考 EcologyConfig (models/config.py) 中的原有设置
+    """
     # === 死亡率参数 ===
     base_mortality: float = 0.05          # 基础死亡率
     temp_mortality_weight: float = 0.3    # 温度死亡率权重
@@ -90,15 +93,19 @@ class EcologyConfig:
     trophic_weight: float = 0.3           # 营养级死亡率权重
     
     # === 扩散参数 ===
-    base_diffusion_rate: float = 0.15     # 基础扩散率
-    max_diffusion_rate: float = 0.8       # 最大扩散率
+    # 参考 config.py: diffusion_rate = 0.1, dispersal_cost_base = 0.1
+    base_diffusion_rate: float = 0.1      # 基础扩散率（与config.py一致）
+    max_diffusion_rate: float = 0.3       # 最大扩散率（限制早期时代）
     
     # === 迁徙参数 ===
     pressure_threshold: float = 0.12      # 压力迁徙阈值
     saturation_threshold: float = 0.60    # 饱和度阈值
-    max_migration_distance: float = 15.0  # 最大迁徙距离
-    base_migration_rate: float = 0.15     # 基础迁徙率
-    score_threshold: float = 0.08         # 迁徙分数阈值
+    # 参考 config.py: terrestrial_top_k=4, marine_top_k=3 等
+    # 物种分布地块数有限，迁徙应该是逐步的
+    max_migration_distance: float = 2.0   # 最大迁徙距离（限制为相邻2格）
+    base_migration_rate: float = 0.1      # 基础迁徙率（与扩散率一致）
+    # 参考 config.py: suitability_cutoff = 0.25
+    score_threshold: float = 0.25         # 迁徙分数阈值（与宜居度阈值一致）
     
     # === 繁殖参数 ===
     base_birth_rate: float = 0.1          # 基础出生率
@@ -689,21 +696,31 @@ class TensorEcologyEngine:
     # ========================================================================
     
     def _get_era_scaling(self, turn_index: int) -> float:
-        """获取时代缩放因子"""
+        """获取时代缩放因子
+        
+        【v2.1】现在有相邻性检查，时代缩放主要影响扩散速度
+        物种只能向相邻地块扩散，所以缩放因子可以适当提高
+        但不应该过于极端（原来的100x太高了）
+        
+        参考 config.py 中物种分布地块限制：
+        - terrestrial_top_k = 4
+        - marine_top_k = 3
+        物种分布是有限的，不会无限扩散
+        """
         if not self.config.era_scaling_enabled:
             return 1.0
         
-        # 简化的时代缩放
+        # 合理的时代缩放：早期快，后期慢
         if turn_index < 10:
-            return 40.0  # 太古宙
+            return 5.0   # 太古宙：较快扩散（微生物时代）
         elif turn_index < 30:
-            return 100.0  # 元古宙
+            return 8.0   # 元古宙：快速扩散（简单生命爆发）
         elif turn_index < 50:
-            return 2.0  # 古生代
+            return 3.0   # 古生代：中等速度
         elif turn_index < 70:
-            return 1.0  # 中生代
+            return 1.5   # 中生代：接近正常
         else:
-            return 0.5  # 新生代
+            return 1.0   # 新生代：正常速度
     
     def clear_cache(self) -> None:
         """清空缓存"""

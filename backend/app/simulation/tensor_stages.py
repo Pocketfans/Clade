@@ -202,14 +202,36 @@ class TensorStateInitStage(BaseStage):
                             if 0 <= r < H and 0 <= c < W:
                                 pop[idx, r, c] += pop_per_habitat
                 else:
-                    # 均匀分布到所有陆地
-                    land_mask = env[4] > 0.5
-                    land_count = land_mask.sum()
-                    if land_count > 0:
-                        pop[idx, land_mask] = total_pop / land_count
+                    # 【v2.1修复】没有栖息地信息时，只分布到有限的起始地块
+                    # 参考 config.py: terrestrial_top_k = 4, marine_top_k = 3
+                    # 不再均匀分布到所有陆地，而是选择少量高资源地块
+                    habitat_type = (getattr(sp, 'habitat_type', 'terrestrial') or 'terrestrial').lower()
+                    
+                    # 根据栖息地类型选择合适的地块
+                    if habitat_type in ('marine', 'deep_sea', 'freshwater'):
+                        mask = env[5] > 0.5  # 海洋
                     else:
-                        # 分布到整个地图
-                        pop[idx, :, :] = total_pop / (H * W)
+                        mask = env[4] > 0.5  # 陆地
+                    
+                    if mask.sum() > 0:
+                        # 按资源排序，只选择前 4 个最高资源的地块
+                        resources = env[3] * mask  # 资源 × 栖息地掩码
+                        flat_resources = resources.flatten()
+                        top_k = min(4, int(mask.sum()))  # 最多 4 个地块
+                        top_indices = np.argpartition(flat_resources, -top_k)[-top_k:]
+                        top_indices = top_indices[flat_resources[top_indices] > 0]
+                        
+                        if len(top_indices) > 0:
+                            pop_per_tile = total_pop / len(top_indices)
+                            for flat_idx in top_indices:
+                                r, c = flat_idx // W, flat_idx % W
+                                pop[idx, r, c] = pop_per_tile
+                        else:
+                            # 实在没有合适地块，放到地图中心
+                            pop[idx, H // 2, W // 2] = total_pop
+                    else:
+                        # 没有合适栖息地类型，放到地图中心
+                        pop[idx, H // 2, W // 2] = total_pop
         
         # 构建物种参数 (S, F)
         species_params = np.zeros((S, 4), dtype=np.float32)
@@ -525,9 +547,12 @@ class TensorStateSyncStage(BaseStage):
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
         from ..tensor import get_compute
         from ..repositories.species_repository import species_repository
+        from ..repositories.environment_repository import environment_repository
+        from ..models.environment import HabitatPopulation
         
         tensor_state = getattr(ctx, "tensor_state", None)
         species_batch = getattr(ctx, "species_batch", []) or []
+        all_tiles = getattr(ctx, "all_tiles", []) or []
         
         if not species_batch:
             logger.debug("[张量同步] 无物种，跳过")
@@ -536,8 +561,15 @@ class TensorStateSyncStage(BaseStage):
         # 构建 lineage -> species 映射
         species_by_lineage = {sp.lineage_code: sp for sp in species_batch}
         
+        # 构建 tile_id -> (y, x) 映射（用于栖息地同步）
+        tile_coords = {}
+        for tile in all_tiles:
+            if hasattr(tile, 'id') and tile.id is not None:
+                tile_coords[(tile.y, tile.x)] = tile.id
+        
         sync_count = 0
         extinct_count = 0
+        habitat_sync_count = 0
         
         # 优先从 tensor_state 获取种群数据
         if tensor_state is not None:
@@ -545,31 +577,72 @@ class TensorStateSyncStage(BaseStage):
                 compute = get_compute()
                 pop = tensor_state.pop
                 species_map = tensor_state.species_map
+                S, H, W = pop.shape
                 
                 # 计算每个物种的总种群
                 totals = compute.sum_population(pop)
                 
+                # 【v2.0 新增】同步栖息地分布
+                new_habitats = []
+                turn_index = getattr(ctx, "turn_index", 0)
+                
                 for lineage, idx in species_map.items():
-                    if idx < len(totals):
-                        new_population = max(0, int(totals[idx]))
+                    if idx >= len(totals):
+                        continue
+                    
+                    new_population = max(0, int(totals[idx]))
+                    
+                    # 更新 new_populations
+                    ctx.new_populations[lineage] = new_population
+                    
+                    # 更新 species_batch 中的物种对象
+                    if lineage in species_by_lineage:
+                        sp = species_by_lineage[lineage]
+                        old_pop = sp.morphology_stats.get("population", 0)
+                        sp.morphology_stats["population"] = new_population
                         
-                        # 更新 new_populations
-                        ctx.new_populations[lineage] = new_population
+                        # 检查灭绝
+                        if new_population <= 0 and old_pop > 0:
+                            sp.status = "extinct"
+                            sp.morphology_stats["extinction_turn"] = turn_index
+                            extinct_count += 1
+                            logger.info(f"[张量同步] 物种 {lineage} 灭绝")
                         
-                        # 更新 species_batch 中的物种对象（使用 morphology_stats）
-                        if lineage in species_by_lineage:
-                            sp = species_by_lineage[lineage]
-                            old_pop = sp.morphology_stats.get("population", 0)
-                            sp.morphology_stats["population"] = new_population
+                        # 【v2.0 新增】同步栖息地分布（按地块）
+                        if new_population > 0 and tile_coords:
+                            species_pop_2d = pop[idx]  # (H, W)
+                            total_pop_in_tensor = species_pop_2d.sum()
                             
-                            # 检查灭绝
-                            if new_population <= 0 and old_pop > 0:
-                                sp.status = "extinct"
-                                sp.morphology_stats["extinction_turn"] = ctx.turn_index
-                                extinct_count += 1
-                                logger.info(f"[张量同步] 物种 {lineage} 灭绝")
-                        
-                        sync_count += 1
+                            if total_pop_in_tensor > 0:
+                                # 找到有种群的地块
+                                for r in range(H):
+                                    for c in range(W):
+                                        tile_pop = int(species_pop_2d[r, c])
+                                        if tile_pop > 0:
+                                            tile_id = tile_coords.get((r, c))
+                                            if tile_id is not None:
+                                                # 计算适宜度（基于种群比例）
+                                                suit = min(1.0, tile_pop / (total_pop_in_tensor / 10 + 1))
+                                                new_habitats.append(
+                                                    HabitatPopulation(
+                                                        tile_id=tile_id,
+                                                        species_id=sp.id,
+                                                        population=tile_pop,
+                                                        suitability=suit,
+                                                        turn_index=turn_index,
+                                                    )
+                                                )
+                                                habitat_sync_count += 1
+                    
+                    sync_count += 1
+                
+                # 批量写入栖息地数据
+                if new_habitats:
+                    try:
+                        environment_repository.write_habitats(new_habitats)
+                        logger.info(f"[张量同步] 同步 {len(new_habitats)} 条栖息地记录")
+                    except Exception as e:
+                        logger.warning(f"[张量同步] 写入栖息地失败: {e}")
                 
             except Exception as e:
                 logger.warning(f"[张量同步] 从 tensor_state 同步失败: {e}")
@@ -599,7 +672,8 @@ class TensorStateSyncStage(BaseStage):
                 logger.warning(f"[张量同步] 持久化物种 {sp.lineage_code} 失败: {e}")
         
         logger.info(
-            f"[张量同步] 完成: 同步={sync_count}, 持久化={persisted_count}, 灭绝={extinct_count}"
+            f"[张量同步] 完成: 同步={sync_count}, 栖息地={habitat_sync_count}, "
+            f"持久化={persisted_count}, 灭绝={extinct_count}"
         )
 
 

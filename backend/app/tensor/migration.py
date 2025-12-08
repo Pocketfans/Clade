@@ -73,26 +73,34 @@ def _load_migration_kernels():
 
 @dataclass
 class MigrationConfig:
-    """迁徙计算配置"""
+    """迁徙计算配置
+    
+    【v2.1】参数参考 EcologyConfig (models/config.py) 中的原有设置
+    - migration_suitability_bias = 0.6
+    - migration_prey_bias = 0.3
+    - suitability_cutoff = 0.25
+    - dispersal_cost_base = 0.1
+    """
     # 压力迁徙阈值
     pressure_threshold: float = 0.12
     # 饱和度阈值
     saturation_threshold: float = 0.60
-    # 最大迁徙距离
-    max_migration_distance: float = 15.0
-    # 基础迁徙率
-    base_migration_rate: float = 0.15
+    # 最大迁徙距离（限制为相邻2格，配合相邻性检查）
+    max_migration_distance: float = 2.0
+    # 基础迁徙率（与 dispersal_cost_base 一致）
+    base_migration_rate: float = 0.1
     # 压力驱动迁徙率倍增
     pressure_migration_boost: float = 2.0
-    # 迁徙分数阈值
-    score_threshold: float = 0.08
-    # 适宜度引导扩散率
+    # 迁徙分数阈值（与 suitability_cutoff 一致）
+    score_threshold: float = 0.25
+    # 适宜度引导扩散率（与 diffusion_rate 一致）
     guided_diffusion_rate: float = 0.1
     
     # === 猎物追踪配置 ===
+    # 参考 config.py: migration_prey_bias = 0.3
     # 猎物稀缺阈值（低于此值触发追踪迁徙）
     prey_scarcity_threshold: float = 0.40
-    # 猎物追踪权重（在迁徙决策中的占比）
+    # 猎物追踪权重（与 migration_prey_bias 一致）
     prey_tracking_weight: float = 0.3
     # 消费者最低营养级（T2+才追踪猎物）
     consumer_trophic_threshold: float = 2.0

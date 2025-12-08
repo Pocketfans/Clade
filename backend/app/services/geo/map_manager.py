@@ -3153,28 +3153,39 @@ class MapStateManager:
         trophic_level = getattr(species, 'trophic_level', 1.0) or 1.0
         is_consumer = trophic_level >= 2.0
         
-        # === 温度适应性 ===
+        # === 温度适应性 (v2.0 收紧版) ===
+        # 【v2.0】温度范围：5-10°C（极窄）
         heat_tolerance = traits.get("耐热性", 5)
         cold_tolerance = traits.get("耐寒性", 5)
         
-        ideal_temp_min = -10 + (15 - cold_tolerance) * 2
-        ideal_temp_max = 10 + heat_tolerance * 2
+        # 最优温度和容忍范围
+        TEMP_COEF = 1.0  # 温度容忍系数
+        TEMP_PENALTY = 0.4  # 温度惩罚率
+        
+        optimal_temp = 15.0 + (heat_tolerance - cold_tolerance) * 2.0
+        tolerance_range = (cold_tolerance + heat_tolerance) * TEMP_COEF
+        ideal_temp_min = optimal_temp - tolerance_range / 2
+        ideal_temp_max = optimal_temp + tolerance_range / 2
         
         tile_temp = tile.temperature
         if ideal_temp_min <= tile_temp <= ideal_temp_max:
             temp_score = 1.0
         elif tile_temp < ideal_temp_min:
             diff = ideal_temp_min - tile_temp
-            temp_score = max(0.2, 1.0 - diff / 30)
+            # 【v2.0】每度扣0.4，超过2.5度归零
+            temp_score = max(0.0, 1.0 - diff * TEMP_PENALTY)
         else:
             diff = tile_temp - ideal_temp_max
-            temp_score = max(0.2, 1.0 - diff / 30)
+            temp_score = max(0.0, 1.0 - diff * TEMP_PENALTY)
         
-        # === 湿度适应性 ===
+        # === 湿度适应性 (v2.0 收紧版) ===
+        # 【v2.0】湿度惩罚：从1.5增加到4.0
+        HUMIDITY_PENALTY = 4.0
+        
         drought_tolerance = traits.get("耐旱性", 5)
-        ideal_humidity = 0.7 - drought_tolerance * 0.04
+        ideal_humidity = 1.0 - drought_tolerance * 0.08
         humidity_diff = abs(tile.humidity - ideal_humidity)
-        humidity_score = max(0.3, 1.0 - humidity_diff * 1.5)
+        humidity_score = max(0.0, 1.0 - humidity_diff * HUMIDITY_PENALTY)
         
         # === 资源/食物适应性（关键改进） ===
         tile_id = tile.id if tile.id is not None else 0

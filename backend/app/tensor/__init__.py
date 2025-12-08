@@ -15,11 +15,19 @@ Tensor utilities and state containers.
 - TensorMigrationEngine: GPU 加速的张量迁徙引擎
 - NicheTensorCompute: 张量化生态位重叠计算
 - HybridizationTensorCompute: 张量化杂交候选筛选
+- TensorSuitabilityCalculator: 【v2.0】增强适宜度计算（生态位分化）
 
 分工策略：
-- Taichi: 大规模并行计算（死亡率、扩散、繁殖、竞争、迁徙）
+- Taichi: 大规模并行计算（死亡率、扩散、繁殖、竞争、迁徙、适宜度）
 - NumPy: 简单操作（聚合、筛选、掩码）
-- 批量矩阵: O(n²) 计算（生态位重叠、杂交候选）
+- 批量矩阵: O(n²) 计算（生态位重叠、杂交候选、生态位相似度）
+
+【v2.0 增强适宜度】
+TensorSuitabilityCalculator 实现生态位分化和竞争排斥：
+- 收紧环境容忍度（温度/湿度/盐度等）
+- 生态位拥挤惩罚（同营养级竞争排斥）
+- 资源分割因子（相似物种分割资源）
+- 专化度/泛化度权衡
 """
 
 from .config import TensorConfig, TensorBalanceConfig, TradeoffConfig
@@ -91,6 +99,24 @@ from .ecology import (
     extract_trophic_levels,
 )
 
+# 张量化竞争计算（Taichi GPU加速）
+from .competition import (
+    TensorCompetitionCalculator,
+    TensorCompetitionResult,
+    get_tensor_competition_calculator,
+    calculate_competition_tensor,
+)
+
+# 张量化适宜度计算（Taichi GPU加速 + 生态位分化）
+from .suitability import (
+    TensorSuitabilityCalculator,
+    EnhancedSuitabilityResult,
+    SuitabilityMetrics,
+    get_tensor_suitability_calculator,
+    reset_tensor_suitability_calculator,
+    compute_enhanced_suitability,
+)
+
 __all__ = [
     # 核心数据结构
     "TensorState",
@@ -151,4 +177,16 @@ __all__ = [
     "extract_species_params",
     "extract_species_prefs",
     "extract_trophic_levels",
+    # 张量化竞争计算
+    "TensorCompetitionCalculator",
+    "TensorCompetitionResult",
+    "get_tensor_competition_calculator",
+    "calculate_competition_tensor",
+    # 张量化适宜度计算
+    "TensorSuitabilityCalculator",
+    "EnhancedSuitabilityResult",
+    "SuitabilityMetrics",
+    "get_tensor_suitability_calculator",
+    "reset_tensor_suitability_calculator",
+    "compute_enhanced_suitability",
 ]

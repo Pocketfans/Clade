@@ -3331,27 +3331,46 @@ class SpeciationService:
                 logger.info(f"[栖息地计算] {child.common_name} 计算得到 {len(child_habitats)} 个栖息地")
     
     def _calculate_suitability_for_species(self, species: Species, tile) -> float:
-        """计算物种对地块的适宜度（简化版）"""
-        # 温度适应性
-        temp_pref = species.abstract_traits.get("耐热性", 5)
-        cold_pref = species.abstract_traits.get("耐寒性", 5)
+        """计算物种对地块的适宜度 (v2.0 收紧版)
         
-        if tile.temperature > 20:
-            temp_score = temp_pref / 10.0
-        elif tile.temperature < 5:
-            temp_score = cold_pref / 10.0
+        【v2.0 改进】
+        - 温度范围：5-10°C（极窄）
+        - 温度惩罚：0.4/度
+        - 湿度惩罚：4.0系数
+        - 资源门槛：900
+        """
+        # 温度适应性 (v2.0 收紧)
+        heat_res = species.abstract_traits.get("耐热性", 5)
+        cold_res = species.abstract_traits.get("耐寒性", 5)
+        
+        # 最优温度和容忍范围
+        optimal_temp = 15.0 + (heat_res - cold_res) * 2.0
+        tolerance_range = (cold_res + heat_res) * 1.0  # coef=1.0，5-10°C范围
+        
+        min_temp = optimal_temp - tolerance_range / 2
+        max_temp = optimal_temp + tolerance_range / 2
+        
+        if min_temp <= tile.temperature <= max_temp:
+            temp_score = 1.0
         else:
-            temp_score = 0.8
+            diff = min(abs(tile.temperature - min_temp), abs(tile.temperature - max_temp))
+            # 每度扣0.4，超过2.5度归零
+            temp_score = max(0.0, 1.0 - diff * 0.4)
         
-        # 湿度适应性
+        if temp_score == 0.0:
+            return 0.0
+        
+        # 湿度适应性 (v2.0 收紧)
         drought_pref = species.abstract_traits.get("耐旱性", 5)
-        humidity_score = 1.0 - abs(tile.humidity - (1.0 - drought_pref / 10.0))
+        best_humidity = 1.0 - (drought_pref * 0.08)
+        hum_diff = abs(tile.humidity - best_humidity)
+        humidity_score = max(0.0, 1.0 - hum_diff * 4.0)  # 系数从1.0增加到4.0
         
-        # 资源可用性
-        resource_score = min(1.0, tile.resources / 500.0)
+        # 资源可用性 (v2.0 收紧)
+        resource_score = min(1.0, tile.resources / 900.0)  # 门槛从500增加到900
         
         # 综合评分
-        return max(0.0, temp_score * 0.4 + humidity_score * 0.3 + resource_score * 0.3)
+        return max(0.0, temp_score * 0.35 + humidity_score * 0.25 + resource_score * 0.40)
     
     def _detect_geographic_isolation(self, lineage_code: str) -> dict:
         """检测物种是否存在地理隔离

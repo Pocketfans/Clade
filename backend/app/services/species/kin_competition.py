@@ -126,80 +126,140 @@ class KinCompetitionCalculator:
     ) -> dict[str, float]:
         """计算每个物种的综合适应度得分 (0-1)
         
-        【生物学改进】综合考虑：
-        - 种群数量（相对于同营养级平均）- 种群大=竞争优势
-        - 繁殖速度 - r策略物种恢复快
-        - 环境适应性（抗性）- 广适性物种更稳定
-        - 生态位专化度 - 专化物种在特定环境更强
-        - 【新增】种群趋势 - 正在增长的物种更有优势
-        - 【新增】物种年龄 - 老物种可能有演化包袱
+        【重构】使用相对排名和指数放大差距，确保能拉开差距
+        
+        核心因子（按重要性排序）：
+        1. 种群相对优势 (40%) - 种群数量的对数比较
+        2. 生存表现 (30%) - 基于死亡率的历史表现
+        3. 繁殖效率 (20%) - 繁殖速度与体型的综合
+        4. 生态位效率 (10%) - 营养级与资源利用效率
         """
         cfg = self._config
         scores: dict[str, float] = {}
+        n = len(species_list)
         
-        # 计算各营养级的平均种群
-        trophic_pops: dict[float, list[float]] = {}
+        if n == 0:
+            return scores
+        
+        # ========== 第1步：收集原始数据 ==========
+        raw_data: dict[str, dict] = {}
         for sp in species_list:
-            tl = round(sp.trophic_level * 2) / 2
             pop = float(sp.morphology_stats.get("population", 0) or 0)
-            if tl not in trophic_pops:
-                trophic_pops[tl] = []
-            trophic_pops[tl].append(pop)
+            death_rate = float(sp.morphology_stats.get("death_rate", 0.5) or 0.5)
+            repro = sp.abstract_traits.get("繁殖速度", 5)
+            body_size = sp.abstract_traits.get("体型", 5)
+            trophic = sp.trophic_level
+            age = sp.morphology_stats.get("age_turns", 0) or 0
+            
+            raw_data[sp.lineage_code] = {
+                "pop": pop,
+                "death_rate": death_rate,
+                "repro": repro,
+                "body_size": body_size,
+                "trophic": trophic,
+                "age": age,
+            }
         
-        trophic_avg_pop = {
-            tl: np.mean(pops) if pops else 1.0 
-            for tl, pops in trophic_pops.items()
-        }
+        # ========== 第2步：计算相对排名（0-1，1=最好）==========
+        # 使用排名而非绝对值，确保能拉开差距
         
-        for sp in species_list:
-            tl = round(sp.trophic_level * 2) / 2
-            avg_pop = trophic_avg_pop.get(tl, 1.0) or 1.0
+        def rank_normalize(values: list[float], higher_is_better: bool = True) -> list[float]:
+            """将值转换为排名分数（0-1）"""
+            if len(values) <= 1:
+                return [0.5] * len(values)
             
-            # 1. 种群因子（相对于同营养级平均）
-            pop = float(sp.morphology_stats.get("population", 0) or 0)
-            pop_factor = min(2.0, pop / avg_pop) / 2.0  # 归一化到 0-1
+            # 排序并分配排名
+            sorted_indices = np.argsort(values)
+            if higher_is_better:
+                sorted_indices = sorted_indices[::-1]  # 降序
             
-            # 2. 繁殖速度因子
-            repro_speed = sp.abstract_traits.get("繁殖速度", 5) / 10.0
+            ranks = np.zeros(len(values))
+            for rank, idx in enumerate(sorted_indices):
+                ranks[idx] = 1.0 - (rank / (len(values) - 1))  # 最好=1，最差=0
             
-            # 3. 环境适应性因子（抗性平均值）
-            resistances = [
-                sp.abstract_traits.get("耐热性", 5),
-                sp.abstract_traits.get("耐寒性", 5),
-                sp.abstract_traits.get("耐旱性", 5),
-                sp.abstract_traits.get("耐盐性", 5),
-            ]
-            resistance_factor = np.mean(resistances) / 10.0
-            
-            # 4. 专化度因子（演化潜力的反面）
-            evo_potential = sp.hidden_traits.get("evolution_potential", 0.5)
-            specialization = 1.0 - evo_potential  # 高演化潜力=低专化
-            
-            # 5. 【新增】种群趋势因子 - 正在增长的物种有优势
-            # 使用死亡率作为代理：低死亡率=正在繁荣
-            recent_death_rate = sp.morphology_stats.get("death_rate", 0.3) or 0.3
-            trend_factor = max(0.0, 1.0 - recent_death_rate * 1.5)  # 死亡率低=趋势好
-            
-            # 6. 【新增】物种年龄因子 - 新物种有适应性优势，老物种可能有演化包袱
-            species_age = sp.morphology_stats.get("age_turns", 0) or 0
-            if species_age <= 3:
-                age_factor = 0.7  # 新物种：适应性优势
-            elif species_age <= 10:
-                age_factor = 0.5  # 中等年龄
+            return ranks.tolist()
+        
+        codes = list(raw_data.keys())
+        
+        # 2.1 种群排名（对数化后排名，放大小差距）
+        pops = [np.log1p(raw_data[c]["pop"]) for c in codes]  # log(1+pop)
+        pop_ranks = rank_normalize(pops, higher_is_better=True)
+        
+        # 2.2 生存表现排名（死亡率越低越好）
+        death_rates = [raw_data[c]["death_rate"] for c in codes]
+        survival_ranks = rank_normalize(death_rates, higher_is_better=False)  # 低死亡=高分
+        
+        # 2.3 繁殖效率排名（繁殖速度高 + 体型小 = 高效率）
+        # r策略物种：高繁殖 + 小体型 更有竞争优势
+        repro_efficiencies = [
+            raw_data[c]["repro"] / max(1, raw_data[c]["body_size"]) 
+            for c in codes
+        ]
+        repro_ranks = rank_normalize(repro_efficiencies, higher_is_better=True)
+        
+        # 2.4 生态位效率（低营养级更稳定，高营养级风险大）
+        # T1=1.0, T2=0.7, T3=0.5, T4=0.3
+        trophic_scores = [max(0.2, 1.2 - raw_data[c]["trophic"] * 0.25) for c in codes]
+        
+        # ========== 第3步：指数放大差距 ==========
+        # 使用指数函数放大排名差距，让强者更强，弱者更弱
+        
+        def amplify_difference(rank: float, power: float = 2.0) -> float:
+            """使用指数函数放大差距
+            rank=0.5时保持不变，rank>0.5放大，rank<0.5压缩
+            """
+            # 将 [0,1] 映射到 [-1,1]，应用指数，再映射回 [0,1]
+            centered = (rank - 0.5) * 2  # [-1, 1]
+            if centered >= 0:
+                amplified = centered ** (1.0 / power)  # 正值：根号放大
             else:
-                age_factor = 0.3  # 老物种：可能有演化包袱
+                amplified = -((-centered) ** power)  # 负值：平方压缩
+            return (amplified + 1) / 2  # 映射回 [0, 1]
+        
+        # ========== 第4步：计算最终适应度 ==========
+        for i, code in enumerate(codes):
+            # 获取各因子排名
+            pop_rank = pop_ranks[i]
+            survival_rank = survival_ranks[i]
+            repro_rank = repro_ranks[i]
+            trophic_score = trophic_scores[i]
             
-            # 加权综合（权重总和=1.0）
+            # 放大差距（使用不同的放大系数）
+            pop_amp = amplify_difference(pop_rank, power=1.5)  # 种群差距放大
+            survival_amp = amplify_difference(survival_rank, power=2.0)  # 生存差距强烈放大
+            repro_amp = amplify_difference(repro_rank, power=1.5)
+            
+            # 加权综合（权重调整为更激进）
             fitness = (
-                pop_factor * cfg.fitness_weight_population * 0.8 +       # 种群权重略降
-                repro_speed * cfg.fitness_weight_reproduction * 0.8 +    # 繁殖权重略降
-                resistance_factor * cfg.fitness_weight_resistance +      # 抗性保持
-                specialization * cfg.fitness_weight_specialization +     # 专化保持
-                trend_factor * 0.15 +                                    # 趋势因子
-                age_factor * 0.05                                        # 年龄因子
+                pop_amp * 0.40 +       # 种群优势：40%
+                survival_amp * 0.30 +  # 生存表现：30%
+                repro_amp * 0.20 +     # 繁殖效率：20%
+                trophic_score * 0.10   # 生态位效率：10%
             )
             
-            scores[sp.lineage_code] = min(1.0, max(0.0, fitness))
+            # 应用年龄修正（老物种略微惩罚）
+            age = raw_data[code]["age"]
+            if age > 20:
+                fitness *= 0.90  # 很老的物种惩罚10%
+            elif age > 10:
+                fitness *= 0.95  # 老物种惩罚5%
+            
+            scores[code] = min(1.0, max(0.0, fitness))
+            
+            logger.debug(
+                f"[适应度] {code}: pop_rank={pop_rank:.2f}→{pop_amp:.2f}, "
+                f"surv_rank={survival_rank:.2f}→{survival_amp:.2f}, "
+                f"repro_rank={repro_rank:.2f}, final={fitness:.3f}"
+            )
+        
+        # 输出分布统计
+        if scores:
+            values = list(scores.values())
+            logger.info(
+                f"[适应度分布] n={len(values)}, "
+                f"min={min(values):.2f}, max={max(values):.2f}, "
+                f"mean={np.mean(values):.2f}, std={np.std(values):.3f}"
+            )
         
         return scores
     

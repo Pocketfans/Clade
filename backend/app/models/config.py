@@ -557,6 +557,175 @@ class EcologyBalanceConfig(BaseModel):
     overlap_competition_max: float = 0.20
 
 
+class SuitabilityConfig(BaseModel):
+    """增强适宜度计算配置 - 控制生态位分化和竞争排斥
+    
+    【核心改进 v2.0 - 极端收紧版】
+    1. 收紧环境容忍度 - 温度适应范围仅5-10°C
+    2. 生态位拥挤惩罚 - 同营养级物种越多适宜度越低
+    3. 资源分割因子 - 相似物种必须分割资源
+    4. 专化度/泛化度权衡 - 泛化物种严重惩罚
+    5. 历史适应惩罚 - 新环境适宜度大幅降低
+    
+    【设计目标】
+    - 让物种只能在狭窄的环境范围内存活
+    - 强迫物种分化以适应不同生态位
+    - 让同生态位竞争非常激烈
+    """
+    model_config = ConfigDict(extra="ignore")
+    
+    # ========== 环境容忍度（极端收紧版）==========
+    # 温度容忍系数：1.0 = 物种温度适应范围约5-10°C（极窄）
+    # 计算：range = (cold_res + heat_res) * coef / 80 * 80°C
+    # 例：耐寒5+耐热5=10，range=10*1.0/80*80=10°C
+    temp_tolerance_coef: float = Field(
+        default=1.0,
+        ge=0.5, le=4.0,
+        description="温度容忍系数：1.0=5-10°C适应范围，2.0=15-20°C（越低越苛刻）"
+    )
+    # 温度惩罚率：0.4 = 超出2.5°C就归零
+    temp_penalty_rate: float = Field(
+        default=0.4,
+        ge=0.1, le=1.0,
+        description="温度惩罚率：超出容忍范围后的惩罚速度（越高越苛刻）"
+    )
+    # 湿度惩罚率：4.0 = 湿度差异0.25就归零
+    humidity_penalty_rate: float = Field(
+        default=4.0,
+        ge=1.0, le=8.0,
+        description="湿度惩罚率：湿度不匹配时的惩罚速度（越高越苛刻）"
+    )
+    # 盐度惩罚率
+    salinity_penalty_rate: float = Field(
+        default=5.0,
+        ge=1.0, le=10.0,
+        description="盐度惩罚率：盐度不匹配时的惩罚速度"
+    )
+    # 光照惩罚率
+    light_penalty_rate: float = Field(
+        default=3.0,
+        ge=1.0, le=8.0,
+        description="光照惩罚率：光照需求不匹配时的惩罚速度"
+    )
+    # 资源门槛：0.9 = 资源需要90%才能满分
+    resource_threshold: float = Field(
+        default=0.9,
+        ge=0.3, le=1.0,
+        description="资源满分门槛：需要多少资源才能获得满分适宜度"
+    )
+    
+    # ========== 生态位拥挤惩罚（加强版）==========
+    # 每多一个同营养级竞争者的惩罚系数：0.25 = 2个竞争者适宜度-50%
+    crowding_penalty_per_species: float = Field(
+        default=0.25,
+        ge=0.05, le=0.5,
+        description="每个竞争者的惩罚系数：每多一个同生态位物种降低多少适宜度"
+    )
+    # 最大拥挤惩罚：0.70 = 最多降低70%适宜度
+    max_crowding_penalty: float = Field(
+        default=0.70,
+        ge=0.3, le=0.9,
+        description="最大拥挤惩罚：适宜度最多降低的比例"
+    )
+    # 营养级差异容忍度：0.3 = 营养级差0.3以内视为同生态位
+    trophic_tolerance: float = Field(
+        default=0.3,
+        ge=0.1, le=1.0,
+        description="营养级容忍度：差异小于此值视为同营养级竞争者"
+    )
+    
+    # ========== 资源分割（加强版）==========
+    # 资源分割系数：0.5 = 高重叠时资源大幅分割
+    split_coefficient: float = Field(
+        default=0.5,
+        ge=0.1, le=1.0,
+        description="资源分割系数：生态位重叠度如何影响资源分割"
+    )
+    # 最小分割因子：0.2 = 即使完全重叠也保留20%资源
+    min_split_factor: float = Field(
+        default=0.2,
+        ge=0.1, le=0.5,
+        description="最小分割因子：完全重叠时保留的最低资源比例"
+    )
+    
+    # ========== 专化度/泛化度（加强惩罚）==========
+    # 泛化物种阈值：0.4 = 专化度低于0.4视为泛化物种
+    generalist_threshold: float = Field(
+        default=0.4,
+        ge=0.2, le=0.6,
+        description="泛化物种阈值：专化度低于此值视为泛化物种"
+    )
+    # 泛化物种惩罚基础值：0.60 = 泛化物种适宜度打6折
+    generalist_penalty_base: float = Field(
+        default=0.60,
+        ge=0.4, le=0.9,
+        description="泛化物种惩罚：泛化物种的基础适宜度系数"
+    )
+    
+    # ========== 历史适应（加强）==========
+    # 新环境惩罚：0.65 = 新环境适宜度打6.5折
+    novelty_penalty: float = Field(
+        default=0.65,
+        ge=0.3, le=1.0,
+        description="新环境惩罚：首次进入环境的适宜度系数"
+    )
+    # 老环境加成：1.15 = 长期栖息地加15%
+    adaptation_bonus: float = Field(
+        default=1.15,
+        ge=1.0, le=1.5,
+        description="老环境加成：长期栖息地的适宜度加成"
+    )
+    
+    # ========== 多维环境约束权重 ==========
+    weight_temperature: float = Field(
+        default=0.30, ge=0.1, le=0.5,
+        description="温度权重：温度在综合适宜度中的占比"
+    )
+    weight_humidity: float = Field(
+        default=0.15, ge=0.05, le=0.3,
+        description="湿度权重：湿度在综合适宜度中的占比"
+    )
+    weight_salinity: float = Field(
+        default=0.15, ge=0.05, le=0.3,
+        description="盐度权重：盐度在综合适宜度中的占比"
+    )
+    weight_light: float = Field(
+        default=0.10, ge=0.05, le=0.2,
+        description="光照权重：光照在综合适宜度中的占比"
+    )
+    weight_resources: float = Field(
+        default=0.30, ge=0.1, le=0.5,
+        description="资源权重：资源在综合适宜度中的占比"
+    )
+    
+    # ========== 高级选项 ==========
+    # 启用增强适宜度计算
+    enable_enhanced_suitability: bool = Field(
+        default=True,
+        description="是否启用增强适宜度计算（关闭则使用传统模式）"
+    )
+    # 启用拥挤惩罚
+    enable_crowding_penalty: bool = Field(
+        default=True,
+        description="是否启用生态位拥挤惩罚"
+    )
+    # 启用资源分割
+    enable_resource_split: bool = Field(
+        default=True,
+        description="是否启用资源分割机制"
+    )
+    # 启用专化度权衡
+    enable_specialization_tradeoff: bool = Field(
+        default=True,
+        description="是否启用专化度/泛化度权衡"
+    )
+    # 启用历史适应
+    enable_historical_adaptation: bool = Field(
+        default=True,
+        description="是否启用历史适应惩罚/加成"
+    )
+
+
 class EcologicalRealismConfig(BaseModel):
     """生态拟真配置 - 控制高级生态学机制
     
@@ -1663,6 +1832,9 @@ class UIConfig(BaseModel):
     
     # 22. 器官演化配置
     organ_evolution: OrganEvolutionConfig = Field(default_factory=OrganEvolutionConfig)
+    
+    # 23. 【v2.0】增强适宜度配置 - 生态位分化与竞争排斥
+    suitability: SuitabilityConfig = Field(default_factory=SuitabilityConfig)
     
     # --- Legacy Fields (Keep for migration) ---
     ai_provider: str | None = None

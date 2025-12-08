@@ -198,7 +198,11 @@ def kernel_redistribute_population(
     out_pop: ti.types.ndarray(dtype=ti.f32, ndim=3),
     tile_count: ti.i32,
 ):
-    """按权重或均匀分配新的种群总数 - Taichi 并行"""
+    """按权重分配新的种群总数 - Taichi 并行
+    
+    【v2.1修复】当物种没有现有分布时，保持原样（不再均匀分配到全世界）
+    这防止了新物种被错误地分配到所有地块
+    """
     for s, i, j in ti.ndrange(pop.shape[0], pop.shape[1], pop.shape[2]):
         target = new_totals[s]
         if target <= 0:
@@ -206,10 +210,13 @@ def kernel_redistribute_population(
         else:
             total = current_totals[s]
             if total > 0:
+                # 按原有分布权重分配
                 weight = pop[s, i, j] / total
                 out_pop[s, i, j] = weight * target
             else:
-                out_pop[s, i, j] = target / tile_count
+                # 【v2.1修复】没有现有分布时，保持为0
+                # 不再均匀分配到所有地块，防止全球扩散
+                out_pop[s, i, j] = 0.0
 
 
 # ============================================================================
@@ -279,6 +286,9 @@ def kernel_compute_distance_weights(
 ):
     """批量计算所有物种从当前位置到所有地块的距离权重 - Taichi 并行
     
+    【v2.1修复】使用指数衰减而非线性衰减，确保远距离权重更低
+    当物种没有种群时，返回0而非1（防止新物种出现在任何地方）
+    
     Args:
         current_pos: 当前种群位置 (S, H, W) - 种群密度
         result: 距离权重输出 (S, H, W)
@@ -307,10 +317,17 @@ def kernel_compute_distance_weights(
             # 曼哈顿距离
             dist = ti.abs(ti.cast(i, ti.f32) - center_i) + ti.abs(ti.cast(j, ti.f32) - center_j)
             
-            # 转换为权重 (近=1, 远=0)
-            result[s, i, j] = ti.max(0.0, 1.0 - dist / max_distance)
+            # 【v2.1修复】使用指数衰减：exp(-dist / max_distance)
+            # 距离越远权重越低，超过 max_distance 后权重趋近于0
+            if dist <= max_distance:
+                # 指数衰减，距离=max_distance时权重≈0.37
+                result[s, i, j] = ti.exp(-dist / max_distance)
+            else:
+                # 超出最大距离，权重为0
+                result[s, i, j] = 0.0
         else:
-            result[s, i, j] = 1.0
+            # 【v2.1修复】没有种群时权重为0，防止物种"瞬移"到任何地方
+            result[s, i, j] = 0.0
 
 
 @ti.kernel
@@ -352,7 +369,10 @@ def kernel_migration_decision(
     pressure_threshold: ti.f32,
     saturation_threshold: ti.f32,
 ):
-    """批量计算所有物种的迁徙决策分数 - Taichi 并行
+    """批量计算所有物种的迁徙决策分数 - Taichi 并行 (v2.1 修复版)
+    
+    【v2.1核心修复】只有与已有种群相邻的空地块才能获得迁徙分数
+    这确保物种是逐步扩散的，而不是跳跃到任何位置
     
     Args:
         pop: 种群张量 (S, H, W)
@@ -366,23 +386,47 @@ def kernel_migration_decision(
     S, H, W = pop.shape[0], pop.shape[1], pop.shape[2]
     
     for s, i, j in ti.ndrange(S, H, W):
+        # 默认分数为0
+        migration_scores[s, i, j] = 0.0
+        
         # 当前地块已有种群，不需要迁入
         if pop[s, i, j] > 0:
-            migration_scores[s, i, j] = 0.0
-            continue
-        
-        death_rate = death_rates[s]
-        base_score = suitability[s, i, j] * 0.5 + distance_weights[s, i, j] * 0.5
-        
-        # 压力驱动迁徙 - 死亡率高时更愿意迁移
-        if death_rate > pressure_threshold:
-            # 高压力模式：适宜度权重更高，愿意走得更远
-            pressure_boost = ti.min(0.5, (death_rate - pressure_threshold) * 2.0)
-            base_score = suitability[s, i, j] * (0.6 + pressure_boost * 0.2) + distance_weights[s, i, j] * (0.4 - pressure_boost * 0.2)
-        
-        # 添加随机扰动（用格子坐标模拟）
-        noise = 0.85 + 0.3 * ti.sin(ti.cast(i * 17 + j * 31 + s * 7, ti.f32))
-        migration_scores[s, i, j] = base_score * noise
+            pass  # 分数保持0
+        # 适宜度太低的地块不接收迁徙（硬约束）
+        elif suitability[s, i, j] < 0.25:
+            pass  # 分数保持0
+        else:
+            # 【v2.1核心修复】检查是否与已有种群相邻（4邻域）
+            adj_count = 0
+            if i > 0:
+                if pop[s, i - 1, j] > 0:
+                    adj_count += 1
+            if i < H - 1:
+                if pop[s, i + 1, j] > 0:
+                    adj_count += 1
+            if j > 0:
+                if pop[s, i, j - 1] > 0:
+                    adj_count += 1
+            if j < W - 1:
+                if pop[s, i, j + 1] > 0:
+                    adj_count += 1
+            
+            # 只有与已有种群相邻的地块才能获得迁徙分数
+            if adj_count > 0:
+                death_rate = death_rates[s]
+                
+                # 基础分数：参考 config.py 中 migration_suitability_bias = 0.6
+                base_score = suitability[s, i, j] * 0.6 + distance_weights[s, i, j] * 0.4
+                
+                # 压力驱动迁徙 - 死亡率高时更愿意迁移
+                if death_rate > pressure_threshold:
+                    pressure_boost = ti.min(0.5, (death_rate - pressure_threshold) * 2.0)
+                    base_score = suitability[s, i, j] * (0.6 - pressure_boost * 0.1) + distance_weights[s, i, j] * (0.4 + pressure_boost * 0.1)
+                    base_score *= (1.0 + pressure_boost * 0.5)
+                
+                # 添加随机扰动（用格子坐标模拟）
+                noise = 0.9 + 0.2 * ti.sin(ti.cast(i * 17 + j * 31 + s * 7, ti.f32))
+                migration_scores[s, i, j] = base_score * noise
 
 
 @ti.kernel
@@ -395,6 +439,9 @@ def kernel_execute_migration(
 ):
     """执行迁徙 - Taichi 并行
     
+    【v2.1修复】添加相邻性检查：物种只能向已有种群相邻的空地块迁徙
+    这样物种扩散是逐步的，不会一回合扩散到全世界
+    
     Args:
         pop: 当前种群张量 (S, H, W)
         migration_scores: 迁徙分数张量 (S, H, W)
@@ -405,30 +452,69 @@ def kernel_execute_migration(
     S, H, W = pop.shape[0], pop.shape[1], pop.shape[2]
     
     for s in range(S):
-        # 计算该物种的总种群和总迁徙分数
+        # 第一遍：计算该物种的总种群
         total_pop = 0.0
-        total_score = 0.0
-        
         for i, j in ti.ndrange(H, W):
             total_pop += pop[s, i, j]
-            if migration_scores[s, i, j] > score_threshold:
-                total_score += migration_scores[s, i, j]
         
-        # 迁徙量
+        # 第二遍：计算只有相邻已有种群的空地块的总迁徙分数
+        # 【v2.1核心修复】只有与已有种群相邻的空地块才能接收迁徙
+        total_score = 0.0
+        for i, j in ti.ndrange(H, W):
+            # 必须是空地块且分数足够
+            if pop[s, i, j] <= 0 and migration_scores[s, i, j] > score_threshold:
+                # 检查是否与已有种群相邻（4邻域）- 用整数计数
+                adj_count = 0
+                if i > 0:
+                    if pop[s, i - 1, j] > 0:
+                        adj_count += 1
+                if i < H - 1:
+                    if pop[s, i + 1, j] > 0:
+                        adj_count += 1
+                if j > 0:
+                    if pop[s, i, j - 1] > 0:
+                        adj_count += 1
+                if j < W - 1:
+                    if pop[s, i, j + 1] > 0:
+                        adj_count += 1
+                
+                # 只有相邻有种群的空地块才计入迁徙分数
+                if adj_count > 0:
+                    total_score += migration_scores[s, i, j]
+        
+        # 迁徙量（只迁出一部分种群）
         migrate_amount = total_pop * migration_rates[s]
         
-        # 按分数比例分配迁徙种群
+        # 第三遍：按分数比例分配迁徙种群
         for i, j in ti.ndrange(H, W):
             if pop[s, i, j] > 0:
                 # 原有种群保留部分
                 new_pop[s, i, j] = pop[s, i, j] * (1.0 - migration_rates[s])
             else:
+                # 空地块：检查是否可以接收迁入
                 new_pop[s, i, j] = 0.0
-            
-            # 分配迁入种群
-            if total_score > 0 and migration_scores[s, i, j] > score_threshold:
-                score_ratio = migration_scores[s, i, j] / total_score
-                new_pop[s, i, j] += migrate_amount * score_ratio
+                
+                # 只向相邻已有种群的空地块迁入
+                if total_score > 0 and migration_scores[s, i, j] > score_threshold:
+                    # 检查相邻性
+                    adj_count = 0
+                    if i > 0:
+                        if pop[s, i - 1, j] > 0:
+                            adj_count += 1
+                    if i < H - 1:
+                        if pop[s, i + 1, j] > 0:
+                            adj_count += 1
+                    if j > 0:
+                        if pop[s, i, j - 1] > 0:
+                            adj_count += 1
+                    if j < W - 1:
+                        if pop[s, i, j + 1] > 0:
+                            adj_count += 1
+                    
+                    # 分配迁入种群（只到相邻空地块）
+                    if adj_count > 0:
+                        score_ratio = migration_scores[s, i, j] / total_score
+                        new_pop[s, i, j] = migrate_amount * score_ratio
 
 
 @ti.kernel
@@ -441,7 +527,8 @@ def kernel_advanced_diffusion(
     """带适宜度引导的高级扩散 - Taichi 并行
     
     种群会优先向适宜度更高的地块扩散。
-    【修复】空地块也能接收来自邻居的种群扩散！
+    【v2.1】参考 config.py: suitability_cutoff = 0.25
+    只有适宜度足够高（>0.25）才允许扩散进入！
     
     Args:
         pop: 种群张量 (S, H, W)
@@ -450,6 +537,10 @@ def kernel_advanced_diffusion(
         base_rate: 基础扩散率
     """
     S, H, W = pop.shape[0], pop.shape[1], pop.shape[2]
+    
+    # 适宜度阈值：低于此值不允许扩散进入
+    # 参考 config.py: suitability_cutoff = 0.25
+    SUIT_THRESHOLD = 0.25
     
     for s, i, j in ti.ndrange(S, H, W):
         current = pop[s, i, j]
@@ -473,27 +564,31 @@ def kernel_advanced_diffusion(
                 # 适宜度梯度决定扩散方向和强度
                 gradient = neighbor_suit - my_suit
                 
-                # === 流出计算：当前地块有种群，且邻居更适宜 ===
-                if current > 0 and gradient > 0:
-                    # 向高适宜度流出（种群被吸引到更好的地方）
-                    rate = base_rate * (1.0 + gradient * 0.5)
-                    outflow += current * rate * 0.25
+                # === 流出计算：当前地块有种群，且邻居适宜度>阈值 ===
+                if current > 0 and neighbor_suit > SUIT_THRESHOLD:
+                    if gradient > 0:
+                        # 向高适宜度流出（种群被吸引到更好的地方）
+                        rate = base_rate * (1.0 + gradient * 0.5)
+                        outflow += current * rate * 0.25
+                    elif gradient > -0.3:
+                        # 邻居适宜度稍低但仍可接受，少量扩散
+                        rate = base_rate * 0.3
+                        outflow += current * rate * 0.25
                 
-                # === 流入计算：邻居有种群，当前地块更适宜或有空间 ===
-                if neighbor_pop > 0:
+                # === 流入计算：邻居有种群，且我的适宜度>阈值 ===
+                if neighbor_pop > 0 and my_suit > SUIT_THRESHOLD:
                     if gradient < 0:
                         # 邻居适宜度低于我，邻居种群向我扩散
                         rate = base_rate * (1.0 - gradient * 0.5)
                         inflow += neighbor_pop * rate * 0.25
-                    elif my_suit > 0.1:
-                        # 即使适宜度相当，也有基础扩散（允许向空地扩展）
-                        # 【关键修复】这允许种群向"空地块"扩散
-                        base_spread = base_rate * 0.15  # 基础扩散率的15%
-                        inflow += neighbor_pop * base_spread * 0.25
+                    elif gradient < 0.3:
+                        # 我适宜度稍低但仍可接受，少量流入
+                        rate = base_rate * 0.3
+                        inflow += neighbor_pop * rate * 0.25
         
-        # 限制最大流出（不能超过当前种群的50%）
+        # 限制最大流出（不能超过当前种群的40%）
         if current > 0:
-            outflow = ti.min(outflow, current * 0.5)
+            outflow = ti.min(outflow, current * 0.4)
         else:
             outflow = 0.0
         
@@ -704,8 +799,696 @@ def _precompile_all_kernels():
 _precompile_all_kernels()
 
 
+# ============================================================================
+# 竞争计算内核 - GPU 加速的亲缘竞争计算
+# ============================================================================
+
+@ti.kernel
+def kernel_amplify_difference(
+    ranks: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    result: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    power: ti.f32,
+    n: ti.i32,
+):
+    """GPU并行差距放大"""
+    for i in range(n):
+        centered = (ranks[i] - 0.5) * 2.0
+        # Taichi 需要在 if 之前声明变量
+        amplified = ti.f32(0.0)
+        if centered >= 0:
+            amplified = ti.pow(centered, 1.0 / power)
+        else:
+            amplified = -ti.pow(-centered, power)
+        result[i] = (amplified + 1.0) / 2.0
 
 
+@ti.kernel
+def kernel_compute_fitness_1d(
+    pop_amp: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    survival_amp: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    repro_amp: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    trophic: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    age: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    fitness: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    n: ti.i32,
+):
+    """GPU并行计算最终适应度"""
+    for i in range(n):
+        # 营养级分数
+        trophic_score = ti.max(0.2, 1.2 - trophic[i] * 0.25)
+        
+        # 加权综合
+        fit = (
+            pop_amp[i] * 0.40 +
+            survival_amp[i] * 0.30 +
+            repro_amp[i] * 0.20 +
+            trophic_score * 0.10
+        )
+        
+        # 年龄惩罚
+        if age[i] > 20:
+            fit *= 0.90
+        elif age[i] > 10:
+            fit *= 0.95
+        
+        fitness[i] = ti.min(1.0, ti.max(0.0, fit))
 
+
+@ti.kernel
+def kernel_build_overlap_matrix_2d(
+    overlaps: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    overlap_matrix: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    n: ti.i32,
+):
+    """GPU并行构建重叠矩阵"""
+    for i, j in ti.ndrange(n, n):
+        overlap_matrix[i, j] = (overlaps[i] + overlaps[j]) / 2.0
+
+
+@ti.kernel
+def kernel_build_trophic_mask_2d(
+    trophic: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    mask: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    n: ti.i32,
+):
+    """GPU并行构建营养级掩码"""
+    for i, j in ti.ndrange(n, n):
+        ti_rounded = ti.round(trophic[i] * 2.0) / 2.0
+        tj_rounded = ti.round(trophic[j] * 2.0) / 2.0
+        diff = ti.abs(ti_rounded - tj_rounded)
+        mask[i, j] = 1.0 if diff < 0.5 else 0.0
+
+
+@ti.kernel
+def kernel_compute_competition_mods(
+    fitness: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    kinship: ti.types.ndarray(dtype=ti.i32, ndim=2),
+    overlap: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    trophic_mask: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    repro: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    mortality_mods: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    repro_mods: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    n: ti.i32,
+    kin_threshold: ti.i32,
+    kin_multiplier: ti.f32,
+    nonkin_multiplier: ti.f32,
+    disadvantage_threshold: ti.f32,
+    winner_reduction: ti.f32,
+    loser_penalty_max: ti.f32,
+    contested_coef: ti.f32,
+):
+    """GPU并行计算竞争修正 - 核心内核"""
+    for i in range(n):
+        winner_bonus_sum = 0.0
+        loser_penalty_sum = 0.0
+        contested_penalty_sum = 0.0
+        nonkin_pressure_sum = 0.0
+        
+        for j in range(n):
+            if i == j:
+                continue
+            
+            # 跳过不同营养级
+            if trophic_mask[i, j] < 0.5:
+                continue
+            
+            # 适应度差异
+            fitness_diff = fitness[i] - fitness[j]
+            
+            # 亲缘关系
+            is_kin = 1.0 if kinship[i, j] <= kin_threshold else 0.0
+            
+            # 世代速度因子
+            avg_repro = (repro[i] + repro[j]) / 2.0
+            gen_speed = 0.6 + avg_repro * 0.08
+            
+            # 重叠度
+            ovlp = overlap[i, j]
+            
+            # 计算竞争强度
+            base_intensity = ovlp * kin_multiplier
+            total_intensity = 0.0
+            
+            # 高重叠（>0.6）
+            if ovlp > 0.6:
+                kin_bonus = 1.3 if is_kin > 0.5 else 1.0
+                total_intensity = base_intensity * kin_bonus * gen_speed
+            # 中等重叠（0.3-0.6）
+            elif ovlp > 0.3:
+                if is_kin > 0.5:
+                    total_intensity = base_intensity * gen_speed
+                else:
+                    # 异属温和竞争
+                    temp_intensity = ovlp * nonkin_multiplier * 0.1 * gen_speed
+                    fit_sum = fitness[i] + fitness[j] + 0.01
+                    nonkin_pressure_sum += temp_intensity * (1.0 - fitness[i] / fit_sum)
+                    continue
+            else:
+                # 低重叠，不竞争
+                continue
+            
+            # 计算胜负
+            advantage = ti.abs(fitness_diff)
+            
+            if fitness_diff > disadvantage_threshold:
+                # 我是强者
+                bonus = ti.min(winner_reduction, total_intensity * advantage * 0.5)
+                winner_bonus_sum += bonus
+            elif fitness_diff < -disadvantage_threshold:
+                # 我是弱者
+                refuge_factor = 1.0 - (1.0 - ovlp) * 0.5
+                penalty = ti.min(loser_penalty_max, total_intensity * advantage * 1.0) * refuge_factor
+                loser_penalty_sum += penalty
+            else:
+                # 势均力敌
+                contested_penalty_sum += total_intensity * contested_coef
+        
+        # 汇总修正
+        mortality_mods[i] = winner_bonus_sum - loser_penalty_sum - contested_penalty_sum - nonkin_pressure_sum
+        repro_mods[i] = winner_bonus_sum * 0.5 - loser_penalty_sum * 0.3
+
+
+# ============================================================================
+# 增强适宜度计算内核 - 实现生态位分化和竞争排斥
+# ============================================================================
+
+@ti.kernel
+def kernel_enhanced_suitability(
+    env: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    species_traits: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    habitat_mask: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    result: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    # 环境容忍度参数
+    temp_tolerance_coef: ti.f32,
+    temp_penalty_rate: ti.f32,
+    humidity_penalty_rate: ti.f32,
+    resource_threshold: ti.f32,
+    # 环境通道索引
+    temp_idx: ti.i32,
+    humidity_idx: ti.i32,
+    elevation_idx: ti.i32,
+    resource_idx: ti.i32,
+    salinity_idx: ti.i32,
+    light_idx: ti.i32,
+):
+    """增强版适宜度计算 - Taichi 并行
+    
+    【收紧环境容忍度】
+    - 温度容忍范围缩小（从40°C→25°C）
+    - 温度惩罚加重（超出5°C就归零）
+    - 湿度惩罚加重
+    - 资源门槛提高
+    
+    Args:
+        env: 环境张量 (C, H, W) - 多通道环境数据
+        species_traits: 物种特质 (S, T) - [耐寒性, 耐热性, 耐旱性, 耐盐性, 光照需求, ...]
+        habitat_mask: 栖息地掩码 (S, H, W)
+        result: 适宜度输出 (S, H, W)
+    
+    species_traits 格式:
+        [0] 耐寒性 (1-10)
+        [1] 耐热性 (1-10)
+        [2] 耐旱性 (1-10)
+        [3] 耐盐性 (1-10)
+        [4] 光照需求 (1-10)
+        [5] 栖息地类型编码 (0=marine, 1=terrestrial, etc.)
+        [6] 专化度 (0-1, 高=专化, 低=泛化)
+    """
+    S, H, W = result.shape[0], result.shape[1], result.shape[2]
+    
+    for s, i, j in ti.ndrange(S, H, W):
+        # 硬约束检查
+        if habitat_mask[s, i, j] < 0.5:
+            result[s, i, j] = 0.0
+            continue
+        
+        # 获取物种特质
+        cold_res = species_traits[s, 0]  # 耐寒性 1-10
+        heat_res = species_traits[s, 1]  # 耐热性 1-10
+        drought_res = species_traits[s, 2]  # 耐旱性 1-10
+        salt_res = species_traits[s, 3]  # 耐盐性 1-10
+        light_req = species_traits[s, 4]  # 光照需求 1-10
+        specialization = species_traits[s, 6]  # 专化度 0-1
+        
+        # 获取环境参数
+        tile_temp = env[temp_idx, i, j]  # 归一化温度 [-1, 1]
+        tile_humidity = env[humidity_idx, i, j]  # 湿度 [0, 1]
+        tile_elevation = env[elevation_idx, i, j]  # 海拔（归一化）
+        tile_resource = env[resource_idx, i, j]  # 资源 [0, 1]
+        tile_salinity = env[salinity_idx, i, j]  # 盐度 [0, 1]
+        tile_light = env[light_idx, i, j]  # 光照 [0, 1]
+        
+        # ========== 1. 温度适宜度（收紧版）==========
+        # 使用缩小后的系数计算容忍范围
+        # 耐寒性影响最低温度：min_temp = 15 - cold_res * temp_tolerance_coef
+        # 耐热性影响最高温度：max_temp = 15 + heat_res * temp_tolerance_coef
+        # 归一化：假设环境温度 [-30, 50] 映射到 [-1, 1]
+        
+        # 物种最优温度（基于特质平均）
+        optimal_temp_raw = 15.0 + (heat_res - cold_res) * 2.0  # 范围 [-5, 35]
+        # 归一化到 [-1, 1]
+        optimal_temp = (optimal_temp_raw - 10.0) / 40.0
+        
+        # 容忍范围（缩小版）
+        tolerance_range = (cold_res + heat_res) * temp_tolerance_coef / 80.0  # 归一化后的范围
+        
+        temp_diff = ti.abs(tile_temp - optimal_temp)
+        
+        if temp_diff <= tolerance_range:
+            temp_score = 1.0
+        else:
+            # 超出范围，使用加重的惩罚率
+            excess = temp_diff - tolerance_range
+            temp_score = ti.max(0.0, 1.0 - excess * temp_penalty_rate * 10.0)
+        
+        # ========== 2. 湿度适宜度（收紧版）==========
+        # 耐旱性越高，最佳湿度越低
+        optimal_humidity = 1.0 - drought_res * 0.08  # 范围 [0.2, 0.92]
+        humidity_diff = ti.abs(tile_humidity - optimal_humidity)
+        
+        # 加重的湿度惩罚
+        humidity_score = ti.max(0.0, 1.0 - humidity_diff * humidity_penalty_rate)
+        
+        # ========== 3. 盐度适宜度 ==========
+        # 耐盐性决定最佳盐度
+        optimal_salinity = salt_res * 0.1  # 高耐盐=高盐度偏好
+        salinity_diff = ti.abs(tile_salinity - optimal_salinity)
+        salinity_score = ti.max(0.0, 1.0 - salinity_diff * 3.0)
+        
+        # ========== 4. 光照适宜度 ==========
+        # 光照需求高的物种需要高光照
+        optimal_light = light_req * 0.1
+        light_diff = ti.abs(tile_light - optimal_light)
+        light_score = ti.max(0.0, 1.0 - light_diff * 2.0)
+        
+        # ========== 5. 资源适宜度（提高门槛）==========
+        resource_score = ti.min(1.0, tile_resource / resource_threshold)
+        
+        # ========== 6. 深度/海拔惩罚 ==========
+        # 深海物种在浅水惩罚，浅水物种在深水惩罚
+        elevation_score = 1.0  # 默认满分，具体逻辑由habitat_mask处理
+        
+        # ========== 7. 综合适宜度 ==========
+        base_suitability = (
+            temp_score * 0.25 +
+            humidity_score * 0.15 +
+            salinity_score * 0.15 +
+            light_score * 0.10 +
+            resource_score * 0.20 +
+            elevation_score * 0.15
+        )
+        
+        # ========== 8. 专化度权衡 ==========
+        # 泛化物种（specialization < 0.3）：适宜度打折但范围广
+        # 专化物种（specialization > 0.7）：适宜度高但范围窄（已由各单项惩罚体现）
+        if specialization < 0.3:
+            # 泛化物种：基础适宜度打 0.75 折
+            generalist_penalty = 0.75 + specialization * 0.25
+            base_suitability *= generalist_penalty
+        
+        # 确保范围并输出
+        result[s, i, j] = ti.max(0.0, ti.min(1.0, base_suitability))
+
+
+@ti.kernel
+def kernel_niche_crowding_penalty(
+    base_suitability: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    trophic_levels: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    pop: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    result: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    crowding_penalty_per_species: ti.f32,
+    max_crowding_penalty: ti.f32,
+    trophic_tolerance: ti.f32,
+):
+    """生态位拥挤惩罚 - 同营养级物种越多，适宜度越低
+    
+    【核心逻辑】
+    竞争排斥原则：同生态位物种不能长期共存
+    同地块同营养级物种数量越多，每个物种的有效适宜度越低
+    
+    Args:
+        base_suitability: 基础适宜度 (S, H, W)
+        trophic_levels: 各物种营养级 (S,)
+        pop: 种群分布 (S, H, W)
+        result: 调整后适宜度 (S, H, W)
+        crowding_penalty_per_species: 每多一个竞争者的惩罚
+        max_crowding_penalty: 最大惩罚比例
+        trophic_tolerance: 营养级差异容忍度（差异小于此值视为同营养级）
+    """
+    S, H, W = base_suitability.shape[0], base_suitability.shape[1], base_suitability.shape[2]
+    
+    for s, i, j in ti.ndrange(S, H, W):
+        base_suit = base_suitability[s, i, j]
+        
+        if base_suit <= 0.01:
+            result[s, i, j] = 0.0
+            continue
+        
+        my_trophic = trophic_levels[s]
+        
+        # 计算同地块同营养级的竞争者数量
+        competitor_count = 0
+        competitor_biomass = 0.0
+        
+        for other in range(S):
+            if other == s:
+                continue
+            
+            # 检查是否在同一地块有种群
+            if pop[other, i, j] <= 0:
+                continue
+            
+            # 检查是否同营养级
+            trophic_diff = ti.abs(trophic_levels[other] - my_trophic)
+            if trophic_diff <= trophic_tolerance:
+                competitor_count += 1
+                competitor_biomass += pop[other, i, j]
+        
+        # 计算拥挤惩罚
+        # 惩罚因子 = 1 / (1 + count * penalty_rate)
+        crowding_factor = 1.0 / (1.0 + ti.cast(competitor_count, ti.f32) * crowding_penalty_per_species)
+        
+        # 应用最大惩罚限制
+        crowding_factor = ti.max(1.0 - max_crowding_penalty, crowding_factor)
+        
+        result[s, i, j] = base_suit * crowding_factor
+
+
+@ti.kernel
+def kernel_resource_split_penalty(
+    base_suitability: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    niche_similarity: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    pop: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    result: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    split_coefficient: ti.f32,
+    min_split_factor: ti.f32,
+):
+    """资源分割惩罚 - 生态位重叠物种必须分割资源
+    
+    【核心逻辑】
+    相似物种不能都获得100%资源
+    资源被按生态位重叠度分割
+    
+    Args:
+        base_suitability: 基础适宜度 (S, H, W)
+        niche_similarity: 物种间生态位相似度矩阵 (S, S)
+        pop: 种群分布 (S, H, W)
+        result: 调整后适宜度 (S, H, W)
+        split_coefficient: 分割系数
+        min_split_factor: 最小分割因子（避免完全归零）
+    """
+    S, H, W = base_suitability.shape[0], base_suitability.shape[1], base_suitability.shape[2]
+    
+    for s, i, j in ti.ndrange(S, H, W):
+        base_suit = base_suitability[s, i, j]
+        
+        if base_suit <= 0.01:
+            result[s, i, j] = 0.0
+            continue
+        
+        # 累计同地块物种的生态位重叠
+        total_overlap = 0.0
+        
+        for other in range(S):
+            if other == s:
+                continue
+            
+            # 检查是否在同一地块
+            if pop[other, i, j] <= 0:
+                continue
+            
+            # 累加生态位相似度
+            total_overlap += niche_similarity[s, other]
+        
+        # 资源分割因子
+        # split_factor = 1 / (1 + total_overlap * coefficient)
+        split_factor = 1.0 / (1.0 + total_overlap * split_coefficient)
+        split_factor = ti.max(min_split_factor, split_factor)
+        
+        result[s, i, j] = base_suit * split_factor
+
+
+@ti.kernel
+def kernel_compute_specialization(
+    species_traits: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    result: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    trait_count: ti.i32,
+):
+    """计算物种专化度 - 基于特质分布的集中程度
+    
+    方差越大 = 越专化（某些特质很高，某些很低）
+    方差越小 = 越泛化（所有特质都中等）
+    
+    Args:
+        species_traits: 物种特质矩阵 (S, T) - 前 trait_count 列用于计算
+        result: 专化度输出 (S,) - 范围 [0, 1]
+        trait_count: 用于计算专化度的特质数量
+    """
+    S = result.shape[0]
+    
+    for s in range(S):
+        # 计算均值
+        mean_val = 0.0
+        for t in range(trait_count):
+            mean_val += species_traits[s, t]
+        mean_val /= ti.cast(trait_count, ti.f32)
+        
+        # 计算方差
+        variance = 0.0
+        for t in range(trait_count):
+            diff = species_traits[s, t] - mean_val
+            variance += diff * diff
+        variance /= ti.cast(trait_count, ti.f32)
+        
+        # 方差 → 专化度（使用指数变换，方差10对应专化度0.8左右）
+        specialization = 1.0 - ti.exp(-variance / 8.0)
+        result[s] = ti.min(1.0, ti.max(0.0, specialization))
+
+
+@ti.kernel
+def kernel_compute_niche_similarity(
+    species_features: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    result: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    feature_weights: ti.types.ndarray(dtype=ti.f32, ndim=1),
+):
+    """计算物种间生态位相似度矩阵 - 多维特征向量距离
+    
+    Args:
+        species_features: 物种特征矩阵 (S, F) - F维特征向量
+        result: 相似度矩阵输出 (S, S)
+        feature_weights: 各特征权重 (F,)
+    """
+    S, F = species_features.shape[0], species_features.shape[1]
+    
+    for i, j in ti.ndrange(S, S):
+        if i == j:
+            result[i, j] = 1.0
+            continue
+        
+        # 加权欧氏距离
+        weighted_sq_dist = 0.0
+        for f in range(F):
+            diff = species_features[i, f] - species_features[j, f]
+            weighted_sq_dist += feature_weights[f] * diff * diff
+        
+        distance = ti.sqrt(weighted_sq_dist)
+        
+        # 高斯核转换为相似度
+        similarity = ti.exp(-distance * distance / 0.5)
+        result[i, j] = similarity
+
+
+@ti.kernel
+def kernel_historical_adaptation_penalty(
+    base_suitability: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    historical_presence: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    result: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    novelty_penalty: ti.f32,
+    adaptation_bonus: ti.f32,
+):
+    """历史适应惩罚 - 新环境适宜度降低，老环境适宜度提升
+    
+    Args:
+        base_suitability: 基础适宜度 (S, H, W)
+        historical_presence: 历史存在记录 (S, H, W) - 0=从未存在, 1=长期存在
+        result: 调整后适宜度 (S, H, W)
+        novelty_penalty: 新环境惩罚系数 (如 0.8 = 打8折)
+        adaptation_bonus: 老环境加成系数 (如 1.1 = 加10%)
+    """
+    S, H, W = base_suitability.shape[0], base_suitability.shape[1], base_suitability.shape[2]
+    
+    for s, i, j in ti.ndrange(S, H, W):
+        base_suit = base_suitability[s, i, j]
+        history = historical_presence[s, i, j]
+        
+        if base_suit <= 0.01:
+            result[s, i, j] = 0.0
+            continue
+        
+        # 根据历史存在调整适宜度
+        if history < 0.1:
+            # 新环境：惩罚
+            adjustment = novelty_penalty
+        elif history > 0.8:
+            # 老环境：奖励
+            adjustment = adaptation_bonus
+        else:
+            # 中等：线性插值
+            adjustment = novelty_penalty + (adaptation_bonus - novelty_penalty) * history
+        
+        result[s, i, j] = ti.max(0.0, ti.min(1.0, base_suit * adjustment))
+
+
+@ti.kernel
+def kernel_combined_suitability(
+    env: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    species_traits: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    habitat_mask: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    trophic_levels: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    pop: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    niche_similarity: ti.types.ndarray(dtype=ti.f32, ndim=2),
+    result: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    # 环境参数（极端收紧版）
+    temp_tolerance_coef: ti.f32,      # 温度容忍系数 (1.0=5-10°C范围)
+    temp_penalty_rate: ti.f32,        # 温度惩罚率 (0.4=超出2.5°C归零)
+    humidity_penalty_rate: ti.f32,    # 湿度惩罚率 (4.0=差0.25归零)
+    salinity_penalty_rate: ti.f32,    # 盐度惩罚率 (5.0=差0.2归零)
+    light_penalty_rate: ti.f32,       # 光照惩罚率 (3.0=差0.33归零)
+    resource_threshold: ti.f32,       # 资源门槛 (0.9=需90%满分)
+    # 竞争参数
+    crowding_penalty_per_species: ti.f32,  # 每竞争者惩罚 (0.25=2个-50%)
+    max_crowding_penalty: ti.f32,          # 最大拥挤惩罚 (0.70=最多-70%)
+    trophic_tolerance: ti.f32,             # 营养级容忍度 (0.3=差0.3同级)
+    split_coefficient: ti.f32,             # 资源分割系数 (0.5)
+    min_split_factor: ti.f32,              # 最小分割因子 (0.2=最低保留20%)
+    # 专化度参数
+    generalist_threshold: ti.f32,          # 泛化阈值 (0.4)
+    generalist_penalty_base: ti.f32,       # 泛化惩罚基础 (0.6=打6折)
+    # 权重
+    w_temp: ti.f32,
+    w_humid: ti.f32,
+    w_salt: ti.f32,
+    w_light: ti.f32,
+    w_res: ti.f32,
+    # 环境通道索引
+    temp_idx: ti.i32,
+    humidity_idx: ti.i32,
+    resource_idx: ti.i32,
+    salinity_idx: ti.i32,
+    light_idx: ti.i32,
+):
+    """一体化适宜度计算 - 环境 + 拥挤 + 资源分割（极端收紧版）
+    
+    【设计目标】
+    - 温度范围：5-10°C（物种只能在狭窄温度范围生存）
+    - 同生态位2个物种：适宜度降50%
+    - 泛化物种：适宜度打6折
+    
+    species_traits 格式:
+        [0] 耐寒性 (1-10)
+        [1] 耐热性 (1-10)
+        [2] 耐旱性 (1-10)
+        [3] 耐盐性 (1-10)
+        [4] 光照需求 (1-10)
+        [5] 专化度 (0-1)
+    """
+    S, H, W = result.shape[0], result.shape[1], result.shape[2]
+    
+    for s, i, j in ti.ndrange(S, H, W):
+        # ========== 硬约束检查 ==========
+        if habitat_mask[s, i, j] < 0.5:
+            result[s, i, j] = 0.0
+            continue
+        
+        # ========== 获取物种特质 ==========
+        cold_res = species_traits[s, 0]
+        heat_res = species_traits[s, 1]
+        drought_res = species_traits[s, 2]
+        salt_res = species_traits[s, 3]
+        light_req = species_traits[s, 4]
+        specialization = species_traits[s, 5]
+        
+        # ========== 获取环境参数 ==========
+        tile_temp = env[temp_idx, i, j]
+        tile_humidity = env[humidity_idx, i, j]
+        tile_resource = env[resource_idx, i, j]
+        tile_salinity = env[salinity_idx, i, j]
+        tile_light = env[light_idx, i, j]
+        
+        # ========== 1. 温度适宜度（极端收紧）==========
+        # coef=1.0时，10点特质=10°C范围（非常狭窄）
+        optimal_temp_raw = 15.0 + (heat_res - cold_res) * 2.0
+        optimal_temp = (optimal_temp_raw - 10.0) / 40.0
+        tolerance_range = (cold_res + heat_res) * temp_tolerance_coef / 80.0
+        temp_diff = ti.abs(tile_temp - optimal_temp)
+        
+        if temp_diff <= tolerance_range:
+            temp_score = 1.0
+        else:
+            excess = temp_diff - tolerance_range
+            temp_score = ti.max(0.0, 1.0 - excess * temp_penalty_rate * 10.0)
+        
+        # ========== 2. 湿度适宜度（收紧）==========
+        optimal_humidity = 1.0 - drought_res * 0.08
+        humidity_diff = ti.abs(tile_humidity - optimal_humidity)
+        humidity_score = ti.max(0.0, 1.0 - humidity_diff * humidity_penalty_rate)
+        
+        # ========== 3. 盐度适宜度（收紧）==========
+        optimal_salinity = salt_res * 0.1
+        salinity_diff = ti.abs(tile_salinity - optimal_salinity)
+        salinity_score = ti.max(0.0, 1.0 - salinity_diff * salinity_penalty_rate)
+        
+        # ========== 4. 光照适宜度（收紧）==========
+        optimal_light = light_req * 0.1
+        light_diff = ti.abs(tile_light - optimal_light)
+        light_score = ti.max(0.0, 1.0 - light_diff * light_penalty_rate)
+        
+        # ========== 5. 资源适宜度（收紧）==========
+        resource_score = ti.min(1.0, tile_resource / resource_threshold)
+        
+        # ========== 6. 基础适宜度（使用可配置权重）==========
+        base_suitability = (
+            temp_score * w_temp +
+            humidity_score * w_humid +
+            salinity_score * w_salt +
+            light_score * w_light +
+            resource_score * w_res
+        )
+        
+        # ========== 7. 专化度权衡（加强惩罚）==========
+        if specialization < generalist_threshold:
+            # 泛化惩罚：专化度越低惩罚越重
+            penalty_factor = generalist_penalty_base + (1.0 - generalist_penalty_base) * (specialization / generalist_threshold)
+            base_suitability *= penalty_factor
+        
+        # ========== 8. 生态位拥挤惩罚 ==========
+        my_trophic = trophic_levels[s]
+        competitor_count = 0
+        
+        for other in range(S):
+            if other == s:
+                continue
+            if pop[other, i, j] <= 0:
+                continue
+            trophic_diff = ti.abs(trophic_levels[other] - my_trophic)
+            if trophic_diff <= trophic_tolerance:
+                competitor_count += 1
+        
+        crowding_factor = 1.0 / (1.0 + ti.cast(competitor_count, ti.f32) * crowding_penalty_per_species)
+        crowding_factor = ti.max(1.0 - max_crowding_penalty, crowding_factor)
+        
+        # ========== 9. 资源分割惩罚 ==========
+        total_overlap = 0.0
+        for other in range(S):
+            if other == s or pop[other, i, j] <= 0:
+                continue
+            total_overlap += niche_similarity[s, other]
+        
+        split_factor = 1.0 / (1.0 + total_overlap * split_coefficient)
+        split_factor = ti.max(min_split_factor, split_factor)
+        
+        # ========== 10. 最终适宜度 ==========
+        final_suit = base_suitability * crowding_factor * split_factor
+        result[s, i, j] = ti.max(0.0, ti.min(1.0, final_suit))
 
 

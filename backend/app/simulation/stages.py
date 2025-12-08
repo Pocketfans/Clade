@@ -1186,53 +1186,53 @@ class PopulationUpdateStage(BaseStage):
             # 确保死亡率在有效范围内
             death_rates[code] = max(0.0, min(1.0, item.death_rate))
         
-        # 【新增】亲缘差异化竞争修正：同属竞争优胜劣汰
+        # 【新增】亲缘差异化竞争修正：同属竞争优胜劣汰（Taichi GPU加速）
         try:
-            from ..services.species.kin_competition import get_kin_competition_calculator
-            from ..core.config import get_settings
+            from ..tensor.competition import calculate_competition_tensor
+            from ..core.container import get_container
             
-            settings = get_settings()
-            ecology_config = settings.ui.ecology_balance
+            config_service = get_container().config_service
+            ecology_config = config_service.get_ecology_balance()
             
             if ecology_config.enable_kin_competition and ctx.species_batch:
-                kin_calculator = get_kin_competition_calculator()
-                kin_calculator.reload_config(ecology_config)
-                kin_calculator.clear_cache()  # 新回合清除缓存
-                
                 # 获取生态位重叠数据
                 niche_overlaps = {
                     code: metrics.overlap
                     for code, metrics in ctx.niche_metrics.items()
                 } if ctx.niche_metrics else None
                 
-                # 计算竞争结果
-                competition_results = kin_calculator.calculate_competition(
+                # 【GPU加速】一次性计算所有物种的竞争结果
+                competition_result = calculate_competition_tensor(
                     ctx.species_batch,
+                    ecology_config,
                     niche_overlaps=niche_overlaps,
                 )
                 
-                # 应用竞争修正到死亡率
+                # 应用竞争修正到死亡率（向量化）
                 modified_count = 0
-                for code, result in competition_results.items():
-                    if code in death_rates and abs(result.mortality_modifier) > 0.001:
+                for i, code in enumerate(competition_result.species_codes):
+                    mortality_mod = competition_result.mortality_modifiers[i]
+                    fitness = competition_result.fitness_scores[i]
+                    
+                    if code in death_rates and abs(mortality_mod) > 0.001:
                         original = death_rates[code]
                         # mortality_modifier 正数=优势（减少死亡率），负数=劣势（增加死亡率）
-                        modified = max(0.01, min(0.95, original - result.mortality_modifier))
+                        modified = max(0.01, min(0.95, original - mortality_mod))
                         death_rates[code] = modified
                         modified_count += 1
                         
                         if abs(original - modified) > 0.03:
-                            status_emoji = "👑" if result.status == "dominant" else "💀" if result.status == "subordinate" else "🤝"
+                            status = "👑" if mortality_mod > 0.05 else "💀" if mortality_mod < -0.05 else "🤝"
                             logger.info(
-                                f"[亲缘竞争] {status_emoji} {code}: "
+                                f"[GPU竞争] {status} {code}: "
                                 f"死亡率 {original:.1%} → {modified:.1%} "
-                                f"(状态={result.status}, 适应度={result.fitness_score:.2f})"
+                                f"(适应度={fitness:.2f}, 修正={mortality_mod:+.3f})"
                             )
                 
                 if modified_count > 0:
-                    logger.info(f"[亲缘竞争] 已调整 {modified_count} 个物种的死亡率")
+                    logger.info(f"[GPU竞争] 已调整 {modified_count} 个物种的死亡率")
         except Exception as e:
-            logger.warning(f"[亲缘竞争] 计算失败，跳过: {e}")
+            logger.warning(f"[GPU竞争] 计算失败，跳过: {e}", exc_info=True)
         
         # 使用真实存活率（1 - death_rate）
         survival_rates = {

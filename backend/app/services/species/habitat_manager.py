@@ -798,12 +798,18 @@ class HabitatManager:
         return filtered if filtered else tiles[:10]  # 如果没有合适的，返回前10个作为备选
     
     def _calculate_suitability(self, species: Species, tile: MapTile) -> float:
-        """计算物种在地块的适宜度 (严格物理约束版)
+        """计算物种在地块的适宜度 (v2.0 极端收紧版)
         
-        【修复v11】
-        1. 物理介质如果不匹配（如陆生在深海），直接返回 0.0
-        2. 温度/湿度如果不适宜，分数会迅速下降到 0.0
-        3. 移除不明朗的"语义乘区"，回归纯数值计算
+        【v2.0 核心改进】
+        1. 温度范围：从80°C缩小到5-10°C
+        2. 温度惩罚：从0.1/度增加到0.4/度
+        3. 湿度惩罚：从1.5增加到4.0
+        4. 资源门槛：从500增加到900（90%资源才满分）
+        5. 专化度惩罚：泛化物种打6折
+        
+        【设计目标】
+        - 让物种只能在狭窄环境范围生存
+        - 强迫物种分化以适应不同生态位
         """
         # === 1. 物理介质检查 (Hard Constraints) ===
         habitat_type = (getattr(species, 'habitat_type', '') or 'terrestrial').lower()
@@ -821,17 +827,14 @@ class HabitatManager:
         
         # 规则1: 纯陆生生物不能下海
         if is_terrestrial and is_water:
-            # 仅在极浅水域(0 to -10m)给予极低生存率(0.05)，否则为0
             if elevation > -10:
                 return 0.05
             return 0.0
             
         # 规则2: 纯水生生物不能上岸
         if is_aquatic and is_land:
-            # 两栖类除外
             if is_amphibious:
                 pass
-            # 海岸生物勉强可以在低海拔陆地生存
             elif habitat_type == 'coastal' and elevation < 50:
                 pass
             else:
@@ -841,56 +844,109 @@ class HabitatManager:
         if habitat_type == 'deep_sea' and elevation > -500:
             return 0.0
             
-        # === 2. 环境耐受性检查 (Tolerance Check) ===
-        # 温度评分
-        # 假设标准适宜温度范围根据耐热/耐寒性决定
-        # 耐寒性(1-10): 越高越能适应低温。 基准低温 = 15 - 耐寒性*3
-        # 耐热性(1-10): 越高越能适应高温。 基准高温 = 15 + 耐热性*3
+        # === 2. 环境耐受性检查 (v2.0 极端收紧版) ===
         cold_res = species.abstract_traits.get("耐寒性", 5)
         heat_res = species.abstract_traits.get("耐热性", 5)
+        drought_tol = species.abstract_traits.get("耐旱性", 5)
         
-        min_temp = 15 - (cold_res * 4) # range: 11 (res=1) to -25 (res=10)
-        max_temp = 15 + (heat_res * 4) # range: 19 (res=1) to 55 (res=10)
+        # ---------- 温度评分 (极端收紧) ----------
+        # 【v2.0】温度范围：coef=1.0时约5-10°C（极窄）
+        # 原：cold_res*4 = 40°C范围 → 新：cold_res*1.0 = 10°C范围
+        TEMP_COEF = 1.0  # 温度容忍系数（越低越苛刻）
+        TEMP_PENALTY = 0.4  # 温度惩罚率（越高越苛刻）
+        
+        optimal_temp = 15.0 + (heat_res - cold_res) * 2.0
+        tolerance_range = (cold_res + heat_res) * TEMP_COEF  # 5-10点特质 = 5-10°C范围
+        
+        min_temp = optimal_temp - tolerance_range / 2
+        max_temp = optimal_temp + tolerance_range / 2
         
         tile_temp = tile.temperature
         
         if min_temp <= tile_temp <= max_temp:
             temp_score = 1.0
         else:
-            # 超出范围，分数迅速衰减
+            # 【v2.0】超出范围，分数迅速衰减
             diff = min(abs(tile_temp - min_temp), abs(tile_temp - max_temp))
-            # 每超出1度扣减0.1，超过10度直接死亡
-            temp_score = max(0.0, 1.0 - diff * 0.1)
+            # 原：每度扣0.1 → 新：每度扣0.4，超过2.5度归零
+            temp_score = max(0.0, 1.0 - diff * TEMP_PENALTY)
             
         if temp_score == 0.0:
             return 0.0
             
-        # 湿度评分 (仅陆地生物相关)
+        # ---------- 湿度评分 (收紧) ----------
+        # 【v2.0】湿度惩罚：从1.5增加到4.0
+        HUMIDITY_PENALTY = 4.0  # 湿度惩罚率
+        
         humidity_score = 1.0
         if is_land:
-            drought_tol = species.abstract_traits.get("耐旱性", 5)
-            # 耐旱性越高，最佳湿度越低
-            # best_humidity: 10 -> 0.1, 1 -> 0.9
-            best_humidity = 1.0 - (drought_tol * 0.09) 
+            best_humidity = 1.0 - (drought_tol * 0.08)
             hum_diff = abs(tile.humidity - best_humidity)
-            # 湿度不匹配不像温度那么致命，比较宽容
-            humidity_score = max(0.1, 1.0 - hum_diff * 1.5)
+            # 原：1.5系数 → 新：4.0系数，差0.25归零
+            humidity_score = max(0.0, 1.0 - hum_diff * HUMIDITY_PENALTY)
             
-        # === 3. 综合评分 ===
-        # 资源作为软上限
-        resource_score = min(1.0, tile.resources / 500.0)
+        # ---------- 资源评分 (收紧) ----------
+        # 【v2.0】资源门槛：从500增加到900
+        RESOURCE_THRESHOLD = 900.0  # 资源满分门槛
+        resource_score = min(1.0, tile.resources / RESOURCE_THRESHOLD)
         
-        # 最终得分：环境分 * 资源分
-        # 只有环境适宜(temp_score高)，资源(resource_score)才有意义
-        final_score = temp_score * 0.4 + humidity_score * 0.3 + resource_score * 0.3
+        # ---------- 专化度惩罚 ----------
+        # 【v2.0】泛化物种适宜度打折
+        GENERALIST_THRESHOLD = 0.4  # 专化度低于此值视为泛化
+        GENERALIST_PENALTY = 0.60   # 泛化物种基础惩罚
         
-        # 再次应用物理介质惩罚(针对两栖/海岸边缘情况)
+        specialization = self._estimate_specialization(species)
+        spec_penalty = 1.0
+        if specialization < GENERALIST_THRESHOLD:
+            # 专化度越低，惩罚越重
+            spec_penalty = GENERALIST_PENALTY + (1.0 - GENERALIST_PENALTY) * (specialization / GENERALIST_THRESHOLD)
+        
+        # === 3. 综合评分 (v2.0 调整权重) ===
+        # 【v2.0】温度权重增加，体现温度的重要性
+        base_score = (
+            temp_score * 0.35 +      # 温度权重提升
+            humidity_score * 0.25 +  # 湿度权重提升
+            resource_score * 0.40    # 资源仍然重要
+        )
+        
+        # 应用专化度惩罚
+        final_score = base_score * spec_penalty
+        
+        # 两栖生物在水陆交界处获得加成
         if is_amphibious:
-            # 两栖生物在水陆交界处(海拔 -50 到 50)获得加成
             if -50 < elevation < 50:
                 final_score *= 1.2
                 
         return max(0.0, min(1.0, final_score))
+    
+    def _estimate_specialization(self, species: Species) -> float:
+        """估算物种的专化度 (0-1)
+        
+        专化物种：特质分布极端（有很高和很低的）
+        泛化物种：特质分布平均（都是中等值）
+        
+        Returns:
+            0.0 = 完全泛化，1.0 = 高度专化
+        """
+        traits = [
+            species.abstract_traits.get("耐寒性", 5),
+            species.abstract_traits.get("耐热性", 5),
+            species.abstract_traits.get("耐旱性", 5),
+        ]
+        
+        # 计算特质的标准差（归一化到0-1）
+        if not traits:
+            return 0.5
+        
+        mean_val = sum(traits) / len(traits)
+        variance = sum((t - mean_val) ** 2 for t in traits) / len(traits)
+        std_dev = variance ** 0.5
+        
+        # 标准差范围约 0-4.5，归一化到 0-1
+        # std_dev=0 表示完全泛化，std_dev=4.5 表示高度专化
+        specialization = min(1.0, std_dev / 4.5)
+        
+        return specialization
     
     def _calculate_migration_ratio(self, migration_event: MigrationEvent) -> float:
         """计算迁徙比例（0-1之间）
