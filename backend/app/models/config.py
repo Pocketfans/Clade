@@ -37,49 +37,49 @@ class CapabilityRouteConfig(BaseModel):
 
 
 class SpeciationConfig(BaseModel):
-    """物种分化配置 - 控制分化行为的所有参数"""
+    """物种分化配置 - 控制分化行为的所有参数（快速进化版本）"""
     model_config = ConfigDict(extra="ignore")
     
-    # ========== 基础分化参数 ==========
+    # ========== 基础分化参数（快速进化增强）==========
     # 分化冷却期（回合数）：分化后多少回合内不能再次分化
-    cooldown_turns: int = 3
+    cooldown_turns: int = 1  # 从3降到1，加速分化
     # 物种密度软上限：超过此数量后分化概率开始衰减
-    species_soft_cap: int = 80
-    # 基础分化概率（0-1）- 降低以减缓分化速度
-    base_speciation_rate: float = 0.20
+    species_soft_cap: int = 120  # 从80提高到120，允许更多物种
+    # 基础分化概率（0-1）- 大幅提升以加速分化
+    base_speciation_rate: float = 0.40  # 从0.20提升到0.40，翻倍
     # 单次分化最大子种数量（每次分化产生的后代数）
-    max_offspring_count: int = 2
+    max_offspring_count: int = 3  # 从2提升到3
     
     # ========== 直接后代数量限制 ==========
     # 一个物种最多能分化出多少个直接后代
     # 只有当所有后代都灭绝后，才能再次分化
-    max_direct_offspring: int = 3
+    max_direct_offspring: int = 5  # 从3提升到5
     # 是否只计算存活后代（true=只计存活，false=计算所有历史后代）
     count_only_alive_offspring: bool = True
     
-    # ========== 早期分化优化 ==========
+    # ========== 早期分化优化（扩展早期优惠）==========
     # 早期回合阈值：低于此回合数时使用更宽松的条件
-    early_game_turns: int = 15
-    # 早期门槛折减系数的最小值（0.5 = 最低降到 50%，不要太宽松）
-    early_threshold_min_factor: float = 0.5
+    early_game_turns: int = 100  # 从15扩展到100，前100回合都享受早期优惠
+    # 早期门槛折减系数的最小值（0.3 = 最低降到 30%）
+    early_threshold_min_factor: float = 0.3  # 从0.5降到0.3，更宽松
     # 早期门槛折减速率（每回合降低多少，降低折减速度）
-    early_threshold_decay_rate: float = 0.03
-    # 早期跳过冷却期的回合数（只有前2回合跳过冷却）
-    early_skip_cooldown_turns: int = 2
+    early_threshold_decay_rate: float = 0.02  # 从0.03降到0.02
+    # 早期跳过冷却期的回合数（前5回合跳过冷却）
+    early_skip_cooldown_turns: int = 5  # 从2提升到5
     
-    # ========== 压力/资源触发阈值 ==========
+    # ========== 压力/资源触发阈值（降低门槛）==========
     # 后期压力阈值
-    pressure_threshold_late: float = 0.35
+    pressure_threshold_late: float = 0.25  # 从0.35降到0.25
     # 早期压力阈值
-    pressure_threshold_early: float = 0.20
+    pressure_threshold_early: float = 0.12  # 从0.20降到0.12
     # 后期资源阈值
-    resource_threshold_late: float = 0.30
+    resource_threshold_late: float = 0.20  # 从0.30降到0.20
     # 早期资源阈值
-    resource_threshold_early: float = 0.18
+    resource_threshold_early: float = 0.10  # 从0.18降到0.10
     # 后期演化潜力阈值
-    evo_potential_threshold_late: float = 0.40
+    evo_potential_threshold_late: float = 0.30  # 从0.40降到0.30
     # 早期演化潜力阈值
-    evo_potential_threshold_early: float = 0.25
+    evo_potential_threshold_early: float = 0.15  # 从0.25降到0.15
     
     # ========== 候选地块筛选 ==========
     # 候选地块最小种群
@@ -89,23 +89,23 @@ class SpeciationConfig(BaseModel):
     # 候选地块死亡率上限
     candidate_tile_death_rate_max: float = 0.75
     
-    # ========== 辐射演化 ==========
+    # ========== 辐射演化（大幅增强）==========
     # 辐射演化基础概率
-    radiation_base_chance: float = 0.08
+    radiation_base_chance: float = 0.18  # 从0.08提升到0.18
     # 早期辐射演化额外加成
-    radiation_early_bonus: float = 0.12
+    radiation_early_bonus: float = 0.25  # 从0.12提升到0.25
     # 早期辐射演化种群比例要求
-    radiation_pop_ratio_early: float = 1.2
+    radiation_pop_ratio_early: float = 1.0  # 从1.2降到1.0，更容易触发
     # 后期辐射演化种群比例要求
-    radiation_pop_ratio_late: float = 1.5
+    radiation_pop_ratio_late: float = 1.2  # 从1.5降到1.2
     # 早期辐射演化概率上限
-    radiation_max_chance_early: float = 0.25
+    radiation_max_chance_early: float = 0.45  # 从0.25提升到0.45
     # 后期辐射演化概率上限
-    radiation_max_chance_late: float = 0.15
+    radiation_max_chance_late: float = 0.30  # 从0.15提升到0.30
     # 早期无隔离惩罚系数
-    no_isolation_penalty_early: float = 0.70
+    no_isolation_penalty_early: float = 0.85  # 从0.70提升到0.85，惩罚更轻
     # 后期无隔离惩罚系数
-    no_isolation_penalty_late: float = 0.50
+    no_isolation_penalty_late: float = 0.65  # 从0.50提升到0.65
     
     # ========== 门槛乘数 ==========
     # 无隔离时门槛乘数
@@ -157,35 +157,33 @@ class SpeciationConfig(BaseModel):
     # 最小簇间距离（候选块数量>=N且任意两簇间距离>此值也视为隔离）
     min_cluster_gap: int = 2
     
-    # ========== 灭绝阈值 ==========
+    # ========== 灭绝阈值（加速淘汰）==========
     # 绝对灭绝阈值：种群低于此值直接灭绝（单位：kg 生物量）
-    extinction_population_threshold: int = 100
+    extinction_population_threshold: int = 500  # 从100提升到500
     # 死亡率灭绝阈值：单回合死亡率超过此值触发灭绝
-    extinction_death_rate_threshold: float = 0.95
+    extinction_death_rate_threshold: float = 0.85  # 从0.95降到0.85，更容易灭绝
     
     # 最小可存活种群 (MVP)：种群长期低于此值会逐渐走向灭绝
-    # 考虑到游戏中生物量单位是 kg，设为 1000 kg
-    minimum_viable_population: int = 1000
+    minimum_viable_population: int = 2000  # 从1000提升到2000
     # MVP 检测窗口：连续多少回合低于 MVP 触发灭绝警告
-    mvp_warning_turns: int = 3
+    mvp_warning_turns: int = 2  # 从3降到2
     # MVP 灭绝回合：连续多少回合低于 MVP 直接灭绝
-    mvp_extinction_turns: int = 5
+    mvp_extinction_turns: int = 3  # 从5降到3，加速淘汰
     
     # 竞争劣势阈值：种群低于生态系统平均的此比例时，竞争力下降
-    # 例如 0.1 表示种群低于平均值的 10% 时竞争力下降
-    competition_disadvantage_ratio: float = 0.05
+    competition_disadvantage_ratio: float = 0.08  # 从0.05提升到0.08
     # 竞争灭绝阈值：种群低于生态系统平均的此比例时，可能被竞争灭绝
-    competition_extinction_ratio: float = 0.01
+    competition_extinction_ratio: float = 0.02  # 从0.01提升到0.02
     
     # 近交衰退阈值：种群低于此值时开始受近交衰退影响（额外死亡率）
-    inbreeding_depression_threshold: int = 5000
-    # 近交衰退系数：低于阈值时的额外死亡率 = (1 - pop/threshold) * coefficient
-    inbreeding_depression_coefficient: float = 0.15
+    inbreeding_depression_threshold: int = 8000  # 从5000提升到8000
+    # 近交衰退系数：低于阈值时的额外死亡率
+    inbreeding_depression_coefficient: float = 0.25  # 从0.15提升到0.25
     
-    # 连续衰退灭绝：连续衰退（种群减少）超过此回合数触发灭绝
-    consecutive_decline_extinction_turns: int = 8
+    # 连续衰退灭绝：连续衰退超过此回合数触发灭绝
+    consecutive_decline_extinction_turns: int = 5  # 从8降到5
     # 衰退检测阈值：种群减少超过此比例才算衰退
-    decline_detection_threshold: float = 0.1
+    decline_detection_threshold: float = 0.08  # 从0.1降到0.08，更敏感
 
 
 class ReproductionConfig(BaseModel):
@@ -375,27 +373,27 @@ class EcologyBalanceConfig(BaseModel):
     """
     model_config = ConfigDict(extra="ignore")
     
-    # ========== 食物匮乏惩罚 ==========
+    # ========== 食物匮乏惩罚（强化）==========
     # 猎物丰富度阈值：低于此值开始惩罚
-    food_scarcity_threshold: float = 0.3
+    food_scarcity_threshold: float = 0.4  # 从0.3提升到0.4，更容易触发惩罚
     # 食物匮乏惩罚系数：death_rate += penalty * (threshold - abundance)
-    food_scarcity_penalty: float = 0.4
+    food_scarcity_penalty: float = 0.65  # 从0.4提升到0.65
     # 稀缺压力在死亡率中的权重
-    scarcity_weight: float = 0.5
+    scarcity_weight: float = 0.6  # 从0.5提升到0.6
     # 消费者分布时搜索的猎物地块数量
     prey_search_top_k: int = 5
     
-    # ========== 竞争强度 ==========
+    # ========== 竞争强度（大幅强化）==========
     # 基础竞争系数（相似度 × 营养级系数 × 此值）
-    competition_base_coefficient: float = 0.60
+    competition_base_coefficient: float = 0.85  # 从0.60提升到0.85
     # 单个竞争者贡献上限
-    competition_per_species_cap: float = 0.35
+    competition_per_species_cap: float = 0.50  # 从0.35提升到0.50
     # 总竞争压力上限
-    competition_total_cap: float = 0.80
+    competition_total_cap: float = 0.95  # 从0.80提升到0.95
     # 同级竞争系数（同营养级物种之间）
-    same_level_competition_k: float = 0.15
+    same_level_competition_k: float = 0.25  # 从0.15提升到0.25
     # 生态位重叠惩罚系数（基于embedding相似度）
-    niche_overlap_penalty_k: float = 0.20
+    niche_overlap_penalty_k: float = 0.35  # 从0.20提升到0.35
     
     # ========== 营养传递效率 ==========
     # 能量传递效率（10%规则）：每升一个营养级，可用能量降至此比例
@@ -459,34 +457,34 @@ class EcologyBalanceConfig(BaseModel):
     # 体型差异对捕食成功率的影响
     size_advantage_factor: float = 0.1
     
-    # ========== 频率依赖选择 ==========
+    # ========== 频率依赖选择（强化）==========
     # 【新增】频率依赖选择：常见型受惩罚，稀有型获优势
     # 是否启用频率依赖选择
     enable_frequency_dependence: bool = True
     # 频率依赖效应强度（0-1）：0=无效应，1=强效应
-    frequency_dependence_strength: float = 0.25
+    frequency_dependence_strength: float = 0.40  # 从0.25提升到0.40
     # 常见型阈值：种群占比超过此值被视为"常见型"，受惩罚
-    common_type_threshold: float = 0.15
+    common_type_threshold: float = 0.12  # 从0.15降到0.12
     # 稀有型阈值：种群占比低于此值被视为"稀有型"，获优势
-    rare_type_threshold: float = 0.03
+    rare_type_threshold: float = 0.04  # 从0.03提升到0.04
     # 常见型最大惩罚（额外死亡率）
-    common_type_max_penalty: float = 0.12
+    common_type_max_penalty: float = 0.20  # 从0.12提升到0.20
     # 稀有型最大优势（死亡率减免）
-    rare_type_max_advantage: float = 0.08
+    rare_type_max_advantage: float = 0.12  # 从0.08提升到0.12
     
-    # ========== 世代更替（加速前代物种淘汰）==========
+    # ========== 世代更替（大幅加速淘汰）==========
     # 基因衰老阈值：物种存在多少回合后开始衰老
-    lifespan_limit: int = 5
+    lifespan_limit: int = 3  # 从5降到3，更快开始衰老
     # 衰老速率：超过阈值后每回合增加的死亡率
-    lifespan_decay_rate: float = 0.08
+    lifespan_decay_rate: float = 0.15  # 从0.08提升到0.15
     # 进化死胡同阈值：物种存在多少回合后若无子代则视为死胡同
-    dead_end_threshold: int = 3
+    dead_end_threshold: int = 2  # 从3降到2
     # 进化死胡同惩罚：死胡同物种的额外死亡率
-    dead_end_penalty: float = 0.15
+    dead_end_penalty: float = 0.30  # 从0.15提升到0.30
     # 亲代让位惩罚：有存活子代时额外承受的死亡率
-    obsolescence_penalty: float = 0.35
+    obsolescence_penalty: float = 0.50  # 从0.35提升到0.50
     # 阿利效应阈值：种群低于此数量时开始受阿利效应惩罚
-    allee_threshold: int = 50000
+    allee_threshold: int = 80000  # 从50000提升到80000
     
     # ========== 新物种适应性优势 ==========
     # 【新增】新分化物种在前几回合获得适应性优势
@@ -501,16 +499,16 @@ class EcologyBalanceConfig(BaseModel):
     # 新物种繁殖率加成（第1回合）
     new_species_reproduction_boost: float = 1.15
     
-    # ========== 增强版子代压制（加速世代更替）==========
+    # ========== 增强版子代压制（大幅加速世代更替）==========
     # 【新增】子代对亲代的压制效果增强
     # 子代压制系数（大幅提高以加速世代更替）
-    offspring_suppression_coefficient: float = 0.40
+    offspring_suppression_coefficient: float = 0.60  # 从0.40提升到0.60
     # 亲代演化滞后惩罚第1回合（分化后立即受惩罚）
-    parent_lag_penalty_turn0: float = 0.25
+    parent_lag_penalty_turn0: float = 0.35  # 从0.25提升到0.35
     # 亲代演化滞后惩罚第2回合
-    parent_lag_penalty_turn1: float = 0.18
+    parent_lag_penalty_turn1: float = 0.28  # 从0.18提升到0.28
     # 亲代演化滞后惩罚第3回合
-    parent_lag_penalty_turn2: float = 0.12
+    parent_lag_penalty_turn2: float = 0.20  # 从0.12提升到0.20
     
     # ========== 生态位重叠直接竞争 ==========
     # 【新增】高生态位重叠时的直接竞争效应
@@ -607,17 +605,17 @@ class EcologicalRealismConfig(BaseModel):
     # 远层竞争系数
     distant_layer_competition: float = 0.05
     
-    # ========== 适应滞后 ==========
+    # ========== 适应滞后（强化不适应惩罚）==========
     # 是否启用适应滞后
     enable_adaptation_lag: bool = True
     # 环境变化追踪窗口（回合）
-    env_change_tracking_window: int = 5
+    env_change_tracking_window: int = 3  # 从5降到3，更敏感
     # 最大适应惩罚
-    max_adaptation_penalty: float = 0.3
+    max_adaptation_penalty: float = 0.50  # 从0.3提升到0.50
     # 高可塑性保护系数
-    plasticity_protection: float = 0.5
+    plasticity_protection: float = 0.35  # 从0.5降到0.35，保护更弱
     # 世代时间影响
-    generation_time_factor: float = 0.1
+    generation_time_factor: float = 0.15  # 从0.1提升到0.15
     
     # ========== 互利共生 ==========
     # 是否启用互利共生

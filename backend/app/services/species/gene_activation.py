@@ -502,7 +502,7 @@ class GeneActivationService:
         evolution_potential: float,
         pressure_matched: bool
     ) -> dict | None:
-        """推进器官发育阶段"""
+        """推进器官发育阶段（快速发育版本：总计2-5回合成熟）"""
         current_stage = OrganStage(gene_data.get("development_stage", 0))
         stage_start = gene_data.get("stage_start_turn", turn)
         turns_in_stage = turn - stage_start
@@ -512,15 +512,22 @@ class GeneActivationService:
         
         # 获取发育配置
         dev_config = ORGAN_DEVELOPMENT_CONFIG
-        required_turns = dev_config["turns_per_stage"].get(current_stage, 3)
-        failure_chance = dev_config["failure_chance"].get(current_stage, 0.1)
+        failure_chance = dev_config["failure_chance"].get(current_stage, 0.05)
         
-        # 演化潜力加速发育
-        required_turns = max(1, int(required_turns * (1 - evolution_potential * 0.3)))
+        # 使用随机化的回合数范围（如果存在）
+        if "turns_per_stage_range" in dev_config:
+            range_config = dev_config["turns_per_stage_range"].get(current_stage, (1, 2))
+            required_turns = random.randint(range_config[0], range_config[1])
+        else:
+            required_turns = dev_config["turns_per_stage"].get(current_stage, 1)
+        
+        # 演化潜力加速发育（高潜力可能直接跳过阶段）
+        if evolution_potential > 0.6 and random.random() < evolution_potential * 0.3:
+            required_turns = 0  # 高演化潜力可以直接推进
         
         # 压力匹配加速发育
         if pressure_matched:
-            required_turns = max(1, required_turns - 1)
+            required_turns = max(0, required_turns - 1)
         
         if turns_in_stage < required_turns:
             return None  # 还未达到发育时间

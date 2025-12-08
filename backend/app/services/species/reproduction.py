@@ -1132,7 +1132,7 @@ class ReproductionService:
             base_growth_multiplier *= effective_scaling
             
             if time_scaling > 1.5:
-                logger.info(
+                logger.debug(
                     f"[时代缩放] {species.common_name} 处于 {time_config['era_name']}，"
                     f"繁殖倍率={effective_scaling:.1f}x"
                 )
@@ -1193,7 +1193,7 @@ class ReproductionService:
             # 它们的数量应该由消费者捕食来控制，而不是繁殖效率限制
             producer_boost = 5.0  # 500% 繁殖效率加成（5倍基础速度）
             base_growth_multiplier *= producer_boost
-            logger.info(f"[生产者爆发] {species.common_name} (T{trophic_level:.1f}) 生产者繁殖加成 +400%")
+            logger.debug(f"[生产者爆发] {species.common_name} (T{trophic_level:.1f}) 生产者繁殖加成 +400%")
         
         # 3. 生存率修正
         survival_modifier = survival_mod_base + survival_rate * survival_mod_rate
@@ -1223,7 +1223,7 @@ class ReproductionService:
                 # 【v13】生产者：环境适宜时爆发式增长（最高+300%）
                 # 这模拟了藻类大爆发、细菌繁殖等现象
                 low_mortality_bonus = (LOW_MORTALITY_THRESHOLD - death_rate) / LOW_MORTALITY_THRESHOLD * 3.0
-                logger.info(
+                logger.debug(
                     f"[生产者爆发] {species.common_name} 死亡率{death_rate:.1%}，"
                     f"繁殖效率+{low_mortality_bonus:.0%}"
                 )

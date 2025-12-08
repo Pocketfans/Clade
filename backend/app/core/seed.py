@@ -1213,15 +1213,16 @@ THRIVING_ECOSYSTEM_SCENARIO = [
 
 
 def _generate_initial_dormant_genes(species: Species) -> None:
-    """为物种生成初始休眠基因 v2.0
+    """为物种生成初始休眠基因 v3.0（快速进化版本）
     
     根据物种的生态特性（栖息地、食性、营养级）生成符合其特质的休眠基因。
     
-    【v2.0 新功能】
+    【v3.0 快速进化增强】
     - 显隐性遗传：每个基因有显隐性类型
-    - 有害突变：15%概率生成有害基因
+    - 有害突变：25%概率生成有害基因（提供自然选择原料）
     - 细化压力类型：使用新的压力-基因映射系统
     - 器官发育阶段：器官初始为未发育状态
+    - 更多基因：大幅提升各类基因生成概率
     """
     # 导入新的基因常量
     from ..services.species.gene_constants import (
@@ -1274,18 +1275,18 @@ def _generate_initial_dormant_genes(species: Species) -> None:
         "代谢效率": ["starvation"],
     }
     
-    # ========== 1. 基于现有特质生成强化版休眠基因 ==========
+    # ========== 1. 基于现有特质生成强化版休眠基因（85%概率）==========
     for trait_name, trait_value in (species.abstract_traits or {}).items():
-        # 60% 概率为每个特质生成一个增强版休眠基因
-        if rng.random() < 0.60:
+        # 85% 概率为每个特质生成一个增强版休眠基因
+        if rng.random() < 0.85:
             enhanced_name = f"强化{trait_name}" if not trait_name.startswith("强化") else trait_name
             if enhanced_name not in species.dormant_genes["traits"]:
                 pressure_types = pressure_mapping.get(trait_name, ["competition", "starvation"])
                 dominance = roll_dominance("trait")
                 
                 species.dormant_genes["traits"][enhanced_name] = {
-                    "potential_value": min(15.0, float(trait_value) * 1.25),
-                    "activation_threshold": 0.20,
+                    "potential_value": min(15.0, float(trait_value) * 1.35),  # 提升潜力值
+                    "activation_threshold": 0.18,  # 降低激活门槛
                     "pressure_types": pressure_types,
                     "exposure_count": 0,
                     "activated": False,
@@ -1355,11 +1356,11 @@ def _generate_initial_dormant_genes(species: Species) -> None:
     
     for trait_name, pressure_types, base_value in ecological_traits:
         if trait_name not in (species.abstract_traits or {}) and trait_name not in species.dormant_genes["traits"]:
-            if rng.random() < 0.45:  # 45% 概率
+            if rng.random() < 0.75:  # 75% 概率生成生态位特化基因
                 dominance = roll_dominance("trait")
                 species.dormant_genes["traits"][trait_name] = {
-                    "potential_value": base_value + rng.uniform(-0.5, 1.0),
-                    "activation_threshold": 0.18,
+                    "potential_value": base_value + rng.uniform(0.5, 2.0),  # 提升潜力值范围
+                    "activation_threshold": 0.15,  # 降低激活门槛
                     "pressure_types": pressure_types,
                     "exposure_count": 0,
                     "activated": False,
@@ -1368,8 +1369,8 @@ def _generate_initial_dormant_genes(species: Species) -> None:
                     "mutation_effect": MutationEffect.BENEFICIAL.value,
                 }
     
-    # ========== 2.5 添加有害突变（15%概率） ==========
-    if rng.random() < 0.15:
+    # ========== 2.5 添加有害突变（25%概率，提供自然选择原料） ==========
+    if rng.random() < 0.25:
         harmful_mutations = [m for m in HARMFUL_MUTATIONS 
                            if m["effect"] in (MutationEffect.MILDLY_HARMFUL, MutationEffect.HARMFUL)]
         if harmful_mutations:
@@ -1394,82 +1395,88 @@ def _generate_initial_dormant_genes(species: Species) -> None:
     # ========== 3. 根据生态位生成符合物种特性的休眠器官 ==========
     potential_organs = []
     
-    # --- 生产者器官 ---
+    # --- 生产者器官（概率提升）---
     if is_producer:
         potential_organs.extend([
             {"name": "增强叶绿体", "category": "photosynthetic", "type": "enhanced_chloroplast", 
-             "parameters": {"efficiency": 1.5}, "pressure_types": ["light", "resource"], "prob": 0.50},
+             "parameters": {"efficiency": 1.5}, "pressure_types": ["light", "resource"], "prob": 0.75},
             {"name": "光合色素", "category": "photosynthetic", "type": "pigment", 
-             "parameters": {"spectrum_range": 0.8}, "pressure_types": ["light", "competition"], "prob": 0.40},
+             "parameters": {"spectrum_range": 0.8}, "pressure_types": ["light", "competition"], "prob": 0.60},
             {"name": "UV防护层", "category": "protection", "type": "uv_shield", 
-             "parameters": {"uv_resist": 0.7}, "pressure_types": ["radiation", "damage"], "prob": 0.35},
+             "parameters": {"uv_resist": 0.7}, "pressure_types": ["radiation", "damage"], "prob": 0.55},
             {"name": "储能细胞", "category": "storage", "type": "energy_storage", 
-             "parameters": {"capacity": 0.6}, "pressure_types": ["resource", "stress"], "prob": 0.30},
+             "parameters": {"capacity": 0.6}, "pressure_types": ["resource", "stress"], "prob": 0.50},
         ])
     
-    # --- 消费者感知器官 ---
+    # --- 消费者感知器官（概率提升）---
     if is_consumer:
         if not is_deep_sea:  # 深海物种不需要感光器官
             potential_organs.append(
                 {"name": "原始眼点", "category": "sensory", "type": "eyespot", 
-                 "parameters": {"sensitivity": 0.5}, "pressure_types": ["predation", "hunting"], "prob": 0.40}
+                 "parameters": {"sensitivity": 0.5}, "pressure_types": ["predation", "hunting"], "prob": 0.65}
             )
         potential_organs.extend([
             {"name": "化学感受器", "category": "sensory", "type": "chemoreceptor", 
-             "parameters": {"range": 0.4}, "pressure_types": ["predation", "foraging"], "prob": 0.45},
+             "parameters": {"range": 0.4}, "pressure_types": ["predation", "foraging"], "prob": 0.70},
             {"name": "触觉感受器", "category": "sensory", "type": "mechanoreceptor", 
-             "parameters": {"sensitivity": 0.5}, "pressure_types": ["predation", "navigation"], "prob": 0.35},
+             "parameters": {"sensitivity": 0.5}, "pressure_types": ["predation", "navigation"], "prob": 0.55},
+            {"name": "原始消化腔", "category": "digestive", "type": "primitive_gut", 
+             "parameters": {"efficiency": 0.4}, "pressure_types": ["starvation"], "prob": 0.55},
         ])
     
-    # --- 捕食者攻击器官 ---
+    # --- 捕食者攻击器官（概率提升）---
     if is_predator:
         potential_organs.extend([
             {"name": "捕食附肢", "category": "attack", "type": "grasping_appendage", 
-             "parameters": {"grip_strength": 0.6}, "pressure_types": ["predation", "hunting"], "prob": 0.45},
+             "parameters": {"grip_strength": 0.6}, "pressure_types": ["predation", "hunting"], "prob": 0.70},
             {"name": "毒腺原基", "category": "attack", "type": "venom_gland", 
-             "parameters": {"toxicity": 0.3}, "pressure_types": ["predation", "defense"], "prob": 0.25},
+             "parameters": {"toxicity": 0.3}, "pressure_types": ["predation", "defense"], "prob": 0.45},
         ])
     
-    # --- 水生运动器官 ---
+    # --- 水生运动器官（概率提升）---
     if is_aquatic:
         potential_organs.extend([
             {"name": "纤毛", "category": "locomotion", "type": "cilia", 
-             "parameters": {"efficiency": 0.5}, "pressure_types": ["predation", "locomotion"], "prob": 0.40},
+             "parameters": {"efficiency": 0.5}, "pressure_types": ["predation", "locomotion"], "prob": 0.65},
             {"name": "鞭毛强化", "category": "locomotion", "type": "flagellum", 
-             "parameters": {"thrust": 0.6}, "pressure_types": ["predation", "locomotion"], "prob": 0.35},
+             "parameters": {"thrust": 0.6}, "pressure_types": ["predation", "locomotion"], "prob": 0.55},
             {"name": "浮力调节囊", "category": "buoyancy", "type": "swim_bladder", 
-             "parameters": {"control": 0.5}, "pressure_types": ["locomotion", "depth"], "prob": 0.30},
+             "parameters": {"control": 0.5}, "pressure_types": ["locomotion", "depth"], "prob": 0.50},
+            {"name": "侧线原基", "category": "sensory", "type": "lateral_line", 
+             "parameters": {"sensitivity": 0.4}, "pressure_types": ["predation", "hunting"], "prob": 0.45},
         ])
     
-    # --- 陆生呼吸/运动器官 ---
+    # --- 陆生呼吸/运动器官（概率提升）---
     if is_terrestrial:
         potential_organs.extend([
             {"name": "原始气管", "category": "respiratory", "type": "trachea", 
-             "parameters": {"efficiency": 0.4}, "pressure_types": ["oxygen", "respiration"], "prob": 0.35},
+             "parameters": {"efficiency": 0.4}, "pressure_types": ["oxygen", "respiration"], "prob": 0.55},
             {"name": "角质层强化", "category": "protection", "type": "cuticle", 
-             "parameters": {"drought_resist": 0.6}, "pressure_types": ["drought", "protection"], "prob": 0.40},
+             "parameters": {"drought_resist": 0.6}, "pressure_types": ["drought", "protection"], "prob": 0.65},
             {"name": "运动肌群", "category": "locomotion", "type": "muscle", 
-             "parameters": {"strength": 0.5}, "pressure_types": ["predation", "locomotion"], "prob": 0.35},
+             "parameters": {"strength": 0.5}, "pressure_types": ["predation", "locomotion"], "prob": 0.55},
         ])
     
-    # --- 深海特化器官 ---
+    # --- 深海特化器官（概率提升）---
     if is_deep_sea:
         potential_organs.extend([
             {"name": "耐压细胞壁", "category": "protection", "type": "pressure_resistant", 
-             "parameters": {"pressure_resist": 0.8}, "pressure_types": ["pressure", "deep_sea"], "prob": 0.50},
+             "parameters": {"pressure_resist": 0.8}, "pressure_types": ["pressure", "deep_sea"], "prob": 0.75},
             {"name": "化能合成体", "category": "metabolism", "type": "chemosynthesis", 
-             "parameters": {"efficiency": 0.6}, "pressure_types": ["resource", "chemosynthesis"], "prob": 0.45},
+             "parameters": {"efficiency": 0.6}, "pressure_types": ["resource", "chemosynthesis"], "prob": 0.65},
             {"name": "热感受器", "category": "sensory", "type": "thermoreceptor", 
-             "parameters": {"range": 0.5}, "pressure_types": ["temperature", "navigation"], "prob": 0.35},
+             "parameters": {"range": 0.5}, "pressure_types": ["temperature", "navigation"], "prob": 0.55},
+            {"name": "发光器原基", "category": "bioluminescence", "type": "photophore", 
+             "parameters": {"intensity": 0.3}, "pressure_types": ["predation", "hunting"], "prob": 0.40},
         ])
     
-    # --- 两栖特化器官 ---
+    # --- 两栖特化器官（概率提升）---
     if is_amphibious:
         potential_organs.extend([
             {"name": "原始肺囊", "category": "respiratory", "type": "primitive_lung", 
-             "parameters": {"air_efficiency": 0.5}, "pressure_types": ["oxygen", "amphibious"], "prob": 0.45},
+             "parameters": {"air_efficiency": 0.5}, "pressure_types": ["oxygen", "amphibious"], "prob": 0.65},
             {"name": "皮肤腺", "category": "protection", "type": "mucous_gland", 
-             "parameters": {"moisture": 0.6}, "pressure_types": ["drought", "amphibious"], "prob": 0.40},
+             "parameters": {"moisture": 0.6}, "pressure_types": ["drought", "amphibious"], "prob": 0.60},
         ])
     
     # --- 通用防御器官 ---

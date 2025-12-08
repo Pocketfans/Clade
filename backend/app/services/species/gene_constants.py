@@ -295,26 +295,33 @@ class OrganStage(int, Enum):
     MATURE = 3          # 成熟器官 - 完整功能
 
 
-# 器官发育参数
+# 器官发育参数（快速进化版本：总计2-5回合成熟）
 ORGAN_DEVELOPMENT_CONFIG = {
     # 每阶段的功能效率（0-1）
     "efficiency_by_stage": {
         OrganStage.PRIMORDIUM: 0.0,     # 原基无功能
-        OrganStage.PRIMITIVE: 0.25,     # 25% 效率
-        OrganStage.FUNCTIONAL: 0.60,    # 60% 效率
+        OrganStage.PRIMITIVE: 0.30,     # 30% 效率（提升）
+        OrganStage.FUNCTIONAL: 0.70,    # 70% 效率（提升）
         OrganStage.MATURE: 1.0,         # 100% 效率
     },
-    # 每阶段发育所需回合数（基础值，可被演化潜力修正）
+    # 每阶段发育所需回合数（快速发育：总计2-5回合）
+    # 实际使用时会随机化：random.randint(min, max)
     "turns_per_stage": {
-        OrganStage.PRIMORDIUM: 2,       # 原基 -> 初级: 2回合
-        OrganStage.PRIMITIVE: 3,        # 初级 -> 功能: 3回合
-        OrganStage.FUNCTIONAL: 5,       # 功能 -> 成熟: 5回合
+        OrganStage.PRIMORDIUM: 1,       # 原基 -> 初级: 1回合
+        OrganStage.PRIMITIVE: 1,        # 初级 -> 功能: 1回合
+        OrganStage.FUNCTIONAL: 1,       # 功能 -> 成熟: 1回合（高压力下可跳过）
     },
-    # 发育失败概率（每阶段）
+    # 发育所需回合数范围（用于随机化）
+    "turns_per_stage_range": {
+        OrganStage.PRIMORDIUM: (0, 1),  # 0-1回合（可能直接跳过原基期）
+        OrganStage.PRIMITIVE: (1, 2),   # 1-2回合
+        OrganStage.FUNCTIONAL: (1, 2),  # 1-2回合
+    },
+    # 发育失败概率（每阶段）- 降低失败率
     "failure_chance": {
-        OrganStage.PRIMORDIUM: 0.15,    # 15% 概率发育失败（退化）
-        OrganStage.PRIMITIVE: 0.10,
-        OrganStage.FUNCTIONAL: 0.05,
+        OrganStage.PRIMORDIUM: 0.08,    # 8% 概率发育失败（降低）
+        OrganStage.PRIMITIVE: 0.05,     # 5%（降低）
+        OrganStage.FUNCTIONAL: 0.02,    # 2%（降低）
     },
 }
 
