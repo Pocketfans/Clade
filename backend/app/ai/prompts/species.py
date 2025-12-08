@@ -329,10 +329,15 @@ activated_genes 示例：["强化耐寒性", "原始眼点"] - 从上方推荐�
 【演化策略建议】
 {strategy_recommendation}
 
-【营养级限制】
-允许范围：{trophic_range}（父代±0.5）
-- ❌ 违规示例：父代T{parent_trophic_level:.1f}，返回T{parent_trophic_level:.1f}+1.0
-- ✅ 必须在范围 {trophic_range} 内选择
+【🎯 生态位探索策略（重要！）】
+{niche_exploration_full}
+
+本次分化的子代应该按照上述策略探索生态位：
+- 营养级必须在 {trophic_range} 范围内
+- 食性方向：{target_diet_focus}
+- 体型趋势：{target_body_size_trend}
+- 目标生态角色：{target_ecological_role}
+- 与父代竞争关系：{competition_with_parent}
 
 【器官演化约束】（current_stage必须与下方父系阶段一致！）
 {organ_constraints_summary}
@@ -343,7 +348,8 @@ activated_genes 示例：["强化耐寒性", "原始眼点"] - 从上方推荐�
 - 已有器官每次最多提升2阶段（target_stage ≤ current_stage + 2）
 
 === 建议（非强制）===
-- 建议演化方向：{evolution_direction} - {direction_description}
+- 生态位策略：{niche_exploration_strategy} - {niche_exploration_description}
+- 属性演化方向：{evolution_direction} - {direction_description}
 - 建议增强：{suggested_increases}
 - 建议减弱：{suggested_decreases}
 - 可选栖息地：{habitat_options}

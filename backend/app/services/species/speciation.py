@@ -1213,6 +1213,14 @@ class SpeciationService:
                     "suggested_decreases": ", ".join(rule_constraints["suggested_decreases"]),
                     "habitat_options": ", ".join(rule_constraints["habitat_options"]),
                     "trophic_range": rule_constraints["trophic_range"],
+                    # 【新增】生态位探索策略（指导子代往不同生态位方向演化）
+                    "niche_exploration_strategy": rule_constraints.get("niche_exploration_strategy", "保守继承型"),
+                    "niche_exploration_description": rule_constraints.get("niche_exploration_description", ""),
+                    "niche_exploration_full": rule_constraints.get("niche_exploration_full", ""),
+                    "target_diet_focus": rule_constraints.get("target_diet_focus", "与父代相同"),
+                    "target_body_size_trend": rule_constraints.get("target_body_size_trend", "similar"),
+                    "target_ecological_role": rule_constraints.get("target_ecological_role", ""),
+                    "competition_with_parent": rule_constraints.get("competition_with_parent", "direct"),
                     # 【新增】时代信息
                     "era_summary": rule_constraints.get("era_summary", ""),
                     "era_single_cap": rule_constraints.get("era_single_cap", 15),

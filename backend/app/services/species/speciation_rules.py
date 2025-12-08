@@ -49,6 +49,25 @@ class EvolutionDirection:
     tradeoff_targets: list[str]
 
 
+@dataclass
+class NicheExplorationStrategy:
+    """生态位探索策略 - 指导子代往哪个生态位方向演化
+    
+    【生物学原理】
+    - 适应辐射：分化时子代应该探索不同的生态位，减少竞争
+    - 营养级转变：向上成为捕食者，向下成为猎物的竞争者
+    - 栖息地分化：探索不同的地理/微栖息地
+    """
+    strategy: str                      # 策略名称
+    description: str                   # 给LLM的描述
+    trophic_shift: tuple[float, float] # 营养级变化范围 (min, max)
+    habitat_shift: bool                # 是否鼓励栖息地变化
+    diet_focus: str                    # 食性变化方向
+    body_size_trend: str               # 体型变化趋势: "larger", "smaller", "similar"
+    competition_with_parent: str       # 与父代竞争关系: "direct", "partial", "minimal"
+    ecological_role: str               # 目标生态角色描述
+
+
 class SpeciationRules:
     """物种分化规则引擎"""
     
@@ -113,7 +132,7 @@ class SpeciationRules:
         5.0: "顶级捕食者",
     }
     
-    # ==================== 子代差异化策略 ====================
+    # ==================== 子代差异化策略（属性层面）====================
     OFFSPRING_STRATEGIES = [
         EvolutionDirection(
             strategy="环境适应型",
@@ -144,6 +163,71 @@ class SpeciationRules:
             description="1-2个属性大幅增强，其他大幅减弱",
             primary_focus=["随机选择1-2个"],
             tradeoff_targets=["其他多个属性"]
+        ),
+    ]
+    
+    # ==================== 【新增】生态位探索策略 ====================
+    # 分化时子代应该探索不同的生态位，实现适应辐射
+    NICHE_EXPLORATION_STRATEGIES = [
+        NicheExplorationStrategy(
+            strategy="保守继承型",
+            description="留在原生态位，与父代直接竞争。体型和食性与父代相似，通过优化现有适应性取胜。",
+            trophic_shift=(0.0, 0.0),
+            habitat_shift=False,
+            diet_focus="与父代相同",
+            body_size_trend="similar",
+            competition_with_parent="direct",
+            ecological_role="父代生态位的竞争者"
+        ),
+        NicheExplorationStrategy(
+            strategy="上行捕食型",
+            description="向更高营养级探索，演化成捕食者。体型可能增大，发展捕食相关器官（感知、运动、捕获结构）。",
+            trophic_shift=(+0.5, +1.0),
+            habitat_shift=False,
+            diet_focus="开始捕食同级或低级物种",
+            body_size_trend="larger",
+            competition_with_parent="minimal",
+            ecological_role="新兴捕食者"
+        ),
+        NicheExplorationStrategy(
+            strategy="下行专化型",
+            description="向更低营养级探索，专化不同的食物来源。可能体型缩小，专化特定资源。",
+            trophic_shift=(-0.5, -1.0),
+            habitat_shift=False,
+            diet_focus="专化更基础的食物来源",
+            body_size_trend="smaller",
+            competition_with_parent="minimal",
+            ecological_role="专化资源利用者"
+        ),
+        NicheExplorationStrategy(
+            strategy="横向栖息地型",
+            description="探索不同栖息地，占据新的地理生态位。营养级不变，但适应新环境条件。",
+            trophic_shift=(0.0, 0.0),
+            habitat_shift=True,
+            diet_focus="适应新栖息地的食物",
+            body_size_trend="similar",
+            competition_with_parent="minimal",
+            ecological_role="新栖息地开拓者"
+        ),
+        NicheExplorationStrategy(
+            strategy="杂食泛化型",
+            description="扩大食谱范围，成为杂食者。牺牲专化效率换取资源多样性。",
+            trophic_shift=(-0.3, +0.3),
+            habitat_shift=False,
+            diet_focus="扩大食物范围，杂食化",
+            body_size_trend="similar",
+            competition_with_parent="partial",
+            ecological_role="泛化杂食者"
+        ),
+        NicheExplorationStrategy(
+            strategy="极端专化型",
+            description="极端专化某一特定资源或微栖息地。高度特化，与父代生态位重叠很小。",
+            trophic_shift=(-0.2, +0.2),
+            habitat_shift=True,
+            diet_focus="极端专化单一资源",
+            body_size_trend="smaller",
+            competition_with_parent="minimal",
+            ecological_role="极端专化者"
         ),
     ]
     
@@ -185,24 +269,37 @@ class SpeciationRules:
         # 2. 计算器官演化约束
         organ_constraints = self._get_organ_constraints(parent_species)
         
-        # 3. 确定演化方向
+        # 3. 确定演化方向（属性层面）
         direction = self._get_evolution_direction(offspring_index, total_offspring, environment_pressure)
         
-        # 4. 确定可转换的栖息地
+        # 4. 【新增】确定生态位探索策略（营养级/栖息地层面）
+        niche_strategy = self._get_niche_exploration_strategy(
+            parent_species, offspring_index, total_offspring
+        )
+        
+        # 5. 确定可转换的栖息地（根据生态位策略调整）
         habitat_options = self._get_valid_habitat_transitions(parent_species.habitat_type)
+        if niche_strategy.habitat_shift:
+            # 生态位策略鼓励栖息地变化，扩大选项
+            habitat_options = self._get_extended_habitat_options(parent_species.habitat_type)
         
-        # 5. 营养级范围
-        trophic_range = self._get_trophic_range(parent_species.trophic_level)
+        # 6. 营养级范围（根据生态位策略调整）
+        trophic_range = self._get_trophic_range_from_strategy(
+            parent_species.trophic_level, niche_strategy
+        )
         
-        # 6. 获取时代信息
+        # 7. 获取时代信息
         era = get_current_era(turn_index)
         era_limits = TraitConfig.get_trophic_limits(parent_species.trophic_level, turn_index)
         era_summary = TraitConfig.get_era_limits_summary(turn_index, parent_species.trophic_level)
         
-        # 7. 【新增】获取增强预算上下文
+        # 8. 【新增】获取增强预算上下文
         enhanced_context = self._get_enhanced_budget_context(
             parent_species, turn_index, era_limits
         )
+        
+        # 9. 【新增】格式化生态位探索策略（关键：传给LLM指导分化方向）
+        niche_strategy_text = self._format_niche_strategy(niche_strategy, parent_species.trophic_level)
         
         return {
             "trait_budget_summary": self._format_trait_budget(trait_budget, era_limits),
@@ -213,13 +310,21 @@ class SpeciationRules:
             "suggested_decreases": direction.tradeoff_targets,
             "habitat_options": habitat_options,
             "trophic_range": trophic_range,
+            # 【新增】生态位探索策略（关键！）
+            "niche_exploration_strategy": niche_strategy.strategy,
+            "niche_exploration_description": niche_strategy.description,
+            "niche_exploration_full": niche_strategy_text,
+            "target_diet_focus": niche_strategy.diet_focus,
+            "target_body_size_trend": niche_strategy.body_size_trend,
+            "target_ecological_role": niche_strategy.ecological_role,
+            "competition_with_parent": niche_strategy.competition_with_parent,
             # 时代信息
             "era_summary": era_summary,
             "era_name": era["name"],
             "era_description": era["description"],
             "era_single_cap": era_limits["specialized"],
             "era_total_cap": era_limits["total"],
-            # 【新增】增强预算上下文
+            # 增强预算上下文
             "diminishing_returns_context": enhanced_context["diminishing_text"],
             "breakthrough_opportunities": enhanced_context["breakthrough_text"],
             "habitat_specialization_bonus": enhanced_context["bonus_text"],
@@ -229,6 +334,7 @@ class SpeciationRules:
             # 原始数据（供后验证使用）
             "_trait_budget": trait_budget,
             "_organ_constraints": organ_constraints,
+            "_niche_strategy": niche_strategy,
             "_turn_index": turn_index,
             "_enhanced_context": enhanced_context,
         }
@@ -451,7 +557,7 @@ class SpeciationRules:
         total_offspring: int,
         environment_pressure: dict[str, float]
     ) -> EvolutionDirection:
-        """获取子代的演化方向"""
+        """获取子代的演化方向（属性层面）"""
         # 使用子代编号决定策略（确保差异化）
         strategy_index = (offspring_index - 1) % len(self.OFFSPRING_STRATEGIES)
         direction = self.OFFSPRING_STRATEGIES[strategy_index]
@@ -470,14 +576,195 @@ class SpeciationRules:
         
         return direction
     
+    def _get_niche_exploration_strategy(
+        self,
+        parent_species,
+        offspring_index: int,
+        total_offspring: int,
+        existing_species_niches: dict[str, float] | None = None,
+    ) -> NicheExplorationStrategy:
+        """【新增】计算子代的生态位探索策略
+        
+        【设计原则】
+        1. 第一个子代通常是保守型（与父代竞争）
+        2. 后续子代探索不同方向（上行、下行、横向）
+        3. 根据现有生态位分布，选择竞争最小的方向
+        4. 考虑父代营养级限制（T1不能下行，T5不能上行）
+        
+        Args:
+            parent_species: 父代物种
+            offspring_index: 子代编号（1-based）
+            total_offspring: 总子代数
+            existing_species_niches: {lineage_code: trophic_level} 现有物种的营养级分布
+        
+        Returns:
+            NicheExplorationStrategy 生态位探索策略
+        """
+        parent_trophic = parent_species.trophic_level
+        
+        # 定义优先策略顺序（根据子代编号）
+        # 第1个子代：50%保守，50%随机
+        # 第2个子代：优先上行或横向
+        # 第3个子代：优先下行或极端专化
+        strategy_priority = {
+            1: ["保守继承型", "横向栖息地型", "杂食泛化型"],
+            2: ["上行捕食型", "横向栖息地型", "杂食泛化型"],
+            3: ["下行专化型", "极端专化型", "横向栖息地型"],
+        }
+        
+        # 获取优先策略列表
+        priority_list = strategy_priority.get(
+            offspring_index, 
+            ["杂食泛化型", "极端专化型", "横向栖息地型"]
+        )
+        
+        # 根据父代营养级调整可用策略
+        available_strategies = []
+        for s in self.NICHE_EXPLORATION_STRATEGIES:
+            # 检查营养级限制
+            min_shift, max_shift = s.trophic_shift
+            new_trophic_min = parent_trophic + min_shift
+            new_trophic_max = parent_trophic + max_shift
+            
+            # T1（生产者）不能下行到T0
+            if new_trophic_min < 1.0 and parent_trophic <= 1.5:
+                if min_shift < 0:
+                    continue
+            
+            # T5（顶级捕食者）不能上行到T6
+            if new_trophic_max > 5.5 and parent_trophic >= 4.5:
+                if max_shift > 0.5:
+                    continue
+            
+            available_strategies.append(s)
+        
+        # 优先选择优先列表中的策略
+        for priority_name in priority_list:
+            for s in available_strategies:
+                if s.strategy == priority_name:
+                    return self._customize_niche_strategy(s, parent_species, offspring_index)
+        
+        # 如果优先策略都不可用，随机选择
+        if available_strategies:
+            selected = available_strategies[offspring_index % len(available_strategies)]
+            return self._customize_niche_strategy(selected, parent_species, offspring_index)
+        
+        # 兜底：返回保守型
+        return self.NICHE_EXPLORATION_STRATEGIES[0]
+    
+    def _customize_niche_strategy(
+        self,
+        base_strategy: NicheExplorationStrategy,
+        parent_species,
+        offspring_index: int,
+    ) -> NicheExplorationStrategy:
+        """根据父代特征定制生态位策略"""
+        import copy
+        strategy = copy.deepcopy(base_strategy)
+        
+        # 如果是上行捕食型，根据父代营养级调整描述
+        if strategy.strategy == "上行捕食型":
+            parent_trophic = parent_species.trophic_level
+            if parent_trophic < 2.0:
+                strategy.description = "从生产者/分解者向初级消费者演化，开始摄食其他生物。"
+                strategy.diet_focus = "开始摄食有机物或其他微生物"
+            elif parent_trophic < 3.0:
+                strategy.description = "从草食/杂食向肉食方向演化，开始捕食小型动物。"
+                strategy.diet_focus = "捕食小型无脊椎动物或幼体"
+            else:
+                strategy.description = "向更高级捕食者演化，捕食更大的猎物。"
+                strategy.diet_focus = "捕食同营养级或低一级的动物"
+        
+        # 如果是下行专化型，根据父代营养级调整描述
+        elif strategy.strategy == "下行专化型":
+            parent_trophic = parent_species.trophic_level
+            if parent_trophic > 3.0:
+                strategy.description = "从高级捕食者向杂食/腐食方向演化，利用更多样的食物来源。"
+                strategy.diet_focus = "转向腐肉、碎屑或植物性食物"
+            elif parent_trophic > 2.0:
+                strategy.description = "从杂食向更专化的草食/滤食方向演化。"
+                strategy.diet_focus = "专化特定植物、藻类或悬浮颗粒"
+            else:
+                strategy.description = "向更基础的营养方式演化，可能发展自养能力。"
+                strategy.diet_focus = "利用化学能或增强光合效率"
+        
+        return strategy
+    
+    def _format_niche_strategy(self, strategy: NicheExplorationStrategy, parent_trophic: float) -> str:
+        """格式化生态位策略为LLM可读的文本"""
+        min_shift, max_shift = strategy.trophic_shift
+        new_trophic_min = max(1.0, parent_trophic + min_shift)
+        new_trophic_max = min(5.5, parent_trophic + max_shift)
+        
+        lines = [
+            f"【生态位探索策略: {strategy.strategy}】",
+            f"描述: {strategy.description}",
+            f"营养级变化: {parent_trophic:.1f} → {new_trophic_min:.1f}~{new_trophic_max:.1f}",
+            f"食性方向: {strategy.diet_focus}",
+            f"体型趋势: {strategy.body_size_trend}",
+            f"与父代竞争: {strategy.competition_with_parent}",
+        ]
+        
+        if strategy.habitat_shift:
+            lines.append("栖息地: 建议探索新栖息地")
+        
+        lines.append(f"目标生态角色: {strategy.ecological_role}")
+        
+        return "\n".join(lines)
+    
     def _get_valid_habitat_transitions(self, current_habitat: str) -> list[str]:
         """获取有效的栖息地转换选项"""
         return self.HABITAT_TRANSITIONS.get(current_habitat, [current_habitat])
     
+    def _get_extended_habitat_options(self, current_habitat: str) -> list[str]:
+        """【新增】获取扩展的栖息地选项（用于生态位探索）
+        
+        当生态位策略鼓励栖息地变化时，提供更多选项。
+        """
+        base_options = self.HABITAT_TRANSITIONS.get(current_habitat, [current_habitat])
+        
+        # 扩展选项：添加相邻栖息地的可达选项
+        extended = set(base_options)
+        for habitat in base_options:
+            adjacent = self.HABITAT_TRANSITIONS.get(habitat, [])
+            extended.update(adjacent)
+        
+        return list(extended)
+    
     def _get_trophic_range(self, parent_trophic: float) -> str:
-        """获取营养级允许范围"""
+        """获取营养级允许范围（保守模式）"""
         min_t = max(1.0, parent_trophic - 0.5)
         max_t = min(5.5, parent_trophic + 0.5)
+        return f"{min_t:.1f}-{max_t:.1f}"
+    
+    def _get_trophic_range_from_strategy(
+        self, 
+        parent_trophic: float, 
+        strategy: NicheExplorationStrategy
+    ) -> str:
+        """【新增】根据生态位策略计算营养级范围
+        
+        不同策略允许不同的营养级变化幅度：
+        - 保守继承型：±0（保持原营养级）
+        - 上行捕食型：+0.5~+1.0
+        - 下行专化型：-0.5~-1.0
+        - 其他：根据策略定义
+        """
+        min_shift, max_shift = strategy.trophic_shift
+        
+        min_t = max(1.0, parent_trophic + min_shift)
+        max_t = min(5.5, parent_trophic + max_shift)
+        
+        # 确保范围有效
+        if min_t > max_t:
+            min_t, max_t = max_t, min_t
+        
+        # 如果范围太窄，稍微扩大
+        if max_t - min_t < 0.3:
+            mid = (min_t + max_t) / 2
+            min_t = max(1.0, mid - 0.2)
+            max_t = min(5.5, mid + 0.2)
+        
         return f"{min_t:.1f}-{max_t:.1f}"
     
     def _format_trait_budget(self, budget: TraitBudget, era_limits: dict = None) -> str:
