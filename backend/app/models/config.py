@@ -117,9 +117,10 @@ class SpeciationConfig(BaseModel):
     
     # ========== 种群数量门槛（按生物量 kg 计算）==========
     # 物种分化所需的最小生物量（低于此值不允许分化）
-    # 考虑到开局物种通常在 20k-200k kg，几回合后达到百万级
-    # 设为 100,000 kg (10万) 确保只有较大规模的种群才能分化
-    min_population_for_speciation: int = 100000
+    # 【修复】从100,000降到30,000，避免分化链过早断裂
+    # 原值100,000导致只能分化约3代就因种群不足而停止
+    # 新值30,000允许更多代的持续分化
+    min_population_for_speciation: int = 30000
     # 新物种的最小生物量（分化后子物种生物量不能低于此值）
     # 设为 20,000 kg (2万) 确保新物种有足够的初始规模，避免微型物种
     min_offspring_population: int = 20000
@@ -383,17 +384,41 @@ class EcologyBalanceConfig(BaseModel):
     # 消费者分布时搜索的猎物地块数量
     prey_search_top_k: int = 5
     
-    # ========== 竞争强度（大幅强化）==========
+    # ========== 竞争强度（差异化竞争系统）==========
     # 基础竞争系数（相似度 × 营养级系数 × 此值）
-    competition_base_coefficient: float = 0.85  # 从0.60提升到0.85
+    competition_base_coefficient: float = 0.85
     # 单个竞争者贡献上限
-    competition_per_species_cap: float = 0.50  # 从0.35提升到0.50
+    competition_per_species_cap: float = 0.50
     # 总竞争压力上限
-    competition_total_cap: float = 0.95  # 从0.80提升到0.95
+    competition_total_cap: float = 0.95
     # 同级竞争系数（同营养级物种之间）
-    same_level_competition_k: float = 0.25  # 从0.15提升到0.25
+    same_level_competition_k: float = 0.25
     # 生态位重叠惩罚系数（基于embedding相似度）
-    niche_overlap_penalty_k: float = 0.35  # 从0.20提升到0.35
+    niche_overlap_penalty_k: float = 0.35
+    
+    # ========== 【新增】亲缘差异化竞争（优胜劣汰系统）==========
+    # 启用亲缘差异化竞争
+    enable_kin_competition: bool = True
+    # 同属判定：共享祖先代数阈值（≤此值视为同属近缘）
+    kin_generation_threshold: int = 4
+    # 同属竞争系数（近缘物种之间的竞争强度倍数）
+    kin_competition_multiplier: float = 3.0
+    # 异属竞争系数（远缘物种之间的竞争强度倍数）
+    non_kin_competition_multiplier: float = 0.4
+    # 同属竞争中，强者的死亡率减免（最大值）
+    kin_winner_mortality_reduction: float = 0.15
+    # 同属竞争中，弱者的死亡率惩罚（最大值）
+    kin_loser_mortality_penalty: float = 0.25
+    # 适应度比较权重：种群数量
+    fitness_weight_population: float = 0.35
+    # 适应度比较权重：繁殖速度
+    fitness_weight_reproduction: float = 0.25
+    # 适应度比较权重：环境适应性（抗性等）
+    fitness_weight_resistance: float = 0.20
+    # 适应度比较权重：生态位专化度
+    fitness_weight_specialization: float = 0.20
+    # 同属竞争劣势阈值：适应度差距超过此值才触发淘汰机制
+    kin_disadvantage_threshold: float = 0.15
     
     # ========== 营养传递效率 ==========
     # 能量传递效率（10%规则）：每升一个营养级，可用能量降至此比例
@@ -402,6 +427,16 @@ class EcologyBalanceConfig(BaseModel):
     high_trophic_birth_penalty: float = 0.7
     # 顶级捕食者（T4+）额外效率惩罚 - 已移至 ReproductionConfig
     apex_predator_penalty: float = 0.5
+    
+    # ========== 【新增】营养级捕食压力参数 ==========
+    # 猎物稀缺时消费者的最大死亡率惩罚
+    prey_scarcity_max_penalty: float = 0.35
+    # 资源（NPP）不足时生产者的最大死亡率惩罚
+    resource_scarcity_max_penalty: float = 0.30
+    # 被捕食压力：猎物种群的额外死亡率（每单位捕食者生物量）
+    predation_pressure_coefficient: float = 0.15
+    # 猎物丰富时捕食者的死亡率减免（最大值）
+    prey_abundance_bonus: float = 0.10
     
     # ========== 扩散行为 ==========
     # 陆生物种分布地块数上限
