@@ -798,6 +798,7 @@ def _register_default_stages() -> None:
         GeneticDriftStage,
         AutoHybridizationStage,
         SubspeciesPromotionStage,
+        SpeciationDataTransferStage,  # 分化数据传递
         SpeciationStage,
         BackgroundManagementStage,
         BuildReportStage,
@@ -835,6 +836,7 @@ def _register_default_stages() -> None:
     stage_registry.register("genetic_drift", GeneticDriftStage)
     stage_registry.register("auto_hybridization", AutoHybridizationStage)
     stage_registry.register("subspecies_promotion", SubspeciesPromotionStage)
+    stage_registry.register("speciation_data_transfer", SpeciationDataTransferStage)
     stage_registry.register("speciation", SpeciationStage)
     stage_registry.register("background_management", BackgroundManagementStage)
     stage_registry.register("build_report", BuildReportStage)

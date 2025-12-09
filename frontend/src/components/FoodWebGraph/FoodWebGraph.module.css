@@ -24,9 +24,9 @@
 /* ==================== 主面板 ==================== */
 .panel {
   position: relative;
-  width: 96vw;
+  width: min(96vw, 2200px);
   height: 92vh;
-  max-width: 1920px;
+  max-width: 2200px;
   display: flex;
   flex-direction: column;
   background: linear-gradient(
@@ -51,6 +51,17 @@
 .panel.visible {
   transform: scale(1) translateY(0);
   opacity: 1;
+}
+
+@media (min-width: 2560px), (min-aspect-ratio: 21/9) {
+  .panel {
+    width: min(94vw, 2400px);
+    max-width: 2400px;
+  }
+
+  .sidebar {
+    width: 300px;
+  }
 }
 
 /* ==================== 装饰光效 ==================== */

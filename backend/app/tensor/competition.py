@@ -19,14 +19,10 @@ from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 
-# 导入Taichi内核（从已初始化Taichi的模块）
-try:
-    import taichi as ti
-    from . import taichi_hybrid_kernels as _kernels
-    TAICHI_AVAILABLE = True
-except ImportError:
-    TAICHI_AVAILABLE = False
-    _kernels = None
+# 导入Taichi内核（GPU-only 模式）
+import taichi as ti
+from . import taichi_hybrid_kernels as _kernels
+TAICHI_AVAILABLE = True  # GPU-only: 如果导入失败会直接抛出错误
 
 if TYPE_CHECKING:
     from ..models.species import Species
@@ -90,9 +86,9 @@ class TensorCompetitionCalculator:
                 species_codes=codes,
             )
         
+        # GPU-only 模式：Taichi 始终可用
         if not TAICHI_AVAILABLE:
-            logger.warning("[张量竞争] Taichi不可用，使用NumPy后备")
-            return self._calculate_numpy_fallback(species_list, niche_overlaps, cfg)
+            raise RuntimeError("[GPU-only] Taichi GPU 不可用，请检查 GPU 驱动")
         
         # ========== 1. 提取物种数据 ==========
         data = self._extract_species_data(species_list)
@@ -293,31 +289,6 @@ class TensorCompetitionCalculator:
         
         return mortality_mods, repro_mods
     
-    def _calculate_numpy_fallback(
-        self,
-        species_list: Sequence[Species],
-        niche_overlaps: dict[str, float] | None,
-        cfg: EcologyBalanceConfig,
-    ) -> TensorCompetitionResult:
-        """NumPy后备实现"""
-        n = len(species_list)
-        codes = [sp.lineage_code for sp in species_list]
-        
-        # 简化的NumPy实现
-        data = self._extract_species_data(species_list)
-        
-        # 简单适应度计算
-        pop_norm = data['pop'] / (data['pop'].max() + 1)
-        survival_norm = 1 - data['death_rate']
-        fitness = pop_norm * 0.5 + survival_norm * 0.5
-        fitness = np.clip(fitness, 0, 1).astype(np.float32)
-        
-        return TensorCompetitionResult(
-            mortality_modifiers=np.zeros(n, dtype=np.float32),
-            reproduction_modifiers=np.zeros(n, dtype=np.float32),
-            fitness_scores=fitness,
-            species_codes=codes,
-        )
 
 
 # ============================================================================

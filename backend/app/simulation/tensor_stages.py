@@ -157,7 +157,25 @@ class TensorStateInitStage(BaseStage):
         
         # 构建环境张量 (7, H, W): [temp, humidity, altitude, resource, land, sea, coast]
         env = np.zeros((7, H, W), dtype=np.float32)
+        tile_id_grid = np.full((H, W), -1, dtype=np.int32)
         if all_tiles:
+            def _classify_biome(biome: str) -> tuple[float, float, float]:
+                b = (biome or "land").lower()
+                sea_keywords = ("ocean", "sea", "deep_ocean", "marsh", "lagoon", "bay", "海", "海洋", "深海", "浅海", "大洋")
+                freshwater_keywords = ("lake", "river", "freshwater", "wetland", "bog", "pond", "湖", "河", "淡水", "湿地")
+                coast_keywords = ("coast", "coastal", "shore", "beach", "岸", "海岸", "沿海")
+
+                is_sea = any(k in b for k in sea_keywords) or any(k in b for k in freshwater_keywords)
+                is_coast = any(k in b for k in coast_keywords)
+
+                # 沿岸区域视作陆地+海岸，但保持海洋为0以限制纯水生上岸
+                is_land = not is_sea or is_coast or ("land" in b)
+                return (
+                    1.0 if is_land else 0.0,
+                    1.0 if is_sea else 0.0,
+                    1.0 if is_coast else 0.0,
+                )
+
             for tile in all_tiles:
                 # MapTile 使用 x, y 坐标（y 对应行，x 对应列）
                 r, c = tile.y, tile.x
@@ -166,11 +184,13 @@ class TensorStateInitStage(BaseStage):
                     env[1, r, c] = getattr(tile, 'humidity', 0.5)
                     env[2, r, c] = getattr(tile, 'elevation', 0.0) / 1000.0  # 使用 elevation
                     env[3, r, c] = getattr(tile, 'resources', 100.0) / 100.0  # 使用 resources
-                    # 地形类型（根据 biome 判断）
+                    tile_id_grid[r, c] = tile.id
+                    # 地形类型（扩展中英文关键词）
                     biome = getattr(tile, 'biome', 'land')
-                    env[4, r, c] = 1.0 if biome not in ('ocean', 'sea', 'deep_ocean') else 0.0
-                    env[5, r, c] = 1.0 if biome in ('ocean', 'sea', 'deep_ocean') else 0.0
-                    env[6, r, c] = 1.0 if biome in ('coast', 'coastal', 'shore') else 0.0
+                    land_flag, sea_flag, coast_flag = _classify_biome(biome)
+                    env[4, r, c] = land_flag
+                    env[5, r, c] = sea_flag
+                    env[6, r, c] = coast_flag
         else:
             # 默认环境：温带陆地
             env[0, :, :] = 0.4  # 温度
@@ -246,7 +266,7 @@ class TensorStateInitStage(BaseStage):
             env=env,
             pop=pop,
             species_params=species_params,
-            masks={},
+            masks={"tile_ids": tile_id_grid},
             species_map=species_map,
         )
         
@@ -346,6 +366,53 @@ class TensorEcologyStage(BaseStage):
                 if is_on_cooldown:
                     cooldown_mask[idx] = False
         
+        # 慢性衰退计数：从 ctx 取持久化字典，按物种映射
+        decline_map = getattr(ctx, "tensor_decline_streaks", {}) or {}
+        decline_streaks = np.zeros(S, dtype=np.int32)
+        for lineage, idx in species_map.items():
+            decline_streaks[idx] = int(decline_map.get(lineage, 0))
+        
+        # 构造 external_bonus：压力叠加 + (可选)embedding 热点
+        external_bonus = None
+        try:
+            H, W = pop.shape[1], pop.shape[2]
+            bonus_2d = np.zeros((H, W), dtype=np.float32)
+            if pressure_overlay is not None:
+                # 支持按通道权重叠加（若存在 weights 字段）
+                weights = None
+                if hasattr(ctx, "pressure_overlay") and hasattr(ctx.pressure_overlay, "weights"):
+                    weights = ctx.pressure_overlay.weights
+                if weights is not None and len(weights) == pressure_overlay.shape[0]:
+                    overlay_sum = (pressure_overlay * np.array(weights)[:, None, None]).sum(axis=0)
+                else:
+                    overlay_sum = pressure_overlay.sum(axis=0)
+                if overlay_sum.max() > 1e-6:
+                    overlay_norm = overlay_sum / overlay_sum.max()
+                    bonus_2d += overlay_norm.astype(np.float32) * 0.2
+            emb_data = getattr(ctx, "embedding_turn_data", {}) or {}
+            # 支持多热力图/多权重
+            if "heatmaps" in emb_data and isinstance(emb_data["heatmaps"], dict):
+                for name, payload in emb_data["heatmaps"].items():
+                    weight = 0.1
+                    if isinstance(payload, tuple) and len(payload) == 2:
+                        arr, w = payload
+                        weight = float(w)
+                    else:
+                        arr = payload
+                    if isinstance(arr, np.ndarray) and arr.shape == (H, W):
+                        bonus_2d += arr.astype(np.float32) * weight
+            # 兼容旧键
+            for key in ("tile_heatmap", "tile_scores", "tile_bonus"):
+                if key in emb_data:
+                    arr = emb_data[key]
+                    if isinstance(arr, np.ndarray) and arr.shape == (H, W):
+                        bonus_2d += arr.astype(np.float32) * 0.1
+                        break
+            if bonus_2d.max() > 0:
+                external_bonus = np.broadcast_to(bonus_2d, (S, H, W))
+        except Exception:
+            external_bonus = None
+        
         # 【核心】直接执行 Taichi 计算（CUDA 上下文不能跨线程）
         # 注意：Taichi/CUDA 上下文是线程绑定的，不能用 asyncio.to_thread()
         result = ecology_engine.process_ecology(
@@ -357,6 +424,8 @@ class TensorEcologyStage(BaseStage):
             trophic_levels=trophic_levels,
             pressure_overlay=pressure_overlay,
             cooldown_mask=cooldown_mask,
+            external_bonus=external_bonus,
+            decline_streaks=decline_streaks,
         )
         logger.info(
             f"[统一张量生态] 后端={result.metrics.backend}, "
@@ -373,6 +442,26 @@ class TensorEcologyStage(BaseStage):
         # 更新迁徙统计
         ctx.migration_count = len(result.migrated_species)
         ctx.migration_events = []
+        
+        # 更新慢性衰退计数持久化
+        decline_map = getattr(ctx, "tensor_decline_streaks", {}) or {}
+        pop_before = pop.sum(axis=(1, 2))
+        pop_after = result.pop.sum(axis=(1, 2))
+        for lineage, idx in species_map.items():
+            if idx < result.metrics.species_count:
+                # 更严谨的衰退判定：高死亡率且净增长<1
+                mortality_slice = result.mortality_rates[idx]
+                mask = mortality_slice > 0
+                avg_death = float(mortality_slice[mask].mean()) if mask.any() else 0.0
+                initial_pop = float(pop_before[idx])
+                final_pop = float(pop_after[idx])
+                growth = final_pop / max(initial_pop, 1e-6)
+                is_declining = (avg_death >= 0.12) and (growth < 1.0)
+                if is_declining:
+                    decline_map[lineage] = int(decline_map.get(lineage, 0)) + 1
+                else:
+                    decline_map[lineage] = 0
+        ctx.tensor_decline_streaks = decline_map
         
         # 设置迁徙冷却期
         for s_idx in result.migrated_species:

@@ -26,17 +26,17 @@ class MigrationAdvisor:
     """
 
     def __init__(self, 
-                 pressure_migration_threshold: float = 0.12,  # 【大浪淘沙v3】从0.18降到0.12，极早触发逃离
-                 saturation_threshold: float = 0.60,          # 【大浪淘沙v3】从0.75降到0.60，更早扩散
-                 overflow_growth_threshold: float = 1.05,     # 【大浪淘沙v3】从1.10降到1.05
-                 overflow_pressure_threshold: float = 0.40,   # 【大浪淘沙v3】从0.50降到0.40
-                 min_population: int = 20,                    # 【大浪淘沙v3】从50降到20
-                 prey_scarcity_threshold: float = 0.40,       # 【大浪淘沙v3】从0.35提高到0.40
-                 chronic_decline_threshold: float = 0.08,     # 【大浪淘沙v3】从0.12降到0.08
-                 chronic_decline_turns: int = 1,              # 【大浪淘沙v3】从2降到1回合
-                 oversaturation_threshold: float = 0.80,      # 【新增】过饱和阈值：80%承载力触发溢出
-                 oversaturation_bonus: float = 0.15,          # 【新增】过饱和时基础迁徙概率加成
-                 gradient_reward_k: float = 0.5,              # 【新增】梯度奖励系数：目标格优势越大，加成越多
+                 pressure_migration_threshold: float = 0.20,  # 恢复更高的压力阈值，减少频繁迁徙
+                 saturation_threshold: float = 0.75,          # 资源饱和后再扩散
+                 overflow_growth_threshold: float = 1.10,     # 人口溢出阈值
+                 overflow_pressure_threshold: float = 0.60,   # 资源压力阈值
+                 min_population: int = 50,                    # 提高最小种群规模要求
+                 prey_scarcity_threshold: float = 0.35,       # 略降猎物稀缺阈值
+                 chronic_decline_threshold: float = 0.12,     # 慢性衰退阈值
+                 chronic_decline_turns: int = 2,              # 衰退持续回合
+                 oversaturation_threshold: float = 0.90,      # 过饱和阈值
+                 oversaturation_bonus: float = 0.10,          # 过饱和加成调低
+                 gradient_reward_k: float = 0.3,              # 梯度奖励减弱
                  enable_actual_migration: bool = True) -> None:
         """初始化迁移顾问
         

@@ -1497,20 +1497,86 @@ class SpeciationDataTransferStage(BaseStage):
         # 传递数据给分化服务
         logger.debug("传递数据给分化服务...")
         
-        if hasattr(engine, 'speciation') and ctx.combined_results:
-            tensor_state = None
-            # 【关键修复】使用 TileBasedMortalityEngine 获取完整的地块级分化候选数据
-            # 原代码只传递了 death_rate 和 population，但 speciation.py 期望完整的地块级数据
-            if engine._use_tile_based_mortality and hasattr(engine, 'tile_mortality'):
-                # 调用正确的方法获取完整的候选数据（包含 candidate_tiles, tile_populations, 
-                # tile_mortality, is_isolated, clusters, mortality_gradient 等字段）
-                candidates = engine.tile_mortality.get_speciation_candidates()
-                if hasattr(engine.tile_mortality, "export_tensor_state"):
-                    tensor_state = engine.tile_mortality.export_tensor_state()
-                logger.info(f"[分化数据传递] 从 TileBasedMortalityEngine 获取 {len(candidates)} 个候选物种")
-            else:
-                candidates = {}
-                logger.warning("[分化数据传递] 未获取到张量/地块数据，分化候选为空")
+        # 【修复】使用 is not None 检查，确保空列表也能进入执行逻辑
+        combined_results = getattr(ctx, "combined_results", None)
+        if hasattr(engine, 'speciation') and combined_results is not None:
+            tensor_state = getattr(ctx, "tensor_state", None)
+            candidates = {}
+            
+            # 【张量优先】直接使用张量状态生成候选
+            # TileBasedMortalityEngine 已被 TensorEcologyStage 替代
+            if tensor_state is None:
+                logger.warning("[分化数据传递] 缺少张量状态，分化候选可能为空")
+
+            # 【张量分化候选生成】使用张量数据生成候选
+            if tensor_state is not None:
+                try:
+                    import numpy as np
+                    from scipy.ndimage import label as scipy_label
+                except Exception as e:
+                    logger.warning(f"[分化数据传递] 张量候选生成失败(依赖缺失): {e}")
+                else:
+                    death_rate_map = {
+                        r.species.lineage_code: r.death_rate
+                        for r in (ctx.combined_results or [])
+                    }
+                    tile_ids = tensor_state.masks.get("tile_ids") if hasattr(tensor_state, "masks") else None
+                    if tile_ids is None:
+                        logger.warning("[分化数据传递] 缺少 tile_ids 掩码，无法生成张量候选")
+                    else:
+                        pop = tensor_state.pop
+                        H, W = pop.shape[1], pop.shape[2]
+                        for lineage, idx in tensor_state.species_map.items():
+                            layer = pop[idx]
+                            presence = layer > 0
+                            if not presence.any():
+                                continue
+                            labeled, num_regions = scipy_label(presence)
+                            clusters: list[set[int]] = []
+                            for reg in range(1, num_regions + 1):
+                                ys, xs = np.where(labeled == reg)
+                                if ys.size == 0:
+                                    continue
+                                cluster_ids = set(int(tile_ids[y, x]) for y, x in zip(ys, xs) if tile_ids[y, x] >= 0)
+                                if cluster_ids:
+                                    clusters.append(cluster_ids)
+
+                            candidate_tiles: set[int] = set()
+                            tile_populations: dict[int, float] = {}
+                            tile_mortality: dict[int, float] = {}
+
+                            ys, xs = np.where(presence)
+                            for y, x in zip(ys, xs):
+                                tid = int(tile_ids[y, x])
+                                if tid < 0:
+                                    continue
+                                candidate_tiles.add(tid)
+                                pop_val = float(layer[y, x])
+                                tile_populations[tid] = tile_populations.get(tid, 0.0) + pop_val
+                                tile_mortality[tid] = death_rate_map.get(lineage, 0.0)
+
+                            if not candidate_tiles:
+                                continue
+
+                            total_candidate_population = int(sum(tile_populations.values()))
+                            candidates[lineage] = {
+                                "candidate_tiles": candidate_tiles,
+                                "tile_populations": tile_populations,
+                                "tile_mortality": tile_mortality,
+                                "is_isolated": len(clusters) >= 2,
+                                "mortality_gradient": 0.0,  # 暂无逐格死亡率，设为0
+                                "clusters": clusters,
+                                "total_candidate_population": total_candidate_population,
+                            }
+                        if candidates:
+                            # 统计隔离状态
+                            isolated_count = sum(1 for c in candidates.values() if c.get("is_isolated", False))
+                            logger.info(
+                                f"[分化数据传递] 张量生成 {len(candidates)} 个分化候选 "
+                                f"(其中 {isolated_count} 个地理隔离)"
+                            )
+                        else:
+                            logger.warning("[分化数据传递] 张量状态存在但未生成任何候选")
             
             engine.speciation.set_speciation_candidates(candidates)
             if tensor_state is not None:
@@ -3156,6 +3222,7 @@ def get_default_stages(include_tensor: bool = True) -> list[BaseStage]:
         TieringAndNicheStage(),
         GeneDiversityStage(),
         GeneActivationStage(),
+        SpeciationDataTransferStage(),  # 必须在 SpeciationStage 之前执行
         SpeciationStage(),
         BackgroundManagementStage(),
         BuildReportStage(),

@@ -701,6 +701,15 @@ class SpeciationService:
             # 公式：(基础率 + 演化潜力加成) × 0.8 + 世代加成，再乘以密度阻尼
             base_rate = _settings.base_speciation_rate
             base_chance = ((base_rate + (evo_potential * 0.25)) * 0.8 + generation_bonus) * density_damping
+
+            # 【早期兜底】防止早期(前100回合)连续多年无分化
+            # - 若满足隔离或超大种群，则设定至少 45% 触发概率
+            # - 其他早期候选至少 20%
+            if turn_index < spec_config.early_game_turns:
+                if is_isolated or candidate_population >= base_threshold * 2.0:
+                    base_chance = max(base_chance, 0.45)
+                else:
+                    base_chance = max(base_chance, 0.20)
             
             speciation_bonus = 0.0
             speciation_type = "生态隔离"
@@ -838,15 +847,22 @@ class SpeciationService:
             migration_penalty = 1.0
             recent_migration_turns = species.morphology_stats.get("recent_migration_turns", [])
             if recent_migration_turns:
-                # 统计最近2回合的迁徙
+                # 统计最近2回合的迁徙并保存
                 recent_migrations = [t for t in recent_migration_turns if turn_index - t <= 2]
-                if len(recent_migrations) >= 1:
+                species.morphology_stats["recent_migration_turns"] = recent_migrations
+                
+                # 早期分化不受迁徙抑制，以免新版迁徙更积极导致分化全被压制
+                if turn_index >= spec_config.early_game_turns and len(recent_migrations) >= 1:
                     # 有迁徙记录，对非地理通道 ×0.5 抑制
                     if speciation_type not in ["地理隔离"]:
                         migration_penalty = 0.5
                         logger.debug(
                             f"[迁徙抑制] {species.common_name}: "
                             f"最近{len(recent_migrations)}回合有迁徙, 概率×0.5"
+                        )
+                    else:
+                        logger.debug(
+                            f"[迁徙抑制豁免] {species.common_name}: 地理隔离通道，忽略迁徙惩罚"
                         )
             
             # 生态隔离额外门槛检查

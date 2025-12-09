@@ -587,7 +587,7 @@ const genealogyStyles = `
   .genealogy-modal {
     width: 98vw;
     height: 95vh;
-    max-width: 2000px;
+    max-width: min(2200px, 98vw);
     background: linear-gradient(145deg, rgba(8, 12, 21, 0.98) 0%, rgba(15, 23, 42, 0.98) 100%);
     border: 1px solid rgba(59, 130, 246, 0.15);
     border-radius: 20px;

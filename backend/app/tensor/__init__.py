@@ -58,17 +58,6 @@ from .pressure_bridge import (
     reset_pressure_bridge,
 )
 
-# 张量迁徙引擎
-from .migration import (
-    TensorMigrationEngine,
-    MigrationConfig,
-    MigrationMetrics,
-    get_migration_engine,
-    reset_migration_engine,
-    extract_species_preferences,
-    extract_habitat_mask,
-)
-
 # 张量化生态位计算
 from .niche_tensor import (
     NicheTensorCompute,
@@ -148,14 +137,6 @@ __all__ = [
     "get_params_extractor",
     "get_multifactor_mortality",
     "reset_pressure_bridge",
-    # 张量迁徙引擎
-    "TensorMigrationEngine",
-    "MigrationConfig",
-    "MigrationMetrics",
-    "get_migration_engine",
-    "reset_migration_engine",
-    "extract_species_preferences",
-    "extract_habitat_mask",
     # 张量化生态位计算
     "NicheTensorCompute",
     "NicheTensorMetrics",

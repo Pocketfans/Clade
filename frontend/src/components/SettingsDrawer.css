@@ -1820,6 +1820,27 @@
   }
 }
 
+/* 超宽屏 (2.5K+ / 21:9+) */
+@media (min-width: 2560px), (min-aspect-ratio: 21/9) {
+  .settings-drawer {
+    width: 1700px !important;
+    height: 86vh !important;
+    max-height: 1000px !important;
+  }
+  
+  .settings-nav {
+    width: 240px;
+  }
+  
+  .connection-layout {
+    grid-template-columns: 330px 1fr;
+  }
+  
+  .capabilities-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
 /* 大屏幕 (1600px - 1919px) */
 @media (min-width: 1600px) and (max-width: 1919px) {
   .settings-drawer {

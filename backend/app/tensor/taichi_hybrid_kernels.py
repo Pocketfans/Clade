@@ -144,8 +144,18 @@ def kernel_reproduction(
     birth_rate: ti.f32,
     result: ti.types.ndarray(dtype=ti.f32, ndim=3),
 ):
-    """繁殖计算 - Taichi 并行"""
+    """繁殖计算 - Taichi 并行
+    
+    【v2.2 修复】添加低宜居度繁殖抑制：
+    - 宜居度低于0.20时，繁殖率大幅降低
+    - 宜居度低于0.10时，几乎不繁殖
+    """
     S, H, W = pop.shape[0], pop.shape[1], pop.shape[2]
+    
+    # 繁殖的宜居度阈值
+    REPRO_MIN_SUIT = 0.10      # 低于此值几乎不繁殖
+    REPRO_LOW_SUIT = 0.25      # 低于此值繁殖受抑制
+    
     for s, i, j in ti.ndrange(S, H, W):
         if pop[s, i, j] > 0:
             total_pop = 0.0
@@ -153,9 +163,25 @@ def kernel_reproduction(
                 total_pop += pop[sp, i, j]
             
             cap = capacity[i, j]
+            suit = fitness[s, i, j]  # fitness 即 suitability
+            
             if cap > 0 and total_pop > 0:
                 crowding = ti.min(1.0, total_pop / cap)
-                effective_rate = birth_rate * fitness[s, i, j] * (1.0 - crowding)
+                
+                # 【新增】宜居度繁殖调节因子
+                suit_factor = 1.0
+                if suit < REPRO_MIN_SUIT:
+                    # 极低宜居度：几乎不繁殖
+                    suit_factor = 0.05
+                elif suit < REPRO_LOW_SUIT:
+                    # 低宜居度：繁殖率线性降低
+                    # 从 0.10 到 0.25，因子从 0.05 升到 0.70
+                    suit_factor = 0.05 + (suit - REPRO_MIN_SUIT) / (REPRO_LOW_SUIT - REPRO_MIN_SUIT) * 0.65
+                else:
+                    # 正常宜居度：使用 suitability 作为系数
+                    suit_factor = ti.min(1.0, suit * 1.2)
+                
+                effective_rate = birth_rate * suit_factor * (1.0 - crowding)
                 result[s, i, j] = pop[s, i, j] * (1.0 + effective_rate)
             else:
                 result[s, i, j] = pop[s, i, j]
@@ -430,24 +456,108 @@ def kernel_migration_decision(
 
 
 @ti.kernel
+def kernel_migration_decision_v2(
+    pop: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    suitability: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    distance_weights: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    death_rates: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    resource_pressure: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    prey_density: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    trophic_levels: ti.types.ndarray(dtype=ti.f32, ndim=1),
+    migration_scores: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    pressure_threshold: ti.f32,
+    saturation_threshold: ti.f32,
+    oversaturation_threshold: ti.f32,
+    prey_scarcity_threshold: ti.f32,
+    prey_weight: ti.f32,
+    oversat_bonus: ti.f32,
+    consumer_trophic_threshold: ti.f32,
+):
+    """迁徙决策 v2 - 融合饱和/溢出与猎物追踪的 GPU 版本"""
+    S, H, W = pop.shape[0], pop.shape[1], pop.shape[2]
+    
+    for s, i, j in ti.ndrange(S, H, W):
+        migration_scores[s, i, j] = 0.0
+        
+        if pop[s, i, j] > 0:
+            continue
+        if suitability[s, i, j] < 0.25:
+            continue
+        
+        # 相邻性检查
+        adj_count = 0
+        if i > 0:
+            if pop[s, i - 1, j] > 0:
+                adj_count += 1
+        if i < H - 1:
+            if pop[s, i + 1, j] > 0:
+                adj_count += 1
+        if j > 0:
+            if pop[s, i, j - 1] > 0:
+                adj_count += 1
+        if j < W - 1:
+            if pop[s, i, j + 1] > 0:
+                adj_count += 1
+        
+        if adj_count == 0:
+            continue
+        
+        death_rate = death_rates[s]
+        res_pressure = resource_pressure[s]
+        base_score = suitability[s, i, j] * 0.5 + distance_weights[s, i, j] * 0.5
+        
+        # 压力驱动
+        if death_rate > pressure_threshold:
+            pressure_boost = ti.min(0.5, (death_rate - pressure_threshold) * 2.0)
+            base_score = (
+                suitability[s, i, j] * (0.6 + pressure_boost * 0.2) +
+                distance_weights[s, i, j] * (0.4 - pressure_boost * 0.2)
+            )
+            base_score *= (1.0 + pressure_boost * 0.5)
+        
+        # 饱和/过饱和
+        if res_pressure > saturation_threshold:
+            base_score = suitability[s, i, j] * 0.4 + distance_weights[s, i, j] * 0.6
+        if res_pressure > oversaturation_threshold:
+            base_score = base_score * (1.0 + oversat_bonus)
+        
+        # 猎物追踪
+        if trophic_levels[s] >= consumer_trophic_threshold:
+            prey_val = prey_density[s, i, j]
+            if prey_val < prey_scarcity_threshold:
+                base_score = (
+                    base_score * (1.0 - prey_weight) +
+                    prey_val * suitability[s, i, j] * prey_weight
+                )
+        
+        noise = 0.9 + 0.2 * ti.sin(ti.cast(i * 17 + j * 31 + s * 11, ti.f32))
+        migration_scores[s, i, j] = base_score * noise
+
+
+@ti.kernel
 def kernel_execute_migration(
     pop: ti.types.ndarray(dtype=ti.f32, ndim=3),
     migration_scores: ti.types.ndarray(dtype=ti.f32, ndim=3),
+    distance_weights: ti.types.ndarray(dtype=ti.f32, ndim=3),
     new_pop: ti.types.ndarray(dtype=ti.f32, ndim=3),
     migration_rates: ti.types.ndarray(dtype=ti.f32, ndim=1),
     score_threshold: ti.f32,
+    long_jump_prob: ti.f32,
 ):
     """执行迁徙 - Taichi 并行
     
     【v2.1修复】添加相邻性检查：物种只能向已有种群相邻的空地块迁徙
     这样物种扩散是逐步的，不会一回合扩散到全世界
+    【扩展】long_jump_prob>0 时，小概率允许非相邻但有距离权重的地块接收迁入
     
     Args:
         pop: 当前种群张量 (S, H, W)
         migration_scores: 迁徙分数张量 (S, H, W)
+        distance_weights: 距离权重张量 (S, H, W)，用于 long jump 审核
         new_pop: 迁徙后的种群张量 (S, H, W)
         migration_rates: 每个物种的迁徙比例 (S,)
         score_threshold: 分数阈值，低于此值不迁徙
+        long_jump_prob: 非相邻迁徙的小概率（如 0.01-0.02）
     """
     S, H, W = pop.shape[0], pop.shape[1], pop.shape[2]
     
@@ -481,6 +591,12 @@ def kernel_execute_migration(
                 # 只有相邻有种群的空地块才计入迁徙分数
                 if adj_count > 0:
                     total_score += migration_scores[s, i, j]
+                else:
+                    # long jump：使用伪随机噪声决定是否允许远跳
+                    if long_jump_prob > 0 and migration_scores[s, i, j] > score_threshold and distance_weights[s, i, j] > 0.0:
+                        noise = 0.5 + 0.5 * ti.sin(ti.cast(i * 13 + j * 17 + s * 19, ti.f32))
+                        if noise < long_jump_prob * 10.0:  # 适度放大，以免过低
+                            total_score += migration_scores[s, i, j]
         
         # 迁徙量（只迁出一部分种群）
         migrate_amount = total_pop * migration_rates[s]
@@ -494,9 +610,8 @@ def kernel_execute_migration(
                 # 空地块：检查是否可以接收迁入
                 new_pop[s, i, j] = 0.0
                 
-                # 只向相邻已有种群的空地块迁入
+                # 只向相邻地块，或在 long jump 概率下向可达地块迁入
                 if total_score > 0 and migration_scores[s, i, j] > score_threshold:
-                    # 检查相邻性
                     adj_count = 0
                     if i > 0:
                         if pop[s, i - 1, j] > 0:
@@ -511,8 +626,12 @@ def kernel_execute_migration(
                         if pop[s, i, j + 1] > 0:
                             adj_count += 1
                     
-                    # 分配迁入种群（只到相邻空地块）
-                    if adj_count > 0:
+                    allow_long = False
+                    if adj_count == 0 and long_jump_prob > 0 and distance_weights[s, i, j] > 0.0:
+                        noise = 0.5 + 0.5 * ti.sin(ti.cast((i + 1) * 23 + (j + 1) * 29 + s * 31, ti.f32))
+                        allow_long = noise < long_jump_prob * 10.0
+                    
+                    if adj_count > 0 or allow_long:
                         score_ratio = migration_scores[s, i, j] / total_score
                         new_pop[s, i, j] = migrate_amount * score_ratio
 
@@ -527,8 +646,10 @@ def kernel_advanced_diffusion(
     """带适宜度引导的高级扩散 - Taichi 并行
     
     种群会优先向适宜度更高的地块扩散。
-    【v2.1】参考 config.py: suitability_cutoff = 0.25
-    只有适宜度足够高（>0.25）才允许扩散进入！
+    
+    【v2.2 修复】添加低宜居度区域的逃逸机制：
+    - 当物种在低宜居度区域时，即使邻居宜居度也不高，仍有少量向外流出
+    - 避免物种被"困"在低宜居度斑块而无法逃逸
     
     Args:
         pop: 种群张量 (S, H, W)
@@ -538,9 +659,11 @@ def kernel_advanced_diffusion(
     """
     S, H, W = pop.shape[0], pop.shape[1], pop.shape[2]
     
-    # 适宜度阈值：低于此值不允许扩散进入
-    # 参考 config.py: suitability_cutoff = 0.25
-    SUIT_THRESHOLD = 0.25
+    # 适宜度阈值
+    SUIT_THRESHOLD = 0.25          # 正常扩散的宜居度阈值
+    SUIT_LOW_THRESHOLD = 0.15      # 低宜居度阈值（降低，允许更多流动）
+    SUIT_ESCAPE_THRESHOLD = 0.20   # 触发逃逸的宜居度阈值
+    ESCAPE_RATE_MULTIPLIER = 2.0   # 逃逸时的流出倍率
     
     for s, i, j in ti.ndrange(S, H, W):
         current = pop[s, i, j]
@@ -549,9 +672,14 @@ def kernel_advanced_diffusion(
         # 计算流入和流出
         outflow = 0.0
         inflow = 0.0
+        escape_outflow = 0.0  # 逃逸流出（专门处理低宜居度区域）
         
         # 四个邻居方向
         neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        
+        # 统计邻居信息（用于逃逸判断）
+        any_better_neighbor = False
+        best_neighbor_suit = 0.0
         
         for di, dj in ti.static(neighbors):
             ni = i + di
@@ -561,38 +689,70 @@ def kernel_advanced_diffusion(
                 neighbor_suit = suitability[s, ni, nj]
                 neighbor_pop = pop[s, ni, nj]
                 
+                # 记录最佳邻居
+                if neighbor_suit > best_neighbor_suit:
+                    best_neighbor_suit = neighbor_suit
+                if neighbor_suit > my_suit:
+                    any_better_neighbor = True
+                
                 # 适宜度梯度决定扩散方向和强度
                 gradient = neighbor_suit - my_suit
                 
-                # === 流出计算：当前地块有种群，且邻居适宜度>阈值 ===
-                if current > 0 and neighbor_suit > SUIT_THRESHOLD:
-                    if gradient > 0:
-                        # 向高适宜度流出（种群被吸引到更好的地方）
-                        rate = base_rate * (1.0 + gradient * 0.5)
-                        outflow += current * rate * 0.25
-                    elif gradient > -0.3:
-                        # 邻居适宜度稍低但仍可接受，少量扩散
-                        rate = base_rate * 0.3
-                        outflow += current * rate * 0.25
+                # === 流出计算：当前地块有种群 ===
+                if current > 0:
+                    # 情况1: 邻居适宜度>阈值，正常扩散
+                    if neighbor_suit > SUIT_THRESHOLD:
+                        if gradient > 0:
+                            # 向高适宜度流出（种群被吸引到更好的地方）
+                            rate = base_rate * (1.0 + gradient * 0.5)
+                            outflow += current * rate * 0.25
+                        elif gradient > -0.3:
+                            # 邻居适宜度稍低但仍可接受，少量扩散
+                            rate = base_rate * 0.3
+                            outflow += current * rate * 0.25
+                    
+                    # 情况2: 【新增】低宜居度逃逸 - 邻居宜居度虽低但比当前高
+                    elif neighbor_suit > SUIT_LOW_THRESHOLD and my_suit < SUIT_ESCAPE_THRESHOLD:
+                        if gradient > 0:
+                            # 逃逸流出：当前宜居度很低，向稍微好一点的邻居逃逸
+                            escape_rate = base_rate * ESCAPE_RATE_MULTIPLIER * gradient
+                            escape_outflow += current * escape_rate * 0.25
                 
-                # === 流入计算：邻居有种群，且我的适宜度>阈值 ===
-                if neighbor_pop > 0 and my_suit > SUIT_THRESHOLD:
-                    if gradient < 0:
-                        # 邻居适宜度低于我，邻居种群向我扩散
-                        rate = base_rate * (1.0 - gradient * 0.5)
-                        inflow += neighbor_pop * rate * 0.25
-                    elif gradient < 0.3:
-                        # 我适宜度稍低但仍可接受，少量流入
-                        rate = base_rate * 0.3
+                # === 流入计算：邻居有种群 ===
+                if neighbor_pop > 0:
+                    # 情况1: 我的适宜度>阈值，正常流入
+                    if my_suit > SUIT_THRESHOLD:
+                        if gradient < 0:
+                            # 邻居适宜度低于我，邻居种群向我扩散
+                            rate = base_rate * (1.0 - gradient * 0.5)
+                            inflow += neighbor_pop * rate * 0.25
+                        elif gradient < 0.3:
+                            # 我适宜度稍低但仍可接受，少量流入
+                            rate = base_rate * 0.3
+                            inflow += neighbor_pop * rate * 0.25
+                    
+                    # 情况2: 【新增】我的宜居度在低阈值以上，允许少量流入
+                    elif my_suit > SUIT_LOW_THRESHOLD and gradient < 0:
+                        # 从低宜居度邻居少量流入（逃逸目的地）
+                        rate = base_rate * 0.5 * ti.abs(gradient)
                         inflow += neighbor_pop * rate * 0.25
         
-        # 限制最大流出（不能超过当前种群的40%）
+        # 【新增】全局逃逸：当所有邻居都很差时，随机少量流出（防止完全困住）
+        random_escape = 0.0
+        if current > 0 and my_suit < SUIT_ESCAPE_THRESHOLD and not any_better_neighbor:
+            # 使用坐标生成伪随机噪声
+            noise = 0.5 + 0.5 * ti.sin(ti.cast(i * 13 + j * 17 + s * 7, ti.f32))
+            if noise > 0.7:  # 30%概率触发随机逃逸
+                random_escape = current * base_rate * 0.1  # 少量随机流出
+        
+        # 限制最大流出（不能超过当前种群的50%，增加上限以支持逃逸）
+        total_outflow = outflow + escape_outflow + random_escape
         if current > 0:
-            outflow = ti.min(outflow, current * 0.4)
+            total_outflow = ti.min(total_outflow, current * 0.50)
         else:
-            outflow = 0.0
+            total_outflow = 0.0
         
-        new_pop[s, i, j] = current - outflow + inflow
+        new_pop[s, i, j] = current - total_outflow + inflow
 
 
 # ============================================================================
@@ -624,11 +784,13 @@ def kernel_multifactor_mortality(
     4. 资源压力（承载力）
     5. 营养级压力（捕食/被捕食）
     6. 外部压力（灾害等）
+    7. 【新增】宜居度压力 - 低宜居度导致高死亡
+    8. 【新增】栖息地不匹配压力 - 陆/海偏好不匹配导致高死亡
     
     Args:
         pop: 种群张量 (S, H, W)
         env: 环境张量 (C, H, W) - [temp, humidity, altitude, resource, land, sea, coast]
-        species_prefs: 物种偏好 (S, 7)
+        species_prefs: 物种偏好 (S, 7) - [温度, 湿度, 海拔, 资源, 陆地, 海洋, 海岸]
         species_params: 物种参数 (S, F) - 包含耐受性等
         trophic_levels: 营养级 (S,)
         pressure_overlay: 外部压力叠加 (C_pressure, H, W)
@@ -644,13 +806,19 @@ def kernel_multifactor_mortality(
     C_env = env.shape[0]
     C_pressure = pressure_overlay.shape[0]
     
+    # 宜居度相关阈值
+    SUIT_LOW_THRESHOLD = 0.25      # 低宜居度阈值
+    SUIT_CRITICAL_THRESHOLD = 0.10 # 极低宜居度阈值（几乎不可生存）
+    SUIT_DEATH_WEIGHT = 0.35       # 宜居度死亡权重
+    HABITAT_MISMATCH_PENALTY = 0.50  # 栖息地不匹配的死亡惩罚
+    
     for s, i, j in ti.ndrange(S, H, W):
         if pop[s, i, j] <= 0:
             result[s, i, j] = 0.0
             continue
         
         # === 1. 温度死亡率 ===
-        temp_channel = 1 if C_env > 1 else 0
+        temp_channel = 0 if C_env > 0 else 0
         temp = env[temp_channel, i, j]
         temp_pref = species_prefs[s, 0] * 50.0  # 偏好范围 -50~50
         temp_deviation = ti.abs(temp - temp_pref)
@@ -664,7 +832,7 @@ def kernel_multifactor_mortality(
         temp_mortality = ti.max(0.01, ti.min(0.8, temp_mortality))
         
         # === 2. 湿度死亡率 ===
-        humidity = env[1, i, j] if C_env > 2 else env[0, i, j] * 0.5
+        humidity = env[1, i, j] if C_env > 1 else 0.5
         humidity_pref = species_prefs[s, 1]
         humidity_deviation = ti.abs(humidity - humidity_pref)
         humidity_mortality = ti.min(0.4, humidity_deviation * 0.5)
@@ -700,13 +868,66 @@ def kernel_multifactor_mortality(
             
             # 归一化
             prey_density_norm = prey_density / (total_pop_tile + 1e-6)
-            prey_scarcity_mortality = (1.0 - prey_density_norm) * 0.2
+            # 【加强】猎物稀缺时死亡率更高
+            if prey_density_norm < 0.20:
+                prey_scarcity_mortality = (0.20 - prey_density_norm) * 1.5 + 0.1
+            else:
+                prey_scarcity_mortality = (1.0 - prey_density_norm) * 0.15
         
         # === 6. 外部压力死亡率 ===
         external_pressure = 0.0
         for c in range(C_pressure):
             external_pressure += pressure_overlay[c, i, j]
         external_mortality = ti.min(0.5, external_pressure * 0.1)
+        
+        # === 7. 【新增】宜居度死亡率 ===
+        # 计算该物种在该地块的宜居度（简化版，综合温度+湿度+栖息地匹配）
+        temp_diff = ti.abs(env[temp_channel, i, j] - species_prefs[s, 0])
+        temp_match = ti.max(0.0, 1.0 - temp_diff * 2.0)
+        humidity_match = ti.max(0.0, 1.0 - humidity_deviation * 2.0)
+        
+        # 栖息地匹配
+        habitat_match = 0.0
+        if C_env >= 7:
+            habitat_match = (
+                env[4, i, j] * species_prefs[s, 4] +  # 陆地
+                env[5, i, j] * species_prefs[s, 5] +  # 海洋
+                env[6, i, j] * species_prefs[s, 6]    # 海岸
+            )
+        else:
+            habitat_match = 0.5  # 无栖息地信息时给中性值
+        
+        # 综合宜居度
+        suitability = temp_match * 0.35 + humidity_match * 0.25 + habitat_match * 0.40
+        suitability = ti.max(0.0, ti.min(1.0, suitability))
+        
+        # 宜居度死亡率：低宜居度导致高死亡
+        suit_mortality = 0.0
+        if suitability < SUIT_CRITICAL_THRESHOLD:
+            # 极低宜居度：非常高的死亡率（几乎必死）
+            suit_mortality = 0.70
+        elif suitability < SUIT_LOW_THRESHOLD:
+            # 低宜居度：较高死亡率，线性增加
+            # 从 0.10 到 0.25，死亡率从 0.50 降到 0.15
+            suit_mortality = 0.50 - (suitability - SUIT_CRITICAL_THRESHOLD) / (SUIT_LOW_THRESHOLD - SUIT_CRITICAL_THRESHOLD) * 0.35
+        else:
+            # 正常宜居度：轻微惩罚（1 - suitability）
+            suit_mortality = (1.0 - suitability) * 0.10
+        
+        # === 8. 【新增】栖息地不匹配死亡率 ===
+        habitat_mismatch_mortality = 0.0
+        if C_env >= 6 and species_prefs.shape[1] >= 6:
+            is_land = env[4, i, j] > 0.5
+            is_sea = env[5, i, j] > 0.5
+            land_pref = species_prefs[s, 4]
+            sea_pref = species_prefs[s, 5]
+            
+            # 陆生物种在海洋 → 高死亡
+            if is_sea and land_pref > sea_pref + 0.3:
+                habitat_mismatch_mortality = HABITAT_MISMATCH_PENALTY
+            # 海洋物种在陆地 → 高死亡  
+            elif is_land and sea_pref > land_pref + 0.3:
+                habitat_mismatch_mortality = HABITAT_MISMATCH_PENALTY
         
         # === 综合死亡率 ===
         total_mortality = (
@@ -716,15 +937,18 @@ def kernel_multifactor_mortality(
             resource_mortality * resource_weight +
             prey_scarcity_mortality +
             external_mortality +
+            suit_mortality * SUIT_DEATH_WEIGHT +      # 【新增】宜居度死亡
+            habitat_mismatch_mortality +              # 【新增】栖息地不匹配死亡
             base_mortality
         )
         
-        # 时代缩放：早期时代死亡率略低
+        # 时代缩放：【调整】减少对死亡率的减免，避免"不死"问题
         if era_scaling > 1.5:
-            scale_factor = ti.max(0.7, 1.0 / ti.pow(era_scaling, 0.2))
+            # 缩放因子改为更保守的值（0.85 而非 0.7）
+            scale_factor = ti.max(0.85, 1.0 / ti.pow(era_scaling, 0.15))
             total_mortality *= scale_factor
         
-        result[s, i, j] = ti.max(0.01, ti.min(0.95, total_mortality))
+        result[s, i, j] = ti.max(0.02, ti.min(0.95, total_mortality))
 
 
 # ============================================================================
@@ -780,7 +1004,16 @@ def _precompile_all_kernels():
             pop, suitability, distance_weights, death_rates, 
             migration_scores, 0.12, 0.8  # pressure_threshold, saturation_threshold
         )
-        kernel_execute_migration(pop, migration_scores, result_3d, migration_rates, 0.1)
+        if 'kernel_migration_decision_v2' in globals():
+            kernel_migration_decision_v2(
+                pop, suitability, distance_weights, death_rates,
+                death_rates,  # resource_pressure 占位
+                suitability,  # prey_density 占位
+                trophic,
+                migration_scores,
+                0.12, 0.8, 0.9, 0.35, 0.3, 0.1, 2.0
+            )
+        kernel_execute_migration(pop, migration_scores, distance_weights, result_3d, migration_rates, 0.25, 0.01)
         kernel_multifactor_mortality(
             pop, env, prefs, params, trophic, pressure, result_3d,
             0.05, 0.3, 0.2, 0.15, 1.0, 1.0

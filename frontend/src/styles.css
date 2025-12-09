@@ -104,6 +104,13 @@ html {
   font-size: clamp(13px, 0.6vw + 5px, 30px);
 }
 
+/* 超宽屏下降低基准字号，避免过度放大 */
+@media (min-width: 2560px), (min-aspect-ratio: 21/9) {
+  html {
+    font-size: clamp(12px, 0.35vw + 4px, 22px);
+  }
+}
+
 body {
   margin: 0;
   min-height: 100vh;

@@ -43,19 +43,19 @@ class DispersalEngine:
     使用numpy进行高效的批量地块评分计算
     """
     
-    # 【大浪淘沙v3】扩散参数 - 大幅提高扩散积极性
-    PASSIVE_DISPERSAL_PROB = 0.40       # 被动扩散概率：每回合40%概率向周边扩散（原25%）
-    LONG_JUMP_PROB = 0.10               # 远距离跳跃概率：10%（原5%）
-    OVERFLOW_THRESHOLD = 0.55           # 种群溢出阈值：55%承载力触发（原70%）
-    PRESSURE_DISPERSAL_THRESHOLD = 0.08 # 压力扩散阈值：8%死亡率触发（原15%）
+    # 【平衡调整】降低无序扩散与远跳
+    PASSIVE_DISPERSAL_PROB = 0.22       # 被动扩散概率：回合22%
+    LONG_JUMP_PROB = 0.02               # 远距离跳跃概率：2%
+    OVERFLOW_THRESHOLD = 0.65           # 种群溢出阈值
+    PRESSURE_DISPERSAL_THRESHOLD = 0.12 # 压力扩散阈值
     
-    # 【新增】水域物种扩散优惠
-    AQUATIC_DISTANCE_FACTOR = 0.6       # 水域物种距离成本系数（原1.0）
-    AQUATIC_JUMP_BONUS = 0.08           # 水域物种远跳概率加成
+    # 【新增】水域物种扩散优惠（保留但减弱）
+    AQUATIC_DISTANCE_FACTOR = 0.75      # 水域物种距离成本系数
+    AQUATIC_JUMP_BONUS = 0.04           # 水域物种远跳概率加成
     
     # 迁徙冷却（回合数）
-    MIGRATION_COOLDOWN = 0              # 【大浪淘沙v3】从1回合降到0回合
-    DISPERSAL_COOLDOWN = 0              # 被动扩散无冷却
+    MIGRATION_COOLDOWN = 2              # 迁徙冷却：2 回合
+    DISPERSAL_COOLDOWN = 1              # 被动扩散冷却：1 回合
     
     # 【时代缩放】当前时代的缩放因子（由 set_era_scaling 设置）
     _era_scaling: float = 1.0

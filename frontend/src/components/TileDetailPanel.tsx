@@ -42,19 +42,23 @@ const DIMENSION_INFO: Record<string, { icon: string; label: string; weight: numb
   salinity: { icon: "🧂", label: "盐度", weight: 0.10 },
   moisture: { icon: "💧", label: "湿度", weight: 0.08 },
   altitude: { icon: "⛰️", label: "海拔", weight: 0.08 },
-  resources: { icon: "💎", label: "资源", weight: 0.08 },
+  resources: { icon: "💎", label: "资源/猎物供给", weight: 0.08 },
   depth: { icon: "🔽", label: "深度", weight: 0.08 },
   light: { icon: "☀️", label: "光照", weight: 0.06 },
   vegetation: { icon: "🌿", label: "植被", weight: 0.06 },
   river: { icon: "🏞️", label: "河流", weight: 0.06 },
-  volcanic: { icon: "🌋", label: "地热", weight: 0.04 },
-  stability: { icon: "🏔️", label: "稳定性", weight: 0.04 },
+  volcanic: { icon: "🌋", label: "地热/火山（仅热泉/深海相关）", weight: 0.04 },
+  stability: { icon: "🏔️", label: "环境稳定性（灾变频率）", weight: 0.04 },
 };
 
 // 格式化宜居度分解为 tooltip 文本 (新版 12 维系统)
 function formatBreakdownTooltip(breakdown: SuitabilityBreakdown, displayedSuitability: number): string {
+  const envScore = (breakdown.feature_score ?? 0) * 100;
+  const nicheScore = (breakdown.semantic_score ?? 0) * 100;
   const lines: string[] = [
     `📊 综合宜居度: ${(displayedSuitability * 100).toFixed(0)}%`,
+    `环境匹配: ${envScore.toFixed(0)}% · 生态位匹配: ${nicheScore.toFixed(0)}%`,
+    `说明: 综合分数由环境匹配 + 生态位匹配共同决定，生态位较低会拉低上限。`,
     `════════════════════`,
   ];
   
@@ -62,7 +66,7 @@ function formatBreakdownTooltip(breakdown: SuitabilityBreakdown, displayedSuitab
   if (displayedSuitability < 0.01) {
     lines.push(`❌ 环境致死: 不可生存`);
     if (breakdown.aquatic !== undefined && breakdown.aquatic < 0.1) {
-      lines.push(`   • 物理介质不符 (如: 陆生入海)`);
+      lines.push(`   • 介质不符 (例: 陆生入海 / 海生上岸)`);
     }
     if (breakdown.thermal !== undefined && breakdown.thermal < 0.1) {
       lines.push(`   • 温度超出耐受极限`);
@@ -80,46 +84,54 @@ function formatBreakdownTooltip(breakdown: SuitabilityBreakdown, displayedSuitab
       else if (preyScore > 20) preyLevel = "一般";
       
       lines.push(`🥩 猎物状况: ${preyLevel} (${preyScore.toFixed(0)}%)`);
+      lines.push(`(资源链: 资源→T1→T2→T3→T4，顶级捕食者取食T2/T3)`);
     } else {
-      lines.push(`🍖 严重饥饿: 无猎物来源!`);
-      lines.push(`⚠️ 死亡率极高 (缺乏能量)`);
+      lines.push(`🍖 严重饥饿: 无猎物来源`);
+      lines.push(`⚠️ 能量不足将导致高死亡率`);
     }
     lines.push(`────────────────────`);
   }
   
-  // 3. 生态位与特征
-  if (breakdown.semantic_score > 0) {
-    lines.push(`🧠 生态位匹配: ${(breakdown.semantic_score * 100).toFixed(0)}%`);
-    lines.push(`(基于演化历史与相近物种判定)`);
-    lines.push(`────────────────────`);
-  }
-  
-  // 4. 关键环境因素
+  // 3. 环境维度：突出短板与优势
   const scores: { key: string; score: number; info: typeof DIMENSION_INFO[string] }[] = [];
   for (const [key, info] of Object.entries(DIMENSION_INFO)) {
     const score = (breakdown as unknown as Record<string, number>)[key] ?? 0;
     scores.push({ key, score, info });
   }
   
-  const shortBoards = scores.filter(s => s.score < 0.4);
-  let showDims = [];
+  // 仅展示权重较高的维度，低权重维度需极端才展示
+  const isHighWeight = (w: number) => w >= 0.06;
+  const low = scores
+    .filter(s => s.score < 0.6 && (isHighWeight(s.info.weight) || s.score < 0.2))
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 4);
+  const high = scores
+    .filter(s => s.score >= 0.8 && isHighWeight(s.info.weight))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4);
   
-  if (shortBoards.length > 0 && displayedSuitability < 0.5) {
-    lines.push(`📉 限制因素 (短板):`);
-    showDims = shortBoards.sort((a, b) => a.score - b.score).slice(0, 4);
-  } else {
-    lines.push(`✅ 关键环境指标:`);
-    const criticalDims = scores.filter(s => s.info.critical || s.score > 0.7);
-    showDims = criticalDims.sort((a, b) => b.score - a.score).slice(0, 5);
-  }
-  
-  if (showDims.length > 0) {
-    for (const { score, info } of showDims) {
-      const pct = (score * 100).toFixed(0);
-      const status = score < 0.3 ? "❌" : score < 0.6 ? "⚠️" : "✅";
-      lines.push(`  ${status} ${info.icon} ${info.label}: ${pct}%`);
+  if (low.length > 0) {
+    lines.push(`📉 短板 (拉低分数):`);
+    for (const { score, info } of low) {
+      lines.push(`  ❌ ${info.icon} ${info.label}: ${(score * 100).toFixed(0)}%`);
     }
   }
+  
+  if (high.length > 0) {
+    lines.push(low.length > 0 ? `────────────────────` : `────────────────────`);
+    lines.push(`✅ 优势 (提高分数):`);
+    for (const { score, info } of high) {
+      lines.push(`  ✅ ${info.icon} ${info.label}: ${(score * 100).toFixed(0)}%`);
+    }
+  }
+  
+  // 4. 生态位匹配补充文案
+  lines.push(`────────────────────`);
+  lines.push(`🧠 生态位匹配用于反映进化历史/相近物种经验，环境再高也会受其限制。`);
+  lines.push(`ℹ️ 说明:`);
+  lines.push(`- 资源/猎物供给: 生产者依赖环境资源；消费者依赖猎物，链条为 资源→T1→T2→T3→T4，顶级捕食者取食 T2/T3。`);
+  lines.push(`- 地热/火山仅对热泉、深海热液生物有用，其他物种视作中性。`);
+  lines.push(`- 环境稳定性表示灾变/扰动频率，多数物种在中性范围影响较小。`);
   
   return lines.join('\n');
 }

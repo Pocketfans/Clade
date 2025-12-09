@@ -459,9 +459,11 @@ class HybridCompute:
         _taichi_kernels.kernel_execute_migration(
             pop.astype(np.float32),
             migration_scores,
+            distance_weights,
             new_pop,
             migration_rates,
             0.08,  # score_threshold
+            0.01,  # long_jump_prob
         )
         
         # 5. 带引导的扩散

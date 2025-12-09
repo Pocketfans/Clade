@@ -125,15 +125,11 @@ class TensorSuitabilityCalculator:
         self._init_taichi()
     
     def _init_taichi(self) -> None:
-        """初始化 Taichi 内核"""
-        try:
-            from . import taichi_hybrid_kernels as _kernels
-            self._taichi_available = True
-            self._kernels = _kernels
-            logger.debug("[TensorSuitability] Taichi 内核加载成功")
-        except Exception as e:
-            logger.warning(f"[TensorSuitability] Taichi 不可用，使用 NumPy 后备: {e}")
-            self._taichi_available = False
+        """初始化 Taichi 内核 - GPU-only 模式"""
+        from . import taichi_hybrid_kernels as _kernels
+        self._taichi_available = True
+        self._kernels = _kernels
+        logger.debug("[TensorSuitability] Taichi GPU 内核加载成功")
     
     def reload_config(self, config: "SuitabilityConfig") -> None:
         """重新加载配置"""
@@ -292,19 +288,12 @@ class TensorSuitabilityCalculator:
             else:
                 habitat_mask = np.ones((S, H, W), dtype=np.float32)
         
-        # 6. 计算适宜度
-        if self._taichi_available:
-            result = self._compute_taichi(
-                env_tensor, species_traits_ext, habitat_mask,
-                trophic_levels, pop_tensor, niche_similarity,
-                cfg, S, H, W, metrics
-            )
-        else:
-            result = self._compute_numpy(
-                env_tensor, species_traits_ext, habitat_mask,
-                trophic_levels, pop_tensor, niche_similarity,
-                cfg, S, H, W, metrics
-            )
+        # 6. 计算适宜度 [GPU-only]
+        result = self._compute_taichi(
+            env_tensor, species_traits_ext, habitat_mask,
+            trophic_levels, pop_tensor, niche_similarity,
+            cfg, S, H, W, metrics
+        )
         
         # 7. 可选：历史适应惩罚
         if historical_presence is not None:
@@ -398,251 +387,6 @@ class TensorSuitabilityCalculator:
         
         return result
     
-    # ========================================================================
-    # NumPy 后备计算
-    # ========================================================================
-    
-    def _compute_numpy(
-        self,
-        env: np.ndarray,
-        species_traits: np.ndarray,
-        habitat_mask: np.ndarray,
-        trophic_levels: np.ndarray,
-        pop: np.ndarray,
-        niche_similarity: np.ndarray,
-        cfg: dict,
-        S: int, H: int, W: int,
-        metrics: SuitabilityMetrics,
-    ) -> np.ndarray:
-        """使用 NumPy 计算适宜度（后备方案 - 极端收紧版）
-        
-        【计算流程】
-        1. 环境适宜度（温度/湿度/盐度/光照/资源 + 专化度权衡）
-        2. 拥挤惩罚（同营养级竞争排斥）
-        3. 资源分割（生态位重叠分割资源）
-        4. 综合适宜度
-        
-        【预期效果】
-        - 普通物种：适宜度 30-60%（非最优环境）
-        - 完美匹配：适宜度 70-90%（考虑竞争）
-        - 高竞争区：适宜度 20-40%
-        """
-        
-        # 1. 环境适宜度
-        t0 = time.perf_counter()
-        env_suit = self._compute_env_suitability_numpy(
-            env, species_traits, habitat_mask, cfg, S, H, W
-        )
-        metrics.env_suitability_time_ms = (time.perf_counter() - t0) * 1000
-        
-        result = env_suit.copy()
-        
-        # 2. 拥挤惩罚（可选）
-        if cfg.get("enable_crowding_penalty", True):
-            t1 = time.perf_counter()
-            crowding_factor = self._compute_crowding_numpy(
-                trophic_levels, pop, cfg, S, H, W
-            )
-            metrics.crowding_time_ms = (time.perf_counter() - t1) * 1000
-            result *= crowding_factor
-        
-        # 3. 资源分割（可选）
-        if cfg.get("enable_resource_split", True):
-            t2 = time.perf_counter()
-            split_factor = self._compute_resource_split_numpy(
-                pop, niche_similarity, cfg, S, H, W
-            )
-            metrics.resource_split_time_ms = (time.perf_counter() - t2) * 1000
-            result *= split_factor
-        
-        return np.clip(result, 0.0, 1.0).astype(np.float32)
-    
-    def _compute_env_suitability_numpy(
-        self,
-        env: np.ndarray,
-        species_traits: np.ndarray,
-        habitat_mask: np.ndarray,
-        cfg: dict,
-        S: int, H: int, W: int,
-    ) -> np.ndarray:
-        """NumPy 版环境适宜度计算（极端收紧版）
-        
-        【设计目标】
-        - 温度范围：5-10°C（物种只能在狭窄温度范围生存）
-        - 湿度敏感：差异0.25适宜度归零
-        - 资源苛刻：需要90%资源才能满分
-        - 泛化惩罚：泛化物种适宜度打6折
-        """
-        result = np.zeros((S, H, W), dtype=np.float32)
-        
-        temp_ch = self.ENV_CHANNELS["temperature"]
-        humidity_ch = self.ENV_CHANNELS["humidity"]
-        resource_ch = self.ENV_CHANNELS["resources"]
-        salinity_ch = self.ENV_CHANNELS["salinity"]
-        light_ch = self.ENV_CHANNELS["light"]
-        
-        # 获取配置参数
-        temp_coef = cfg.get("temp_tolerance_coef", 1.0)
-        temp_penalty = cfg.get("temp_penalty_rate", 0.4)
-        humidity_penalty = cfg.get("humidity_penalty_rate", 4.0)
-        salinity_penalty = cfg.get("salinity_penalty_rate", 5.0)
-        light_penalty = cfg.get("light_penalty_rate", 3.0)
-        resource_thresh = cfg.get("resource_threshold", 0.9)
-        
-        generalist_thresh = cfg.get("generalist_threshold", 0.4)
-        generalist_base = cfg.get("generalist_penalty_base", 0.60)
-        
-        w_temp = cfg.get("weight_temperature", 0.30)
-        w_humid = cfg.get("weight_humidity", 0.15)
-        w_salt = cfg.get("weight_salinity", 0.15)
-        w_light = cfg.get("weight_light", 0.10)
-        w_res = cfg.get("weight_resources", 0.30)
-        
-        enable_specialization = cfg.get("enable_specialization_tradeoff", True)
-        
-        for s in range(S):
-            cold_res = species_traits[s, 0]
-            heat_res = species_traits[s, 1]
-            drought_res = species_traits[s, 2]
-            salt_res = species_traits[s, 3]
-            light_req = species_traits[s, 4]
-            specialization = species_traits[s, 5]
-            
-            # ========== 温度（极端收紧）==========
-            # 最优温度：基于耐热-耐寒差异
-            optimal_temp_raw = 15.0 + (heat_res - cold_res) * 2.0
-            optimal_temp = (optimal_temp_raw - 10.0) / 40.0  # 归一化到 [-1, 1]
-            # 容忍范围：coef=1.0时，10点特质=10°C范围
-            tolerance_range = (cold_res + heat_res) * temp_coef / 80.0
-            
-            temp_diff = np.abs(env[temp_ch] - optimal_temp)
-            temp_score = np.where(
-                temp_diff <= tolerance_range,
-                1.0,
-                np.maximum(0.0, 1.0 - (temp_diff - tolerance_range) * temp_penalty * 10.0)
-            )
-            
-            # ========== 湿度（收紧）==========
-            optimal_humidity = 1.0 - drought_res * 0.08
-            humidity_diff = np.abs(env[humidity_ch] - optimal_humidity)
-            humidity_score = np.maximum(0.0, 1.0 - humidity_diff * humidity_penalty)
-            
-            # ========== 盐度（收紧）==========
-            optimal_salinity = salt_res * 0.1
-            salinity_diff = np.abs(env[salinity_ch] - optimal_salinity)
-            salinity_score = np.maximum(0.0, 1.0 - salinity_diff * salinity_penalty)
-            
-            # ========== 光照（收紧）==========
-            optimal_light = light_req * 0.1
-            light_diff = np.abs(env[light_ch] - optimal_light)
-            light_score = np.maximum(0.0, 1.0 - light_diff * light_penalty)
-            
-            # ========== 资源（收紧）==========
-            resource_score = np.minimum(1.0, env[resource_ch] / resource_thresh)
-            
-            # ========== 综合适宜度 ==========
-            base_suit = (
-                temp_score * w_temp +
-                humidity_score * w_humid +
-                salinity_score * w_salt +
-                light_score * w_light +
-                resource_score * w_res
-            )
-            
-            # ========== 专化度权衡（加强惩罚）==========
-            if enable_specialization and specialization < generalist_thresh:
-                # 泛化物种：专化度越低惩罚越重
-                # 专化度=0时打generalist_base折，专化度=threshold时无惩罚
-                penalty_factor = generalist_base + (1.0 - generalist_base) * (specialization / generalist_thresh)
-                base_suit *= penalty_factor
-            
-            # 应用 habitat_mask
-            result[s] = base_suit * habitat_mask[s]
-        
-        return result
-    
-    def _compute_crowding_numpy(
-        self,
-        trophic_levels: np.ndarray,
-        pop: np.ndarray,
-        cfg: dict,
-        S: int, H: int, W: int,
-    ) -> np.ndarray:
-        """NumPy 版拥挤惩罚计算（加强版）
-        
-        【竞争排斥原则】
-        同生态位（同营养级）物种越多，每个物种的有效适宜度越低。
-        - 2个竞争者：适宜度降50%
-        - 3个竞争者：适宜度降63%
-        """
-        # 检查开关
-        if not cfg.get("enable_crowding_penalty", True):
-            return np.ones((S, H, W), dtype=np.float32)
-        
-        crowding = np.ones((S, H, W), dtype=np.float32)
-        trophic_tol = cfg.get("trophic_tolerance", 0.3)
-        penalty_rate = cfg.get("crowding_penalty_per_species", 0.25)
-        max_penalty = cfg.get("max_crowding_penalty", 0.70)
-        
-        for s in range(S):
-            my_trophic = trophic_levels[s]
-            
-            # 找同营养级的竞争者
-            same_trophic_mask = np.abs(trophic_levels - my_trophic) <= trophic_tol
-            same_trophic_mask[s] = False  # 排除自己
-            
-            # 计算每个地块的竞争者数量
-            competitor_pop = pop[same_trophic_mask]  # (competitors, H, W)
-            if competitor_pop.shape[0] > 0:
-                competitor_count = np.sum(competitor_pop > 0, axis=0)  # (H, W)
-                # 惩罚公式：1 / (1 + count * rate)
-                # rate=0.25时：1个竞争者=0.8，2个=0.5，3个=0.36
-                crowding_factor = 1.0 / (1.0 + competitor_count * penalty_rate)
-                crowding_factor = np.maximum(1.0 - max_penalty, crowding_factor)
-                crowding[s] = crowding_factor
-        
-        return crowding
-    
-    def _compute_resource_split_numpy(
-        self,
-        pop: np.ndarray,
-        niche_similarity: np.ndarray,
-        cfg: dict,
-        S: int, H: int, W: int,
-    ) -> np.ndarray:
-        """NumPy 版资源分割计算（加强版）
-        
-        【资源分割原则】
-        生态位相似的物种必须分割资源，不能都获得100%。
-        - 高重叠度：资源大幅分割
-        - 最低保留20%资源
-        """
-        # 检查开关
-        if not cfg.get("enable_resource_split", True):
-            return np.ones((S, H, W), dtype=np.float32)
-        
-        split = np.ones((S, H, W), dtype=np.float32)
-        coef = cfg.get("split_coefficient", 0.5)
-        min_factor = cfg.get("min_split_factor", 0.2)
-        
-        for s in range(S):
-            total_overlap = np.zeros((H, W), dtype=np.float32)
-            
-            for other in range(S):
-                if other == s:
-                    continue
-                # 只累加同地块有种群的物种
-                overlap_contribution = niche_similarity[s, other] * (pop[other] > 0).astype(np.float32)
-                total_overlap += overlap_contribution
-            
-            # 分割公式：1 / (1 + overlap * coef)
-            # coef=0.5，overlap=1时：factor=0.67
-            # coef=0.5，overlap=2时：factor=0.5
-            split_factor = 1.0 / (1.0 + total_overlap * coef)
-            split_factor = np.maximum(min_factor, split_factor)
-            split[s] = split_factor
-        
-        return split
     
     # ========================================================================
     # 辅助计算
@@ -677,20 +421,14 @@ class TensorSuitabilityCalculator:
         return traits
     
     def _compute_specialization(self, traits: np.ndarray, S: int) -> np.ndarray:
-        """计算物种专化度"""
-        if self._taichi_available and S > 10:
-            import taichi as ti
-            result = np.zeros(S, dtype=np.float32)
-            self._kernels.kernel_compute_specialization(
-                traits.astype(np.float32), result, 5  # 前5个特质
-            )
-            ti.sync()
-            return result
-        else:
-            # NumPy 版本
-            variance = np.var(traits[:, :5], axis=1)
-            specialization = 1.0 - np.exp(-variance / 8.0)
-            return np.clip(specialization, 0.0, 1.0).astype(np.float32)
+        """计算物种专化度 [GPU-only]"""
+        import taichi as ti
+        result = np.zeros(S, dtype=np.float32)
+        self._kernels.kernel_compute_specialization(
+            traits.astype(np.float32), result, 5  # 前5个特质
+        )
+        ti.sync()
+        return result
     
     def _compute_niche_similarity(
         self, 
@@ -741,26 +479,13 @@ class TensorSuitabilityCalculator:
             0.10,  # 食性权重
         ], dtype=np.float32)
         
-        # 计算相似度矩阵
-        if self._taichi_available and S > 20:
-            import taichi as ti
-            similarity = np.zeros((S, S), dtype=np.float32)
-            self._kernels.kernel_compute_niche_similarity(
-                features, similarity, weights
-            )
-            ti.sync()
-        else:
-            # NumPy 版本
-            similarity = np.zeros((S, S), dtype=np.float32)
-            for i in range(S):
-                for j in range(S):
-                    if i == j:
-                        similarity[i, j] = 1.0
-                    else:
-                        diff = features[i] - features[j]
-                        weighted_sq_dist = np.sum(weights * diff * diff)
-                        distance = np.sqrt(weighted_sq_dist)
-                        similarity[i, j] = np.exp(-distance * distance / 0.5)
+        # 计算相似度矩阵 [GPU-only]
+        import taichi as ti
+        similarity = np.zeros((S, S), dtype=np.float32)
+        self._kernels.kernel_compute_niche_similarity(
+            features, similarity, weights
+        )
+        ti.sync()
         
         # 缓存
         self._niche_similarity_cache = similarity
@@ -774,34 +499,21 @@ class TensorSuitabilityCalculator:
         historical_presence: np.ndarray,
         cfg: dict,
     ) -> np.ndarray:
-        """应用历史适应惩罚"""
+        """应用历史适应惩罚 [GPU-only]"""
+        import taichi as ti
         novelty_penalty = cfg.get("novelty_penalty", 0.8)
         adaptation_bonus = cfg.get("adaptation_bonus", 1.1)
         
-        if self._taichi_available:
-            import taichi as ti
-            result = np.zeros_like(suitability)
-            self._kernels.kernel_historical_adaptation_penalty(
-                suitability.astype(np.float32),
-                historical_presence.astype(np.float32),
-                result,
-                float(novelty_penalty),
-                float(adaptation_bonus),
-            )
-            ti.sync()
-            return result
-        else:
-            # NumPy 版本
-            adjustment = np.where(
-                historical_presence < 0.1,
-                novelty_penalty,
-                np.where(
-                    historical_presence > 0.8,
-                    adaptation_bonus,
-                    novelty_penalty + (adaptation_bonus - novelty_penalty) * historical_presence
-                )
-            )
-            return np.clip(suitability * adjustment, 0.0, 1.0).astype(np.float32)
+        result = np.zeros_like(suitability)
+        self._kernels.kernel_historical_adaptation_penalty(
+            suitability.astype(np.float32),
+            historical_presence.astype(np.float32),
+            result,
+            float(novelty_penalty),
+            float(adaptation_bonus),
+        )
+        ti.sync()
+        return result
     
     def _get_config(self) -> dict:
         """获取配置参数

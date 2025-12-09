@@ -76,6 +76,9 @@ modes:
       - name: tensor_ecology
         enabled: true
         order: 51
+      - name: speciation_data_transfer
+        enabled: true
+        order: 86
       - name: population_update
         enabled: true
         order: 90
@@ -146,6 +149,9 @@ modes:
       - name: tensor_ecology
         enabled: true
         order: 51
+      - name: speciation_data_transfer
+        enabled: true
+        order: 86
       - name: population_update
         enabled: true
         order: 90
