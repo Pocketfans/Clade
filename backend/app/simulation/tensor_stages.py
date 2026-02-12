@@ -221,6 +221,7 @@ class TensorStateInitStage(BaseStage):
             
             # 【v3.2 修复】优先从数据库加载地块级别种群分布
             loaded_from_db = False
+            species_tiles_used = set()
             if tile_coords:
                 try:
                     # 从数据库读取该物种的栖息地分布
@@ -243,8 +244,10 @@ class TensorStateInitStage(BaseStage):
                             if abs(loaded_total - total_pop) > 1:
                                 pop[idx] *= total_pop / loaded_total
                             loaded_from_db = True
-                            logger.info(
-                                f"[张量状态构建] {sp.lineage_code}: 从DB加载 {len(habitat_pops)} 个栖息地"
+                            logger.debug(
+                                f"[张量状态构建] {sp.lineage_code}: "
+                                f"从DB加载 {len(habitat_pops)} 个栖息地, "
+                                f"映射到 {len(species_tiles_used)} 个地块"
                             )
                 except Exception as e:
                     logger.warning(f"[张量状态构建] 从DB加载栖息地失败: {e}")
@@ -482,6 +485,15 @@ class TensorEcologyStage(BaseStage):
             decline_streaks=decline_streaks,
             turn_years=turn_years,  # 【v3.0】传递回合年数用于世代缩放
         )
+        
+        # 【新增诊断】比较计算前后的地块数
+        tiles_before = int((pop > 0).any(axis=0).sum())
+        tiles_after = int((result.pop > 0).any(axis=0).sum())
+        logger.info(
+            f"[统一张量生态] 地块变化: {tiles_before} -> {tiles_after} "
+            f"(+{tiles_after - tiles_before})"
+        )
+
         logger.info(
             f"[统一张量生态] 后端={result.metrics.backend}, "
             f"耗时={result.metrics.total_time_ms:.1f}ms"
