@@ -2035,8 +2035,6 @@ def _precompile_all_kernels():
         logger.warning(f"[Taichi] 内核预编译失败（将在首次使用时编译）: {e}")
 
 
-# 在模块加载时预编译
-_precompile_all_kernels()
 
 
 # ============================================================================
@@ -3385,4 +3383,5 @@ def kernel_trait_mortality_v2(
         
         result[s, i, j] = ti.max(0.02, ti.min(0.95, total_mortality))
 
-
+# 在模块加载时预编译
+_precompile_all_kernels()

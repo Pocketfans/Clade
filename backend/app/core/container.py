@@ -112,7 +112,7 @@ class ServiceContainer(
             else:
                 # 【新增】如果是首次启动（数据库为空或无进度），自动执行一次重置/初始化流程
                 # 检查是否没有任何物种存在，作为判断“全新开局”的依据
-                species_count = self.species_repository.count()
+                species_count = self.species_repository.count_species()
                 if species_count == 0 and (not map_state or map_state.turn_index == 0):
                     logger.info("[容器] 检测到全新数据库，执行自动初始化流程...")
                     self._perform_initial_reset()

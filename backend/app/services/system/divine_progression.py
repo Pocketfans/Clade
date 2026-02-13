@@ -1020,12 +1020,12 @@ class DivineProgressionService:
             return False, "正在蓄力另一个神迹，无法同时执行", {}
         
         # 检查能量（通过外部能量服务）
-        from .divine_energy import divine_energy_service
-        if divine_energy_service.get_state().current < miracle.cost:
-            return False, f"神力不足（需要{miracle.cost}，当前{divine_energy_service.get_state().current}）", {}
+        from .divine_energy import energy_service
+        if energy_service.get_state().current < miracle.cost:
+            return False, f"神力不足（需要{miracle.cost}，当前{energy_service.get_state().current}）", {}
         
         # 消耗能量
-        divine_energy_service.consume(miracle.cost, f"执行神迹「{miracle.name}」")
+        energy_service.spend(miracle.cost, f"执行神迹「{miracle.name}」")
         
         # 设置冷却
         self._state.miracle_state.cooldowns[miracle_id] = miracle.cooldown

@@ -470,6 +470,13 @@ class TensorEcologyEngine:
             cfg.base_diffusion_rate * mean_diffusion_scale
         )
         
+        logger.debug(
+            f"turn={turn_index}, "
+            f"pop_nonzero_tiles={(pop > 0).any(axis=0).sum()}, "
+            f"dispersal_iterations={dispersal_iterations}, "
+            f"diffusion_rate={adjusted_diffusion_rate:.4f}"
+        )
+        
         pop_after_dispersal = pop_after_death.copy()
         for disp_iter in range(dispersal_iterations):
             if use_trait_system:
@@ -488,6 +495,10 @@ class TensorEcologyEngine:
         
         metrics.dispersal_time_ms = (time.perf_counter() - t0) * 1000
         
+        logger.info(
+            f"扩散后地块数: {((pop_after_dispersal > 0).any(axis=0).sum())}, "
+        )
+
         # === 阶段4：迁徙计算 ===
         t0 = time.perf_counter()
         # 提取每个物种的平均死亡率作为迁徙压力信号 - 向量化
@@ -507,6 +518,8 @@ class TensorEcologyEngine:
         )
         metrics.migration_time_ms = (time.perf_counter() - t0) * 1000
         metrics.migrating_species = len(migrated)
+
+        logger.info(f"迁徙后地块数: {((pop_after_migration > 0).any(axis=0).sum())}, 迁徙物种数: {len(migrated)}")
         
         # === 阶段5：繁殖计算 ===
         # 【v3.1】使用缓冲后的 birth_scale + 压力-繁殖反相扣 + 容量归一
@@ -544,11 +557,39 @@ class TensorEcologyEngine:
         # 【v3.1 缓冲6】防止单步爆炸或瞬灭
         # 对每个格子的净变化设置 [-max_decline, +max_growth] 比例上限
         net_change = final_pop - pop
-        max_growth = pop * cfg.max_net_growth_ratio
-        max_decline = pop * cfg.max_net_decline_ratio
+        
+        # 【关键修复】对于已有种群的地块，使用比例钳制
+        # 对于新地块（原种群为0），使用绝对值钳制
+        has_pop_mask = pop > 0
+        
+        # 已有种群的地块：按比例钳制
+        max_growth_existing = pop * cfg.max_net_growth_ratio
+        max_decline_existing = pop * cfg.max_net_decline_ratio
+        
+        # 新地块（原种群为0）：允许合理的初始种群
+        # 使用邻居平均值或全局平均值作为参考
+        pop_per_species = pop.sum(axis=(1, 2), keepdims=True) / np.maximum((pop > 0).sum(axis=(1, 2), keepdims=True), 1)
+        # 新地块的最大增长 = 该物种平均每地块种群的 max_net_growth_ratio
+        # 这允许扩散/迁徙建立新据点，但不会爆炸
+        max_growth_new = pop_per_species * cfg.max_net_growth_ratio * np.ones_like(pop)
+        # 新地块没有种群，所以 decline 为 0
+        max_decline_new = np.zeros_like(pop)
+        
+        # 合并：已有种群用比例钳制，新地块用绝对值钳制
+        max_growth = np.where(has_pop_mask, max_growth_existing, max_growth_new)
+        max_decline = np.where(has_pop_mask, max_decline_existing, max_decline_new)
+        
         
         # 钳制净变化
         clamped_change = np.clip(net_change, -max_decline, max_growth)
+        logger.debug(
+            f"[TensorEcology] 净变化钳制前: 增长={net_change[net_change > 0].sum():.1f}, "
+            f"减少={-net_change[net_change < 0].sum():.1f}, "
+            f"有变化地块={(net_change != 0).any(axis=0).sum()}, "
+            f"钳制后: 增长={clamped_change[clamped_change > 0].sum():.1f}, "
+            f"减少={-clamped_change[clamped_change < 0].sum():.1f}, "
+            f"有变化地块={(clamped_change != 0).any(axis=0).sum()}"
+        )
         
         # 应用钳制后的变化
         final_pop = np.maximum(0.0, pop + clamped_change)
@@ -569,7 +610,9 @@ class TensorEcologyEngine:
             f"[TensorEcology] 完成: {S}物种, {H}x{W}地图, "
             f"耗时={metrics.total_time_ms:.1f}ms, 后端={metrics.backend}, "
             f"平均死亡率={metrics.avg_mortality_rate:.1%}, "
-            f"特质系统={'启用' if use_trait_system else '禁用'}"
+            f"特质系统={'启用' if use_trait_system else '禁用'}, "
+            f"最终地块数: {((final_pop > 0).any(axis=0).sum())}, "
+            f"总人口: {final_pop.sum():.1f}"
         )
         
         return EcologyResult(
@@ -1496,7 +1539,7 @@ def extract_species_params(
     """
     S = len(species_map)
     params = np.zeros((S, 8), dtype=np.float32)
-    
+    logger.info(f"提取物种参数矩阵，物种数量：{len(species_list)}，张量化物种数量：{S}")
     for species in species_list:
         lineage = species.lineage_code
         if lineage not in species_map:

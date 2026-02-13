@@ -672,19 +672,14 @@ class FetchSpeciesStage(BaseStage):
         logger.info("获取物种列表...")
         ctx.emit_event("stage", "🧬 获取物种列表", "物种")
         
-        # 【优化】优先使用缓存，回合0或缓存为空时从DB加载
+        # 【关键修复】始终从数据库加载最新物种列表
+        # 原因：分化发生在回合末尾（SpeciationStage），新物种保存到数据库后
+        # 下一回合开始时必须从数据库重新加载，否则 species_batch 不包含新物种
         t0 = time.perf_counter()
         species_cache = get_species_cache()
-        
-        if ctx.turn_index == 0 or species_cache.size == 0:
-            # 首回合或缓存为空，从数据库加载
-            ctx.all_species = species_repository.list_species()
-            species_cache.update(ctx.all_species, ctx.turn_index)
-            timings["db_fetch"] = time.perf_counter() - t0
-        else:
-            # 使用缓存（后续回合的新增/修改会在 upsert 时更新缓存）
-            ctx.all_species = species_cache.get_all()
-            timings["cache_read"] = time.perf_counter() - t0
+        ctx.all_species = species_repository.list_species()
+        species_cache.update(ctx.all_species, ctx.turn_index)
+        timings["db_fetch"] = time.perf_counter() - t0
         
         ctx.species_batch = [sp for sp in ctx.all_species if sp.status == "alive"]
         ctx.extinct_codes = {sp.lineage_code for sp in ctx.all_species if sp.status == "extinct"}

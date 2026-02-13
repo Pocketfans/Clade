@@ -132,6 +132,8 @@ class TensorStateInitStage(BaseStage):
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
         import numpy as np
+        from ..repositories.environment_repository import environment_repository
+
         species_batch = getattr(ctx, "species_batch", []) or []
         if not species_batch:
             logger.warning("[张量状态构建] 无物种，跳过")
@@ -158,6 +160,10 @@ class TensorStateInitStage(BaseStage):
         # 构建环境张量 (7, H, W): [temp, humidity, altitude, resource, land, sea, coast]
         env = np.zeros((7, H, W), dtype=np.float32)
         tile_id_grid = np.full((H, W), -1, dtype=np.int32)
+
+        # 构建 tile_id -> (y, x) 映射
+        tile_coords = {}
+
         if all_tiles:
             def _classify_biome(biome: str) -> tuple[float, float, float]:
                 b = (biome or "land").lower()
@@ -191,6 +197,7 @@ class TensorStateInitStage(BaseStage):
                     env[4, r, c] = land_flag
                     env[5, r, c] = sea_flag
                     env[6, r, c] = coast_flag
+                    tile_coords[tile.id] = (r, c)
         else:
             # 默认环境：温带陆地
             env[0, :, :] = 0.4  # 温度
@@ -202,14 +209,49 @@ class TensorStateInitStage(BaseStage):
         pop = np.zeros((S, H, W), dtype=np.float32)
         species_map = {}
         
-        # 构建 tile_id -> (y, x) 映射
-        tile_coords = {tile.id: (tile.y, tile.x) for tile in all_tiles} if all_tiles else {}
-        
         for idx, sp in enumerate(species_batch):
             species_map[sp.lineage_code] = idx
             # 分配种群到地图（从 morphology_stats 获取）
             total_pop = sp.morphology_stats.get("population", 0)
-            if total_pop > 0:
+            if total_pop <= 0:
+                logger.warning(f"[张量状态构建] {sp.lineage_code}: 总种群为0，跳过分布")
+                continue
+            
+            # 【v3.2 修复】优先从数据库加载地块级别种群分布
+            loaded_from_db = False
+            species_tiles_used = set()
+            if tile_coords:
+                try:
+                    # 从数据库读取该物种的栖息地分布
+                    habitat_pops = environment_repository.get_habitats_by_species_id(
+                        species_id=sp.id,
+                        latest_only=True
+                    )
+                    
+                    if habitat_pops:
+                        for hab in habitat_pops:
+                            if hab.tile_id in tile_coords:
+                                r, c = tile_coords[hab.tile_id]
+                                if 0 <= r < H and 0 <= c < W:
+                                    pop[idx, r, c] = float(hab.population)
+                        
+                        # 验证总数是否匹配
+                        loaded_total = pop[idx].sum()
+                        if loaded_total > 0:
+                            # 按比例调整到当前总种群
+                            if abs(loaded_total - total_pop) > 1:
+                                pop[idx] *= total_pop / loaded_total
+                            loaded_from_db = True
+                            logger.debug(
+                                f"[张量状态构建] {sp.lineage_code}: "
+                                f"从DB加载 {len(habitat_pops)} 个栖息地, "
+                                f"映射到 {len(species_tiles_used)} 个地块"
+                            )
+                except Exception as e:
+                    logger.warning(f"[张量状态构建] 从DB加载栖息地失败: {e}")
+            # 【回退】如果数据库没有数据，从 habitats 属性加载
+            if not loaded_from_db:
+                logger.info(f"[张量状态构建] {sp.lineage_code}: 从 habitats 属性分布种群")
                 # 获取物种栖息地分布
                 habitats = getattr(sp, 'habitats', []) or []
                 if habitats and tile_coords:
@@ -221,7 +263,9 @@ class TensorStateInitStage(BaseStage):
                             r, c = tile_coords[tile_id]
                             if 0 <= r < H and 0 <= c < W:
                                 pop[idx, r, c] += pop_per_habitat
+                    loaded_from_db = pop[idx].sum() > 0
                 else:
+                    logger.warning(f"[张量状态构建] {sp.lineage_code}: 无 habitats 信息，使用默认分布")
                     # 【v2.1修复】没有栖息地信息时，只分布到有限的起始地块
                     # 参考 config.py: terrestrial_top_k = 4, marine_top_k = 3
                     # 不再均匀分布到所有陆地，而是选择少量高资源地块
@@ -272,8 +316,11 @@ class TensorStateInitStage(BaseStage):
         
         ctx.tensor_state = tensor_state
         total_pop = pop.sum()
-        logger.info(f"[张量状态构建] 已构建张量状态：物种数={S}, 维度={H}x{W}, 总种群={total_pop:.0f}")
-
+        nonzero_tiles = (pop > 0).any(axis=0).sum()
+        logger.info(
+            f"[张量状态构建] 已构建张量状态：物种数={S}, 维度={H}x{W}, "
+            f"总种群={total_pop:.0f}, 有物种地块={nonzero_tiles}"
+        )
 
 # ============================================================================
 # 统一张量生态计算阶段
@@ -436,6 +483,15 @@ class TensorEcologyStage(BaseStage):
             decline_streaks=decline_streaks,
             turn_years=turn_years,  # 【v3.0】传递回合年数用于世代缩放
         )
+        
+        # 【新增诊断】比较计算前后的地块数
+        tiles_before = int((pop > 0).any(axis=0).sum())
+        tiles_after = int((result.pop > 0).any(axis=0).sum())
+        logger.info(
+            f"[统一张量生态] 地块变化: {tiles_before} -> {tiles_after} "
+            f"(+{tiles_after - tiles_before})"
+        )
+
         logger.info(
             f"[统一张量生态] 后端={result.metrics.backend}, "
             f"耗时={result.metrics.total_time_ms:.1f}ms"
