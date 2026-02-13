@@ -163,7 +163,6 @@ class TensorStateInitStage(BaseStage):
 
         # 构建 tile_id -> (y, x) 映射
         tile_coords = {}
-        coord_to_tile_id = {}
 
         if all_tiles:
             def _classify_biome(biome: str) -> tuple[float, float, float]:
@@ -199,7 +198,6 @@ class TensorStateInitStage(BaseStage):
                     env[5, r, c] = sea_flag
                     env[6, r, c] = coast_flag
                     tile_coords[tile.id] = (r, c)
-                    coord_to_tile_id[(r, c)] = tile.id
         else:
             # 默认环境：温带陆地
             env[0, :, :] = 0.4  # 温度
@@ -312,7 +310,7 @@ class TensorStateInitStage(BaseStage):
             env=env,
             pop=pop,
             species_params=species_params,
-            masks={"tile_ids": tile_id_grid, "coord_to_tile_id": coord_to_tile_id},
+            masks={"tile_ids": tile_id_grid},
             species_map=species_map,
         )
         

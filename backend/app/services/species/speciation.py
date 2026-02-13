@@ -1284,6 +1284,7 @@ class SpeciationService:
                         "average_pressure": average_pressure,  # 【修复】添加压力信息用于fallback
                     },
                     "payload": ai_payload,
+                    "request_turn": turn_index,  # 【关键】用于验证请求是否过期
                 })
         
         if not entries and not self._deferred_requests:
@@ -1406,6 +1407,15 @@ class SpeciationService:
         logger.info(f"[分化] 开始处理 {len(results)} 个AI结果 + {len(background_results)} 个规则结果")
         new_species_events: list[BranchingEvent] = []
         for res, entry in zip(results, active_batch):
+            # 【关键修复】验证请求是否属于当前回合
+            request_turn = entry.get("request_turn", -1)
+            if request_turn != turn_index:
+                logger.warning(
+                    f"[分化跳过-过期] {entry.get('ctx', {}).get('new_code', '?')}: "
+                    f"请求来自回合 {request_turn}，当前回合 {turn_index}，丢弃"
+                )
+                continue
+
             ctx = entry["ctx"]  # 从entry中提取ctx
             
             # 【优化】检查是否需要使用规则fallback
@@ -2627,8 +2637,16 @@ class SpeciationService:
         codes = []
         
         for i in range(num_offspring):
-            letter = letters[i]
-            new_code = f"{parent_code}{letter}"
+            if i < len(letters):
+                letter = letters[i]
+                new_code = f"{parent_code}{letter}"
+            else:
+                # 超过26个子代，添加重复标记
+                repeat_idx = i // len(letters) - 1
+                letter_idx = i % len(letters)
+                letter = letters[letter_idx]
+                repeat = '#' * repeat_idx
+                new_code = f"{parent_code}{repeat}{letter}"
             
             # 如果编码已存在，添加数字后缀
             if new_code in existing_codes:

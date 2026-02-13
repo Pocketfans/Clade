@@ -1539,7 +1539,7 @@ def extract_species_params(
     """
     S = len(species_map)
     params = np.zeros((S, 8), dtype=np.float32)
-    
+    logger.info(f"提取物种参数矩阵，物种数量：{len(species_list)}，张量化物种数量：{S}")
     for species in species_list:
         lineage = species.lineage_code
         if lineage not in species_map:
