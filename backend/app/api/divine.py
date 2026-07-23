@@ -55,19 +55,22 @@ def calculate_energy_cost(request: dict) -> dict:
     from ..services.system.divine_energy import energy_service
     
     action = request.get("action", "")
+    parameters = {key: value for key, value in request.items() if key != "action"}
     
-    if action == "pressure" and "pressures" in request:
-        cost = energy_service.get_pressure_cost(request["pressures"])
+    if action == "pressure" and "pressures" in parameters:
+        cost = energy_service.get_pressure_cost(parameters["pressures"])
+        state = energy_service.get_state()
+        can_afford = not energy_service.enabled or state.current >= cost
     else:
-        cost = energy_service.get_cost(action, **request)
-    
-    can_afford, _ = energy_service.can_afford(action, **request)
+        cost = energy_service.get_cost(action, **parameters)
+        can_afford, _ = energy_service.can_afford(action, **parameters)
+        state = energy_service.get_state()
     
     return {
         "action": action,
         "cost": cost,
         "can_afford": can_afford,
-        "current_energy": energy_service.get_state().current,
+        "current_energy": state.current,
     }
 
 
@@ -112,55 +115,65 @@ def get_achievements() -> dict:
 def get_unlocked_achievements() -> dict:
     """获取已解锁的成就"""
     from ..services.analytics.achievements import achievement_service
-    return {"unlocked": achievement_service.get_unlocked()}
+    return {
+        "achievements": achievement_service.get_unlocked_achievements(),
+    }
 
 
 @router.get("/achievements/pending", tags=["achievements"])
 def get_pending_achievement_unlocks() -> dict:
     """获取待通知的成就解锁事件（获取后清空）"""
     from ..services.analytics.achievements import achievement_service
-    
-    pending = achievement_service.get_pending_unlocks()
-    achievements = []
-    for ach_id in pending:
-        ach = achievement_service.get_achievement(ach_id)
-        if ach:
-            achievements.append({
-                "id": ach_id,
-                "name": ach.get("name", ""),
-                "description": ach.get("description", ""),
-                "icon": ach.get("icon", "🏆"),
-            })
-    
-    return {"pending": achievements}
+
+    events = achievement_service.get_pending_unlocks()
+    return {
+        "events": [
+            {
+                "achievement": {
+                    "id": event.achievement.id,
+                    "name": event.achievement.name,
+                    "description": event.achievement.description,
+                    "icon": event.achievement.icon,
+                    "rarity": event.achievement.rarity.value,
+                    "category": event.achievement.category.value,
+                },
+                "turn_index": event.turn_index,
+                "timestamp": event.timestamp,
+            }
+            for event in events
+        ]
+    }
 
 
 @router.post("/achievements/exploration/{feature}", tags=["achievements"])
-def record_exploration(feature: str) -> dict:
+def record_exploration(
+    feature: str,
+    container: 'ServiceContainer' = Depends(get_container),
+) -> dict:
     """记录玩家探索功能（用于解锁探索者成就）"""
     from ..services.analytics.achievements import achievement_service
-    
-    # 有效的功能列表
-    valid_features = {
-        "lineage_tree", "food_web", "species_detail",
-        "pressure_config", "save_load", "achievements",
-        "ecosystem_health", "migration", "hybridization",
-    }
-    
-    if feature not in valid_features:
-        return {"success": False, "error": "Invalid feature"}
-    
-    achievement_service.record_exploration(feature)
-    return {"success": True, "feature": feature}
+
+    current_turn = container.simulation_engine.turn_counter
+    event = achievement_service.record_exploration(feature, current_turn)
+    if event:
+        return {
+            "success": True,
+            "unlocked": {
+                "id": event.achievement.id,
+                "name": event.achievement.name,
+                "icon": event.achievement.icon,
+            },
+        }
+    return {"success": True, "unlocked": None}
 
 
 @router.post("/achievements/reset", tags=["achievements"])
 def reset_achievements() -> dict:
     """重置所有成就进度（新存档时调用）"""
     from ..services.analytics.achievements import achievement_service
-    
+
     achievement_service.reset()
-    return {"success": True}
+    return {"success": True, "message": "成就进度已重置"}
 
 
 # ========== 提示系统 ==========
@@ -171,14 +184,51 @@ def get_game_hints(
 ) -> dict:
     """获取当前游戏状态的智能提示"""
     from ..services.analytics.game_hints import game_hints_service
+    from ..schemas.responses import TurnReport
     
     species_repo = container.species_repository
-    all_species = species_repo.list_species()
-    current_turn = container.simulation_engine.turn_counter
-    
-    # 调用 generate_hints 并转换为 dict
-    hints = game_hints_service.generate_hints(all_species, current_turn)
-    return {"hints": [h.to_dict() for h in hints]}
+    history_repo = container.history_repository
+
+    try:
+        all_species = species_repo.list_species()
+        current_turn = container.simulation_engine.turn_counter
+    except Exception as exc:
+        logger.error("[提示API] 获取物种/回合失败: %s", exc)
+        return {"hints": [], "turn": 0}
+
+    def _safe_parse_turn_report(record_data) -> TurnReport | None:
+        if not record_data:
+            return None
+        try:
+            if isinstance(record_data, str):
+                import json
+                record_data = json.loads(record_data)
+            return TurnReport.model_validate(record_data)
+        except Exception as exc:
+            logger.warning("[Hints] 解析回合报告失败，忽略该记录: %s", exc)
+            return None
+
+    logs = history_repo.list_turns(limit=2)
+    recent_report = _safe_parse_turn_report(logs[0].record_data) if logs else None
+    previous_report = (
+        _safe_parse_turn_report(logs[1].record_data) if len(logs) > 1 else None
+    )
+
+    try:
+        hints = game_hints_service.generate_hints(
+            all_species=all_species,
+            current_turn=current_turn,
+            recent_report=recent_report,
+            previous_report=previous_report,
+        )
+        return {"hints": [hint.to_dict() for hint in hints], "turn": current_turn}
+    except Exception as exc:
+        logger.error("[提示API] 生成提示失败: %s", exc, exc_info=True)
+        return {
+            "hints": [],
+            "turn": current_turn,
+            "error": "failed_to_generate_hints",
+        }
 
 
 @router.post("/hints/clear", tags=["hints"])
@@ -187,7 +237,7 @@ def clear_hints_cooldown() -> dict:
     from ..services.analytics.game_hints import game_hints_service
     
     game_hints_service.clear_cooldown()
-    return {"success": True}
+    return {"success": True, "message": "提示冷却已清除"}
 
 
 # ========== 杂交控制 ==========
@@ -899,32 +949,86 @@ def place_wager(
     _: None = Depends(require_not_running),
 ) -> dict:
     """下注预言（模拟运行时禁止）"""
-    from ..services.system.divine_progression import divine_progression_service
+    from ..services.system.divine_progression import (
+        WAGER_TYPES,
+        WagerType,
+        divine_progression_service,
+    )
     from ..services.system.divine_energy import energy_service
-    
-    prediction_type = request.get("type", "")
-    target = request.get("target", "")
-    bet_amount = request.get("amount", 10)
-    
+
+    wager_type_str = request.get("wager_type", request.get("type", ""))
+    target_species = request.get("target_species", request.get("target", ""))
+    bet_amount = request.get("bet_amount", request.get("amount", 0))
+    secondary_species = request.get("secondary_species")
+    predicted_outcome = request.get("predicted_outcome", "")
+
+    try:
+        wager_type = WagerType(wager_type_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"未知的预言类型: {wager_type_str}")
+
+    species_repo = container.species_repository
+    species = species_repo.get_by_lineage(target_species)
+    if not species:
+        raise HTTPException(status_code=404, detail=f"物种 {target_species} 不存在")
+    if species.status != "alive":
+        raise HTTPException(status_code=400, detail=f"物种 {target_species} 已灭绝")
+
+    if wager_type == WagerType.DUEL:
+        if not secondary_species:
+            raise HTTPException(status_code=400, detail="对决预言需要指定第二物种")
+        opponent = species_repo.get_by_lineage(secondary_species)
+        if not opponent:
+            raise HTTPException(status_code=404, detail=f"物种 {secondary_species} 不存在")
+        if opponent.status != "alive":
+            raise HTTPException(status_code=400, detail=f"物种 {secondary_species} 已灭绝")
+
     engine = container.simulation_engine
     current_turn = engine.turn_counter
-    
+
     if energy_service.get_state().current < bet_amount:
         raise HTTPException(status_code=400, detail="能量不足")
-    
-    success, message = divine_progression_service.place_wager(
-        prediction_type, target, bet_amount, current_turn
+
+    morph = species.morphology_stats or {}
+    traits = species.abstract_traits or {}
+    calculated_fitness = (
+        traits.get("适应性", 5) / 10.0
+        + sum(morph.values()) / max(1, len(morph))
+    ) / 2 if morph else 0.5
+    initial_state = {
+        "population": morph.get("population", 10000),
+        "fitness": calculated_fitness,
+        "regions": len(species.regions) if getattr(species, "regions", None) else 1,
+    }
+
+    success, message, wager_id = divine_progression_service.place_wager(
+        wager_type=wager_type,
+        target_species=target_species,
+        bet_amount=bet_amount,
+        current_turn=current_turn,
+        secondary_species=secondary_species,
+        predicted_outcome=predicted_outcome,
+        initial_state=initial_state,
     )
-    
     if not success:
         raise HTTPException(status_code=400, detail=message)
-    
-    energy_service.spend_fixed(bet_amount, current_turn, details=f"预言赌注")
-    
+
+    spent, spend_message = energy_service.spend_fixed(
+        bet_amount,
+        current_turn,
+        details=f"预言下注: {WAGER_TYPES[wager_type].name}",
+    )
+    if not spent:
+        raise HTTPException(status_code=400, detail=spend_message)
+
     return {
         "success": True,
         "message": message,
-        "wager_summary": divine_progression_service.get_wager_summary(),
+        "wager_id": wager_id,
+        "wager_type": WAGER_TYPES[wager_type].name,
+        "potential_return": int(bet_amount * WAGER_TYPES[wager_type].multiplier),
+        "energy_bet": bet_amount,
+        "energy_remaining": energy_service.get_state().current,
     }
 
 
@@ -934,32 +1038,117 @@ def check_wager(
     container: 'ServiceContainer' = Depends(get_container),
 ) -> dict:
     """检查预言结果"""
-    from ..services.system.divine_progression import divine_progression_service
+    from ..services.system.divine_progression import (
+        WAGER_TYPES,
+        WagerType,
+        divine_progression_service,
+    )
     from ..services.system.divine_energy import energy_service
-    
+
     wager_id = request.get("wager_id", "")
+    state = divine_progression_service.get_state()
+    if wager_id not in state.wager_state.active_wagers:
+        raise HTTPException(status_code=404, detail=f"预言 {wager_id} 不存在或已结算")
+
+    wager = state.wager_state.active_wagers[wager_id]
     engine = container.simulation_engine
     current_turn = engine.turn_counter
-    
+
+    if current_turn < wager.end_turn:
+        remaining = wager.end_turn - current_turn
+        return {
+            "status": "in_progress",
+            "message": f"预言进行中，剩余 {remaining} 回合",
+            "wager": wager.to_dict(),
+        }
+
     species_repo = container.species_repository
-    all_species = species_repo.list_species()
-    
-    game_state = {
-        "turn": current_turn,
-        "species": {sp.lineage_code: sp for sp in all_species},
-    }
-    
-    success, message, reward = divine_progression_service.check_wager(
-        wager_id, game_state, current_turn
-    )
-    
+    species = species_repo.get_by_lineage(wager.target_species)
+    success = False
+    reason = ""
+    wager_type = wager.wager_type
+
+    if wager_type == WagerType.EXTINCTION:
+        success = species is None or species.status != "alive"
+        reason = "物种已灭绝" if success else "物种仍存活"
+    elif wager_type == WagerType.DOMINANCE:
+        if species and species.status == "alive":
+            same_niche = [
+                candidate
+                for candidate in species_repo.list_species()
+                if candidate.status == "alive"
+                and candidate.trophic_level == species.trophic_level
+            ]
+
+            def get_population(candidate):
+                return (candidate.morphology_stats or {}).get("population", 0)
+
+            max_population = (
+                max(get_population(candidate) for candidate in same_niche)
+                if same_niche
+                else 0
+            )
+            success = get_population(species) >= max_population
+            reason = "已成为霸主" if success else "未能成为霸主"
+        else:
+            reason = "物种已灭绝"
+    elif wager_type == WagerType.EXPANSION:
+        if species and species.status == "alive":
+            initial_regions = wager.initial_state.get("regions", 1)
+            current_regions = len(species.regions) if species.regions else 1
+            new_regions = current_regions - initial_regions
+            success = new_regions >= 3
+            reason = f"扩展了 {new_regions} 个区域" if success else f"只扩展了 {new_regions} 个区域"
+        else:
+            reason = "物种已灭绝"
+    elif wager_type == WagerType.EVOLUTION:
+        descendants = [
+            candidate
+            for candidate in species_repo.list_species()
+            if candidate.parent_code == wager.target_species
+            and candidate.born_turn
+            and candidate.born_turn > wager.start_turn
+        ]
+        success = len(descendants) > 0
+        reason = f"产生了 {len(descendants)} 个后代" if success else "未产生后代"
+    elif wager_type == WagerType.DUEL:
+        opponent = (
+            species_repo.get_by_lineage(wager.secondary_species)
+            if wager.secondary_species
+            else None
+        )
+        species_alive = bool(species and species.status == "alive")
+        opponent_alive = bool(opponent and opponent.status == "alive")
+
+        def get_population(candidate):
+            return (candidate.morphology_stats or {}).get("population", 0) if candidate else 0
+
+        if species_alive and not opponent_alive:
+            winner = wager.target_species
+        elif opponent_alive and not species_alive:
+            winner = wager.secondary_species
+        elif species_alive and opponent_alive:
+            winner = (
+                wager.target_species
+                if get_population(species) > get_population(opponent)
+                else wager.secondary_species
+            )
+        else:
+            winner = None
+
+        success = winner == wager.predicted_outcome
+        reason = f"胜者: {winner}" if winner else "双方都灭绝"
+
+    reward = divine_progression_service.resolve_wager(wager_id, success)
     if reward > 0:
-        energy_service.add_energy(reward, f"预言成功奖励")
-    
+        energy_service.add_energy(reward, f"预言成功: {WAGER_TYPES[wager_type].name}")
+
     return {
+        "status": "resolved",
         "success": success,
-        "message": message,
+        "reason": reason,
         "reward": reward,
+        "current_energy": energy_service.get_state().current,
         "wager_summary": divine_progression_service.get_wager_summary(),
     }
 

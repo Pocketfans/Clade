@@ -7,6 +7,7 @@ import {
   Lightbulb, RefreshCw, ChevronDown, ChevronUp, X, AlertTriangle, 
   TrendingUp, Zap, Target, Leaf, GitBranch
 } from "lucide-react";
+import { http } from "@/services/api";
 
 interface GameHint {
   type: "warning" | "opportunity" | "evolution" | "competition" | "ecosystem";
@@ -47,8 +48,7 @@ export function GameHintsPanel({ onSelectSpecies, refreshTrigger, onClose }: Pro
   const fetchHints = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await fetch("/api/hints");
-      const data = await response.json();
+      const data = await http.get<{ hints?: GameHint[] }>("/api/hints");
       setHints(data.hints || []);
     } catch (error) {
       console.error("获取提示失败:", error);

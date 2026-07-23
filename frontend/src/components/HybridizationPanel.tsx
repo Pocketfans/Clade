@@ -10,6 +10,7 @@ import {
   ArrowRight, Sparkles, Heart, Shield, ChevronDown, Skull, FlaskConical
 } from "lucide-react";
 import { AnalysisPanel, AnalysisSection, ActionButton, StatCard, EmptyState } from "./common/AnalysisPanel";
+import { fetchSpeciesList, http, isApiError } from "@/services/api";
 
 interface SpeciesInfo {
   lineage_code: string;
@@ -104,12 +105,8 @@ export function HybridizationPanel({ onClose, onSuccess }: Props) {
 
   async function fetchAllSpecies() {
     try {
-      // 正确的API端点是 /api/species/list
-      const response = await fetch("/api/species/list");
-      const data = await response.json();
-      // 支持多种可能的数据结构
-      const speciesList = data.species || data || [];
-      const alive = speciesList.filter((s: AllSpecies) => s.status === "alive");
+      const speciesList = await fetchSpeciesList();
+      const alive = speciesList.filter((s) => s.status === "alive");
       console.log("获取到存活物种:", alive.length, "个");
       setAllSpecies(alive);
     } catch (e) {
@@ -120,8 +117,7 @@ export function HybridizationPanel({ onClose, onSuccess }: Props) {
   async function fetchCandidates() {
     try {
       setLoading(true);
-      const response = await fetch("/api/hybridization/candidates");
-      const data = await response.json();
+      const data = await http.get<{ candidates?: HybridCandidate[] }>("/api/hybridization/candidates");
       setCandidates(data.candidates || []);
     } catch (e) {
       console.error("获取杂交候选失败:", e);
@@ -134,10 +130,9 @@ export function HybridizationPanel({ onClose, onSuccess }: Props) {
   const fetchPreview = useCallback(async (pair: HybridCandidate) => {
     try {
       setPreviewLoading(true);
-      const response = await fetch(
+      const data = await http.get<HybridPreview>(
         `/api/hybridization/preview?species_a=${pair.species_a.lineage_code}&species_b=${pair.species_b.lineage_code}`
       );
-      const data = await response.json();
       setPreview(data);
     } catch (e) {
       console.error("获取预览失败:", e);
@@ -154,6 +149,21 @@ export function HybridizationPanel({ onClose, onSuccess }: Props) {
     }
   }, [selectedPair, fetchPreview]);
 
+  const fetchForcePreview = useCallback(async () => {
+    if (!forceSpeciesA || !forceSpeciesB) return;
+    try {
+      setPreviewLoading(true);
+      const data = await http.get<ForceHybridPreview>(
+        `/api/hybridization/force/preview?species_a=${forceSpeciesA.lineage_code}&species_b=${forceSpeciesB.lineage_code}`
+      );
+      setForcePreview(data);
+    } catch (e) {
+      console.error("获取强行杂交预览失败:", e);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [forceSpeciesA, forceSpeciesB]);
+
   // 强行杂交预览
   useEffect(() => {
     if (mode === "forced" && forceSpeciesA && forceSpeciesB) {
@@ -161,23 +171,7 @@ export function HybridizationPanel({ onClose, onSuccess }: Props) {
     } else {
       setForcePreview(null);
     }
-  }, [mode, forceSpeciesA, forceSpeciesB]);
-
-  async function fetchForcePreview() {
-    if (!forceSpeciesA || !forceSpeciesB) return;
-    try {
-      setPreviewLoading(true);
-      const response = await fetch(
-        `/api/hybridization/force/preview?species_a=${forceSpeciesA.lineage_code}&species_b=${forceSpeciesB.lineage_code}`
-      );
-      const data = await response.json();
-      setForcePreview(data);
-    } catch (e) {
-      console.error("获取强行杂交预览失败:", e);
-    } finally {
-      setPreviewLoading(false);
-    }
-  }
+  }, [mode, forceSpeciesA, forceSpeciesB, fetchForcePreview]);
 
   async function executeForceHybridization() {
     if (!forceSpeciesA || !forceSpeciesB) return;
@@ -187,20 +181,13 @@ export function HybridizationPanel({ onClose, onSuccess }: Props) {
       setError(null);
       setSuccess(null);
       
-      const response = await fetch("/api/hybridization/force/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          species_a: forceSpeciesA.lineage_code,
-          species_b: forceSpeciesB.lineage_code,
-        }),
+      const data = await http.post<{
+        chimera: { common_name: string };
+        energy_spent: number;
+      }>("/api/hybridization/force/execute", {
+        species_a: forceSpeciesA.lineage_code,
+        species_b: forceSpeciesB.lineage_code,
       });
-      
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.detail || "强行杂交失败");
-      }
       
       setSuccess(`🧬 成功创造嵌合体：${data.chimera.common_name}！消耗 ${data.energy_spent} 能量`);
       setForceSpeciesA(null);
@@ -209,7 +196,13 @@ export function HybridizationPanel({ onClose, onSuccess }: Props) {
       onSuccess?.();
       
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "强行杂交失败");
+      const message =
+        isApiError(e) && e.detail
+          ? e.detail
+          : e instanceof Error
+            ? e.message
+            : "强行杂交失败";
+      setError(message);
     } finally {
       setExecuting(false);
     }
@@ -223,20 +216,13 @@ export function HybridizationPanel({ onClose, onSuccess }: Props) {
       setError(null);
       setSuccess(null);
       
-      const response = await fetch("/api/hybridization/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          species_a: selectedPair.species_a.lineage_code,
-          species_b: selectedPair.species_b.lineage_code,
-        }),
+      const data = await http.post<{
+        hybrid: { common_name: string };
+        energy_spent: number;
+      }>("/api/hybridization/execute", {
+        species_a: selectedPair.species_a.lineage_code,
+        species_b: selectedPair.species_b.lineage_code,
       });
-      
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.detail || "杂交失败");
-      }
       
       setSuccess(`成功创建杂交种：${data.hybrid.common_name}！消耗 ${data.energy_spent} 能量`);
       setSelectedPair(null);
@@ -244,7 +230,13 @@ export function HybridizationPanel({ onClose, onSuccess }: Props) {
       onSuccess?.();
       
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "杂交失败");
+      const message =
+        isApiError(e) && e.detail
+          ? e.detail
+          : e instanceof Error
+            ? e.message
+            : "杂交失败";
+      setError(message);
     } finally {
       setExecuting(false);
     }

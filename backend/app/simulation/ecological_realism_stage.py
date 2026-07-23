@@ -69,6 +69,8 @@ class EcologicalRealismStage(BaseStage):
     在每回合的死亡率计算之前执行，计算各种生态学修正因子。
     """
     
+    uses_internal_request_budget = True
+
     def __init__(self):
         # 在 tiering_and_niche (StageOrder.TIERING_AND_NICHE=180) 之后
         # 在 preliminary_mortality (StageOrder.PRELIMINARY_MORTALITY=200) 之前

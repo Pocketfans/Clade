@@ -1767,6 +1767,7 @@ class UIConfig(BaseModel):
     default_provider_id: str | None = None
     default_model: str | None = None
     ai_concurrency_limit: int = 15  # AI 并发限制
+    allow_local_ai_endpoints: bool = False
     
     # 3. 功能路由表 (Routing Table)
     # Key: capability_name (e.g., "turn_report", "speciation")

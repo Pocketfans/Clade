@@ -128,6 +128,18 @@ cd Clade
 - ✅ 启动后端和前端服务
 - ✅ 打开浏览器
 
+#### 管理员令牌（执行重置时需要）
+
+需要在“开发者工具”中重置数据库时，请在 PowerShell 中先设置本次启动使用的管理员令牌：
+管理员令牌只使用英文字母、数字和常见符号；不要输入换行，也不要在开头或结尾留空格。
+
+```powershell
+$env:CLADE_ADMIN_TOKEN = Read-Host "请输入本次启动使用的管理员令牌"
+.\start.ps1
+```
+
+打开“开发者工具”后，输入与启动时相同的值。服务端未设置该变量时，写操作会被禁用并返回 503。`start.ps1` 不会打印令牌，也不会把令牌写入前端构建包。
+
 <details>
 <summary>📖 一键脚本不工作？点击查看手动启动方法</summary>
 
@@ -152,7 +164,7 @@ python -m venv venv
 pip install -e ".[dev]"
 
 # 启动后端服务
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8022
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8022
 ```
 
 **第二步：启动前端**
@@ -170,8 +182,22 @@ cd frontend
 npm install
 
 # 启动前端服务
-npm run dev
+npm run dev -- --host 127.0.0.1
 ```
+
+以上手动命令固定为本机访问。只有确实需要局域网访问时，请先停止手动启动的
+前后端，再回到项目根目录，通过带安全检查的启动脚本显式开启：
+
+```powershell
+$env:ALLOW_LAN_ACCESS = "true"
+$env:BACKEND_HOST = "0.0.0.0"
+$env:FRONTEND_HOST = "0.0.0.0"
+.\start.ps1
+```
+
+不要只给手动命令添加 `--host 0.0.0.0`；这会绕过统一启动检查。局域网模式会
+暴露本地 API，请仅在可信网络中使用。使用完毕后关闭当前 PowerShell 窗口，或
+移除上述三个环境变量，再重新启动即可恢复默认的本机访问。
 
 **第三步：访问游戏**
 

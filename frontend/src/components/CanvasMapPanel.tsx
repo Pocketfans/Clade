@@ -491,6 +491,8 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
 
   // Initialize Pixi App and Create Sprites (合并为一个 useEffect)
   useEffect(() => {
+    const tileSprites = tileSpritesRef.current;
+    const habitatIndicators = habitatIndicatorsRef.current;
     console.log('[CanvasMapPanel] 主 useEffect 触发', {
       hasContainer: !!containerRef.current,
       hasApp: !!appRef.current,
@@ -618,8 +620,8 @@ export const CanvasMapPanel = forwardRef<CanvasMapPanelHandle, Props>(function C
         selectionLayerRef.current = null;
         hoverGraphicsRef.current = null;
         selectGraphicsRef.current = null;
-        tileSpritesRef.current.clear();
-        habitatIndicatorsRef.current.clear();
+        tileSprites.clear();
+        habitatIndicators.clear();
       }
     };
   }, [layout, map, createSprites]); // 依赖 layout, map 和 createSprites

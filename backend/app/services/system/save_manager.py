@@ -5,21 +5,27 @@ import json
 import logging
 import shutil
 import time
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from ...models.environment import MapState, MapTile, HabitatPopulation
+from ...models.genus import Genus
+from ...models.history import TurnLog
 from ...models.species import Species
+from ...repositories.environment_repository import environment_repository
+from ...repositories.genus_repository import GenusRepository
+from ...repositories.history_repository import HistoryRepository
+from ...repositories.species_repository import species_repository
+from ...security.save_paths import (
+    SavePathBoundaryError,
+    resolve_save_directory,
+    validate_save_name,
+)
+from .species_cache import get_species_cache
 
 logger = logging.getLogger(__name__)
-from ...models.environment import MapState, MapTile, HabitatPopulation
-from ...models.history import TurnLog
-from ...models.genus import Genus
-from ...repositories.species_repository import species_repository
-from ...repositories.environment_repository import environment_repository
-from ...repositories.history_repository import history_repository
-from ...repositories.genus_repository import genus_repository
-from .species_cache import get_species_cache
 
 if TYPE_CHECKING:
     from .embedding import EmbeddingService
@@ -53,13 +59,25 @@ class SaveManager:
         saves_dir: str | Path,
         embedding_service: 'EmbeddingService | None' = None,
         energy_service: 'DivineEnergyService | None' = None,
-        progression_service: 'DivineProgressionService | None' = None
+        progression_service: 'DivineProgressionService | None' = None,
+        history_repository: HistoryRepository | None = None,
+        genus_repository: GenusRepository | None = None,
     ) -> None:
-        self.saves_dir = Path(saves_dir)
+        self.saves_dir = Path(saves_dir).resolve()
         self.saves_dir.mkdir(parents=True, exist_ok=True)
         self._embedding_service = embedding_service
         self._energy_service = energy_service
         self._progression_service = progression_service
+        self._history_repository = (
+            history_repository
+            if history_repository is not None
+            else HistoryRepository()
+        )
+        self._genus_repository = (
+            genus_repository
+            if genus_repository is not None
+            else GenusRepository()
+        )
 
     def set_embedding_service(self, service: 'EmbeddingService') -> None:
         """设置 embedding 服务（延迟注入）"""
@@ -73,12 +91,20 @@ class SaveManager:
         """设置神力进阶服务（延迟注入）"""
         self._progression_service = service
 
+    def _iter_save_dirs(self) -> Iterator[Path]:
+        for candidate in sorted(self.saves_dir.glob("save_*")):
+            try:
+                save_dir = resolve_save_directory(self.saves_dir, candidate)
+            except SavePathBoundaryError:
+                logger.warning("[存档管理器] 忽略超出范围的存档目录")
+                continue
+            if save_dir.is_dir():
+                yield save_dir
+
     def list_saves(self) -> list[dict[str, Any]]:
         """列出所有存档"""
         saves = []
-        for save_dir in sorted(self.saves_dir.glob("save_*")):
-            if not save_dir.is_dir():
-                continue
+        for save_dir in self._iter_save_dirs():
             meta_path = save_dir / "metadata.json"
             # 支持压缩和非压缩格式
             game_state_path = save_dir / "game_state.json.gz"
@@ -127,12 +153,16 @@ class SaveManager:
 
     def create_save(self, save_name: str, scenario: str = "原初大陆") -> dict[str, Any]:
         """创建新存档"""
+        save_name = validate_save_name(save_name)
         logger.info(f"[存档管理器] 创建新存档: {save_name}")
         
         # 生成存档文件夹名称
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_name = "".join(c for c in save_name if c.isalnum() or c in " _-")[:20]
-        save_dir = self.saves_dir / f"save_{timestamp}_{safe_name}"
+        folder_suffix = save_name[:20]
+        save_dir = resolve_save_directory(
+            self.saves_dir,
+            self.saves_dir / f"save_{timestamp}_{folder_suffix}",
+        )
         save_dir.mkdir(parents=True, exist_ok=True)
         
         # 创建元数据
@@ -175,6 +205,7 @@ class SaveManager:
         - 校验 turn_index 与历史记录的一致性
         - 确保 metadata 和 game_state 的回合数同步
         """
+        save_name = validate_save_name(save_name)
         # 校验回合数有效性
         if turn_index < 0:
             logger.warning(f"[存档管理器] 回合数异常: {turn_index}，修正为 0")
@@ -198,8 +229,8 @@ class SaveManager:
         # 【优化】只获取最新回合的栖息地数据，减少 70%+ 数据量
         habitats = environment_repository.list_latest_habitats()
         
-        history_logs = history_repository.list_turns(limit=1000)
-        genus_list = genus_repository.list_all()
+        history_logs = self._history_repository.list_turns(limit=1000)
+        genus_list = self._genus_repository.list_all()
         
         # 保存数据（包含完整地图）
         save_data = {
@@ -469,6 +500,7 @@ class SaveManager:
         - 批量数据库操作（5-10x 速度提升）
         - 校验并修复回合数一致性
         """
+        save_name = validate_save_name(save_name)
         load_start = time.time()
         logger.info(f"[存档管理器] 加载游戏: {save_name}")
         
@@ -502,8 +534,8 @@ class SaveManager:
         logger.info("[存档管理器] 清除当前运行时状态...")
         environment_repository.clear_state()
         species_repository.clear_state()
-        history_repository.clear_state()
-        genus_repository.clear_state()
+        self._history_repository.clear_state()
+        self._genus_repository.clear_state()
         # 清空全局物种缓存，避免旧剧本数据覆盖读档内容
         get_species_cache().clear()
 
@@ -561,14 +593,14 @@ class SaveManager:
                      except ValueError:
                         pass
                 log = TurnLog(**log_data)
-                history_repository.log_turn(log)
+                self._history_repository.log_turn(log)
         
         # 恢复属数据（Genus）
         if save_data.get("genus_list"):
             logger.info(f"[存档管理器] 恢复 {len(save_data['genus_list'])} 个属...")
             for genus_data in save_data["genus_list"]:
                 genus = Genus(**genus_data)
-                genus_repository.upsert(genus)
+                self._genus_repository.upsert(genus)
         
         # ========== 恢复 Embedding 数据 ==========
         embeddings_loaded = False
@@ -703,6 +735,7 @@ class SaveManager:
 
     def delete_save(self, save_name: str) -> bool:
         """删除存档"""
+        save_name = validate_save_name(save_name)
         save_dir = self._find_save_dir(save_name)
         if not save_dir:
             return False
@@ -803,24 +836,21 @@ class SaveManager:
 
     def _find_save_dir(self, save_name: str) -> Path | None:
         """查找存档目录"""
-        # 如果是完整的文件夹名称
-        direct_path = self.saves_dir / save_name
-        if direct_path.exists():
-            return direct_path
-        
-        # 搜索包含该名称的存档
-        for save_dir in self.saves_dir.glob("save_*"):
+        validated_name = validate_save_name(save_name)
+        for save_dir in self._iter_save_dirs():
             meta_path = save_dir / "metadata.json"
             if not meta_path.exists():
                 continue
-            
+
             try:
                 metadata = json.loads(meta_path.read_text(encoding="utf-8"))
-                if metadata.get("save_name") == save_name:
-                    return save_dir
-            except:
+            except (OSError, UnicodeError, json.JSONDecodeError):
                 continue
-        
+            if not isinstance(metadata, dict):
+                continue
+            if metadata.get("save_name") == validated_name:
+                return save_dir
+
         return None
 
     def _normalize_species_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -836,6 +866,7 @@ class SaveManager:
     
     def get_save_dir(self, save_name: str) -> Path | None:
         """获取存档目录路径（公开方法）"""
+        save_name = validate_save_name(save_name)
         return self._find_save_dir(save_name)
     
     def check_save_integrity(self, save_name: str) -> dict[str, Any]:
@@ -850,6 +881,7 @@ class SaveManager:
             - turn_index: int | None - 检测到的回合数
             - fixed: bool - 是否自动修复了问题
         """
+        save_name = validate_save_name(save_name)
         result = {
             "valid": True,
             "issues": [],
@@ -976,7 +1008,6 @@ class SaveManager:
             存储统计信息
         """
         stats = {
-            "saves_dir": str(self.saves_dir),
             "save_count": 0,
             "total_size_mb": 0,
             "largest_save": None,
@@ -985,10 +1016,7 @@ class SaveManager:
         
         try:
             # 统计存档信息
-            for save_dir in self.saves_dir.glob("save_*"):
-                if not save_dir.is_dir():
-                    continue
-                
+            for save_dir in self._iter_save_dirs():
                 stats["save_count"] += 1
                 
                 # 计算存档大小
@@ -1008,8 +1036,9 @@ class SaveManager:
             if hasattr(environment_repository, 'get_habitat_stats'):
                 stats["habitat_stats"] = environment_repository.get_habitat_stats()
                 
-        except Exception as e:
-            stats["error"] = str(e)
+        except Exception:
+            stats["error"] = "无法获取存储统计信息"
+            logger.error("[存档管理器] 获取存储统计失败")
         
         return stats
 
@@ -1022,6 +1051,7 @@ class SaveManager:
         Returns:
             迁移结果
         """
+        save_name = validate_save_name(save_name)
         result = {
             "success": False,
             "original_size_mb": 0,

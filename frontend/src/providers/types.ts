@@ -14,6 +14,7 @@ import type {
   ActionQueueStatus,
 } from "@/services/api.types";
 import type { ViewMode } from "@/components/MapViewSelector";
+import type { UpdateUIConfigOptions } from "@/services/api";
 
 // ============ 会话状态 ============
 export type Scene = "menu" | "game" | "loading";
@@ -77,7 +78,7 @@ export interface GameDataActions {
   setLineageTree: (tree: LineageTree | null) => void;
   // 配置操作
   setUIConfig: (config: UIConfig) => void;
-  updateUIConfig: (config: UIConfig) => Promise<void>;
+  updateUIConfig: (config: UIConfig, options?: UpdateUIConfigOptions) => Promise<void>;
   // 队列操作
   refreshQueue: () => Promise<void>;
   // 错误处理

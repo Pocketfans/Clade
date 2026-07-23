@@ -2,6 +2,10 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import { fileURLToPath } from "url";
+import {
+  assertFrontendBindHostAllowed,
+  resolveFrontendNetworkPolicy,
+} from "./src/config/networkPolicy";
 
 // 获取当前文件所在目录（确保 Vite 能找到 index.html）
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -9,11 +13,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 从环境变量读取端口配置，支持灵活部署
 const BACKEND_PORT = process.env.BACKEND_PORT || "8022";
 const FRONTEND_PORT = parseInt(process.env.FRONTEND_PORT || "5188", 10);
+const NETWORK_POLICY = resolveFrontendNetworkPolicy(process.env);
 
 export default defineConfig({
   // 显式指定项目根目录，解决某些系统上启动脚本工作目录不正确的问题
   root: __dirname,
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: "clade-network-policy",
+      configResolved(config) {
+        assertFrontendBindHostAllowed(config.server.host, NETWORK_POLICY.lanEnabled);
+        assertFrontendBindHostAllowed(config.preview.host, NETWORK_POLICY.lanEnabled);
+      },
+    },
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -33,12 +47,11 @@ export default defineConfig({
     ],
   },
   server: {
+    host: NETWORK_POLICY.frontendHost,
     port: FRONTEND_PORT,
     proxy: {
       "/api": {
-        // 使用 127.0.0.1 而非 localhost，避免 IPv6/IPv4 不匹配问题
-        // 某些 Windows 系统上 localhost 会解析为 ::1 (IPv6)，而后端只监听 0.0.0.0 (IPv4)
-        target: `http://127.0.0.1:${BACKEND_PORT}`,
+        target: `http://${NETWORK_POLICY.backendProxyHost}:${BACKEND_PORT}`,
         changeOrigin: true,
       },
     },

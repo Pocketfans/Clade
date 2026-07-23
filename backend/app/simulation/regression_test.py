@@ -254,7 +254,7 @@ class RegressionTestRunner:
         capture_callback,
     ) -> list[TurnSnapshot]:
         """运行引擎并捕获快照"""
-        from ..repositories.species_repository import species_repository
+        species_repository = engine.species_repository
         
         snapshots = []
         original_callback = engine._event_callback

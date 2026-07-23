@@ -49,6 +49,7 @@ export interface PopulationData {
 
 // ============ 生态角色分布 ============
 export interface RoleDistribution {
+  [key: string]: string | number;
   name: string;
   value: number;
   color: string;

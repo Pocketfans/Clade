@@ -27,10 +27,3 @@ class HistoryRepository:
         """清除所有历史记录（用于读档前）"""
         with session_scope() as session:
             session.exec(text("DELETE FROM turn_logs"))
-
-
-
-# DEPRECATED: Module-level singleton
-# Use container.history_repository instead for proper isolation.
-# This global instance will be removed in a future version.
-history_repository = HistoryRepository()

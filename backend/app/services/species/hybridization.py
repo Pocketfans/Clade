@@ -424,7 +424,6 @@ class HybridizationService:
                 capability="hybridization",
                 payload=payload,
                 task_name=f"杂交[{sp1.common_name[:6]}×{sp2.common_name[:6]}]",
-                timeout=30,
                 heartbeat_interval=2.0,
             )
             content = response.get("content") if isinstance(response, dict) else None
@@ -433,7 +432,7 @@ class HybridizationService:
             logger.warning(f"[杂交AI] 响应格式不正确: {type(content)}")
             return None
         except asyncio.TimeoutError:
-            logger.warning("[杂交AI] 请求超时（30秒）")
+            logger.warning("[杂交AI] 请求超时")
             return None
         except Exception as e:
             logger.warning(f"[杂交AI] 请求失败: {e}")
@@ -1262,7 +1261,6 @@ class HybridizationService:
                 capability="forced_hybridization",
                 payload=payload,
                 task_name=f"嵌合体[{parent1.common_name[:5]}+{parent2.common_name[:5]}]",
-                timeout=45,
                 heartbeat_interval=2.0,
             )
             content = response.get("content") if isinstance(response, dict) else None
@@ -1271,7 +1269,7 @@ class HybridizationService:
             logger.warning(f"[强行杂交AI] 响应格式不正确: {type(content)}")
             return None
         except asyncio.TimeoutError:
-            logger.warning("[强行杂交AI] 请求超时（45秒）")
+            logger.warning("[强行杂交AI] 请求超时")
             return None
         except Exception as e:
             logger.warning(f"[强行杂交AI] 请求失败: {e}")

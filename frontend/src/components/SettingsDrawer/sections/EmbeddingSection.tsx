@@ -3,11 +3,15 @@
  * 单列布局，配置语义搜索引擎
  */
 
-import { memo, useState, useCallback, type Dispatch } from "react";
+import { memo, useState, useCallback, useMemo, type Dispatch } from "react";
 import type { ProviderConfig } from "@/services/api.types";
 import type { SettingsAction, TestResult } from "../types";
 import { testApiConnection } from "@/services/api";
-import { getProviderLogo } from "../reducer";
+import {
+  canonicalizeProviderRecords,
+  getCanonicalProviderId,
+  getProviderLogo,
+} from "../reducer";
 import { EMBEDDING_PRESETS } from "../constants";
 import { SectionHeader, Card, FeatureGrid, InfoBox } from "../common/Controls";
 
@@ -23,6 +27,9 @@ interface Props {
   dispatch: Dispatch<SettingsAction>;
 }
 
+const hasUsableApiKey = (provider: ProviderConfig) =>
+  Boolean(provider.api_key || provider.api_key_configured) && !provider.api_key_clear_requested;
+
 export const EmbeddingSection = memo(function EmbeddingSection({
   providers,
   embeddingProvider,
@@ -34,9 +41,13 @@ export const EmbeddingSection = memo(function EmbeddingSection({
   embeddingSemanticHotspotLimit,
   dispatch,
 }: Props) {
-  const providerList = Object.values(providers).filter((p) => p.api_key);
-  const effectiveProviderId = embeddingProviderId || embeddingProvider;
-  const selectedProvider = effectiveProviderId ? providers[effectiveProviderId] : null;
+  const canonicalProviders = useMemo(() => canonicalizeProviderRecords(providers), [providers]);
+  const providerList = Object.values(canonicalProviders).filter(hasUsableApiKey);
+  const effectiveProviderId = getCanonicalProviderId(
+    providers,
+    embeddingProviderId || embeddingProvider
+  );
+  const selectedProvider = effectiveProviderId ? canonicalProviders[effectiveProviderId] : null;
   const concurrencyEnabled = Boolean(embeddingConcurrencyEnabled);
   const concurrencyLimit = embeddingConcurrencyLimit && embeddingConcurrencyLimit > 0 ? embeddingConcurrencyLimit : 2;
   const hotspotOnly = Boolean(embeddingSemanticHotspotOnly);
@@ -46,7 +57,7 @@ export const EmbeddingSection = memo(function EmbeddingSection({
   const [testResult, setTestResult] = useState<TestResult | null>(null);
 
   const handleTest = useCallback(async () => {
-    if (!selectedProvider?.base_url || !selectedProvider?.api_key) {
+    if (!selectedProvider?.base_url || !hasUsableApiKey(selectedProvider)) {
       setTestResult({
         success: false,
         message: "请先选择服务商并确保已配置 API Key",
@@ -60,8 +71,9 @@ export const EmbeddingSection = memo(function EmbeddingSection({
     try {
       const result = await testApiConnection({
         type: "embedding",
+        provider_id: selectedProvider.id,
         base_url: selectedProvider.base_url,
-        api_key: selectedProvider.api_key,
+        api_key: selectedProvider.api_key || "",
         model: embeddingModel || "Qwen/Qwen3-Embedding-4B",
         provider_type: selectedProvider.provider_type || "openai",
       });
@@ -287,7 +299,7 @@ export const EmbeddingSection = memo(function EmbeddingSection({
               <button
                 className="btn btn-primary"
                 onClick={handleTest}
-                disabled={testing || !selectedProvider}
+                disabled={testing || !selectedProvider || !hasUsableApiKey(selectedProvider)}
               >
                 {testing ? (
                   <>

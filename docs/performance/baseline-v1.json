@@ -1,0 +1,223 @@
+{
+  "cases": [
+    {
+      "ai_calls": 0,
+      "ai_completion_tokens": null,
+      "ai_prompt_tokens": null,
+      "case_id": "scale-10",
+      "cpu_time_ms": 62.5,
+      "database_rows_changed": 24,
+      "database_write_statements": 22,
+      "load_duration_ms": 186.46799999987707,
+      "notes": [
+        "deterministic core pipeline",
+        "AI and embedding integration disabled",
+        "save/load round trip measured"
+      ],
+      "peak_python_memory_bytes": 1514169,
+      "save_duration_ms": 39.56850000031409,
+      "save_size_bytes": 2168,
+      "seed": 42,
+      "species_count": 10,
+      "stages": [
+        {
+          "max_duration_ms": 0.02600000152597204,
+          "mean_duration_ms": 0.02600000152597204,
+          "sample_count": 1,
+          "stage_name": "解析环境压力",
+          "total_duration_ms": 0.02600000152597204
+        },
+        {
+          "max_duration_ms": 19.33879999705823,
+          "mean_duration_ms": 19.33879999705823,
+          "sample_count": 1,
+          "stage_name": "地图演化",
+          "total_duration_ms": 19.33879999705823
+        },
+        {
+          "max_duration_ms": 15.459399997780565,
+          "mean_duration_ms": 15.459399997780565,
+          "sample_count": 1,
+          "stage_name": "获取物种列表",
+          "total_duration_ms": 15.459399997780565
+        },
+        {
+          "max_duration_ms": 8.970799997769063,
+          "mean_duration_ms": 8.970799997769063,
+          "sample_count": 1,
+          "stage_name": "最终化",
+          "total_duration_ms": 8.970799997769063
+        }
+      ],
+      "turns": 1,
+      "wall_time_ms": 278.11469999869587
+    },
+    {
+      "ai_calls": 0,
+      "ai_completion_tokens": null,
+      "ai_prompt_tokens": null,
+      "case_id": "scale-100",
+      "cpu_time_ms": 234.375,
+      "database_rows_changed": 204,
+      "database_write_statements": 112,
+      "load_duration_ms": 1216.0917000001064,
+      "notes": [
+        "deterministic core pipeline",
+        "AI and embedding integration disabled",
+        "save/load round trip measured"
+      ],
+      "peak_python_memory_bytes": 3171632,
+      "save_duration_ms": 88.64449999964563,
+      "save_size_bytes": 11437,
+      "seed": 42,
+      "species_count": 100,
+      "stages": [
+        {
+          "max_duration_ms": 0.05499999679159373,
+          "mean_duration_ms": 0.05499999679159373,
+          "sample_count": 1,
+          "stage_name": "解析环境压力",
+          "total_duration_ms": 0.05499999679159373
+        },
+        {
+          "max_duration_ms": 17.61869999972987,
+          "mean_duration_ms": 17.61869999972987,
+          "sample_count": 1,
+          "stage_name": "地图演化",
+          "total_duration_ms": 17.61869999972987
+        },
+        {
+          "max_duration_ms": 39.344699998764554,
+          "mean_duration_ms": 39.344699998764554,
+          "sample_count": 1,
+          "stage_name": "获取物种列表",
+          "total_duration_ms": 39.344699998764554
+        },
+        {
+          "max_duration_ms": 5.569000000832602,
+          "mean_duration_ms": 5.569000000832602,
+          "sample_count": 1,
+          "stage_name": "最终化",
+          "total_duration_ms": 5.569000000832602
+        }
+      ],
+      "turns": 1,
+      "wall_time_ms": 1376.489300000685
+    },
+    {
+      "ai_calls": 0,
+      "ai_completion_tokens": null,
+      "ai_prompt_tokens": null,
+      "case_id": "scale-500",
+      "cpu_time_ms": 984.375,
+      "database_rows_changed": 1004,
+      "database_write_statements": 512,
+      "load_duration_ms": 4916.3856999985,
+      "notes": [
+        "deterministic core pipeline",
+        "AI and embedding integration disabled",
+        "save/load round trip measured"
+      ],
+      "peak_python_memory_bytes": 7950780,
+      "save_duration_ms": 340.9914000003482,
+      "save_size_bytes": 51600,
+      "seed": 42,
+      "species_count": 500,
+      "stages": [
+        {
+          "max_duration_ms": 0.03619999915827066,
+          "mean_duration_ms": 0.03619999915827066,
+          "sample_count": 1,
+          "stage_name": "解析环境压力",
+          "total_duration_ms": 0.03619999915827066
+        },
+        {
+          "max_duration_ms": 19.412600002397085,
+          "mean_duration_ms": 19.412600002397085,
+          "sample_count": 1,
+          "stage_name": "地图演化",
+          "total_duration_ms": 19.412600002397085
+        },
+        {
+          "max_duration_ms": 184.2109999997774,
+          "mean_duration_ms": 184.2109999997774,
+          "sample_count": 1,
+          "stage_name": "获取物种列表",
+          "total_duration_ms": 184.2109999997774
+        },
+        {
+          "max_duration_ms": 9.437600001547253,
+          "mean_duration_ms": 9.437600001547253,
+          "sample_count": 1,
+          "stage_name": "最终化",
+          "total_duration_ms": 9.437600001547253
+        }
+      ],
+      "turns": 1,
+      "wall_time_ms": 5481.047299999773
+    },
+    {
+      "ai_calls": 0,
+      "ai_completion_tokens": null,
+      "ai_prompt_tokens": null,
+      "case_id": "seeded-100-turn",
+      "cpu_time_ms": 343.75,
+      "database_rows_changed": 222,
+      "database_write_statements": 220,
+      "load_duration_ms": 181.3505999998597,
+      "notes": [
+        "deterministic core pipeline",
+        "AI and embedding integration disabled",
+        "save/load round trip measured"
+      ],
+      "peak_python_memory_bytes": 2272145,
+      "save_duration_ms": 36.35220000069239,
+      "save_size_bytes": 2205,
+      "seed": 42,
+      "species_count": 10,
+      "stages": [
+        {
+          "max_duration_ms": 0.06340000254567713,
+          "mean_duration_ms": 0.02652999977726722,
+          "sample_count": 100,
+          "stage_name": "解析环境压力",
+          "total_duration_ms": 2.652999977726722
+        },
+        {
+          "max_duration_ms": 20.45709999947576,
+          "mean_duration_ms": 6.904915000086476,
+          "sample_count": 100,
+          "stage_name": "地图演化",
+          "total_duration_ms": 690.4915000086476
+        },
+        {
+          "max_duration_ms": 16.383999998652143,
+          "mean_duration_ms": 6.40910599991912,
+          "sample_count": 100,
+          "stage_name": "获取物种列表",
+          "total_duration_ms": 640.910599991912
+        },
+        {
+          "max_duration_ms": 8.195999998861225,
+          "mean_duration_ms": 5.330065000198374,
+          "sample_count": 100,
+          "stage_name": "最终化",
+          "total_duration_ms": 533.0065000198374
+        }
+      ],
+      "turns": 100,
+      "wall_time_ms": 2451.3747000019066
+    }
+  ],
+  "commit_sha": "1c79d1690ea110b0d65b2a2b7eb635718f2114a6",
+  "environment": {
+    "gpu": "NVIDIA GeForce RTX 2080 (8192 MiB)",
+    "logical_cpu_count": 16,
+    "notes": [],
+    "platform": "Windows-11-10.0.22621-SP0",
+    "processor": "Intel64 Family 6 Model 165 Stepping 5, GenuineIntel",
+    "python_version": "3.12.10"
+  },
+  "generated_at_utc": "2026-07-23T10:16:20.384839+00:00",
+  "schema_version": 1
+}

@@ -521,13 +521,13 @@ class TestEcologicalRealismStage:
         assert stage.order == 190
     
     def test_stage_dependency(self, stage):
-        """测试阶段依赖"""
-        dep = stage.get_dependency()
-        
-        assert "fetch_species" in dep.requires_stages
-        assert "tiering_and_niche" in dep.requires_stages
-        assert "species_batch" in dep.requires_fields
-        assert "plugin_data" in dep.writes_fields
+        """测试当前阶段依赖契约"""
+        dependency = stage.get_dependency()
+
+        assert dependency.requires_stages == {"获取物种列表", "物种分层与生态位"}
+        assert dependency.requires_fields == {"species_batch", "all_tiles", "all_habitats"}
+        assert dependency.writes_fields == {"plugin_data"}
+        assert dependency.optional_stages == {"资源计算"}
     
     async def test_stage_execution(self, stage, mock_context, mock_engine):
         """测试阶段执行"""

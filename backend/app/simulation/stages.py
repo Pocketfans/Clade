@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable, Se
 import numpy as np
 
 if TYPE_CHECKING:
+    from ..repositories.genus_repository import GenusRepository
+    from ..repositories.history_repository import HistoryRepository
     from .context import SimulationContext
     from .engine import SimulationEngine
 
@@ -31,7 +33,6 @@ if TYPE_CHECKING:
 from ..services.species.trophic_interaction import get_trophic_service
 from ..services.species.intervention import InterventionService
 from ..services.species.extinction_checker import ExtinctionChecker
-from ..services.species.reemergence import ReemergenceService
 from ..services.analytics.turn_report import TurnReportService
 from ..services.analytics.population_snapshot import PopulationSnapshotService
 from ..tensor.speciation_monitor import SpeciationMonitor
@@ -268,6 +269,8 @@ class StageOrder(Enum):
 @runtime_checkable
 class Stage(Protocol):
     """阶段协议 - 所有阶段必须实现此接口"""
+
+    uses_internal_request_budget: bool
     
     @property
     def name(self) -> str:
@@ -308,11 +311,26 @@ class BaseStage(ABC):
     
     子类应该重写 `get_dependency()` 方法来声明依赖关系。
     """
+
+    # Stages that can enter ModelRouter or remote Embedding set this to True.
+    # Their request layer owns the complete deadline, so the pipeline must not
+    # add its generic business-stage timeout around them.
+    uses_internal_request_budget = False
+    is_degradable = False
     
     def __init__(self, order: int, name: str, is_async: bool = False):
         self._order = order
         self._name = name
         self._is_async = is_async
+        self._degradable_failure_pending = False
+
+    def _mark_degradable_failure(self) -> None:
+        self._degradable_failure_pending = True
+
+    def _consume_degradable_failure(self) -> bool:
+        pending = self._degradable_failure_pending
+        self._degradable_failure_pending = False
+        return pending
     
     @property
     def name(self) -> str:
@@ -414,8 +432,6 @@ class ParsePressuresStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.environment_repository import environment_repository
-        
         logger.info("解析压力...")
         ctx.emit_event("stage", "🌡️ 解析环境压力", "环境")
         
@@ -440,7 +456,7 @@ class MapEvolutionStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.environment_repository import environment_repository
+        environment_repository = engine.environment_repository
         
         logger.info("地图演化...")
         ctx.emit_event("stage", "🗺️ 地图演化与海平面变化", "地质")
@@ -505,8 +521,7 @@ class TectonicMovementStage(BaseStage):
         if not engine._use_tectonic_system or not engine.tectonic:
             return
         
-        from ..repositories.environment_repository import environment_repository
-        from ..repositories.species_repository import species_repository
+        environment_repository = engine.environment_repository
         from ..services.species.habitat_manager import habitat_manager
         from ..services.species.dispersal_engine import dispersal_engine
         
@@ -514,7 +529,7 @@ class TectonicMovementStage(BaseStage):
             ctx.emit_event("stage", "🌍 板块构造运动", "地质")
             
             # 获取物种和栖息地数据
-            all_species_for_tectonic = species_repository.list_species()
+            all_species_for_tectonic = engine.species_repository.list_species()
             alive_species = [sp for sp in all_species_for_tectonic if sp.status == "alive"]
             
             # 获取栖息地数据
@@ -657,12 +672,13 @@ class FetchSpeciesStage(BaseStage):
     3. 提高气候调整阈值，减少触发频率
     """
     
+    uses_internal_request_budget = True
+
     def __init__(self):
         super().__init__(StageOrder.FETCH_SPECIES.value, "获取物种列表")
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
         import time
-        from ..repositories.species_repository import species_repository
         from ..services.species.habitat_manager import habitat_manager
         from ..services.system.species_cache import get_species_cache
         
@@ -677,7 +693,7 @@ class FetchSpeciesStage(BaseStage):
         # 下一回合开始时必须从数据库重新加载，否则 species_batch 不包含新物种
         t0 = time.perf_counter()
         species_cache = get_species_cache()
-        ctx.all_species = species_repository.list_species()
+        ctx.all_species = engine.species_repository.list_species()
         species_cache.update(ctx.all_species, ctx.turn_index)
         timings["db_fetch"] = time.perf_counter() - t0
         
@@ -713,9 +729,8 @@ class FetchSpeciesStage(BaseStage):
         
         # 更新干预状态（使用 InterventionService）
         t0 = time.perf_counter()
-        from ..repositories.species_repository import species_repository
         intervention_service = InterventionService(
-            species_repository=species_repository,
+            species_repository=engine.species_repository,
             event_callback=ctx.emit_event,
         )
         intervention_service.update_intervention_status(ctx.species_batch)
@@ -855,8 +870,6 @@ class FoodWebStage(BaseStage):
         self._previous_species_codes: set[str] | None = None
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.species_repository import species_repository
-        
         logger.info("维护食物网...")
         ctx.emit_event("stage", "🕸️ 维护食物网", "生态")
         
@@ -871,7 +884,7 @@ class FoodWebStage(BaseStage):
             
             # 执行食物网维护（v2增强版）
             ctx.food_web_analysis = engine.food_web_manager.maintain_food_web(
-                ctx.all_species, species_repository, ctx.turn_index,
+                ctx.all_species, engine.species_repository, ctx.turn_index,
                 tile_species_map=tile_species_map,
                 species_tiles=species_tiles,
                 previous_species_codes=previous_codes,
@@ -884,7 +897,7 @@ class FoodWebStage(BaseStage):
                     f"🍽️ 更新了 {len(food_web_changes)} 个物种的食物关系",
                     "生态"
                 )
-                ctx.all_species = species_repository.list_species()
+                ctx.all_species = engine.species_repository.list_species()
                 ctx.species_batch = [sp for sp in ctx.all_species if sp.status == "alive"]
             
             # 【新增】生成 trophic_interactions 反馈信号
@@ -950,12 +963,14 @@ class FoodWebStage(BaseStage):
 
 class TieringAndNicheStage(BaseStage):
     """物种分层与生态位分析阶段"""
+
+    uses_internal_request_budget = True
     
     def __init__(self):
         super().__init__(StageOrder.TIERING_AND_NICHE.value, "物种分层与生态位")
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.environment_repository import environment_repository
+        environment_repository = engine.environment_repository
         
         logger.info("物种分层...")
         ctx.emit_event("stage", "📊 物种分层与生态位分析", "生态")
@@ -1049,12 +1064,14 @@ class PreliminaryMortalityStage(BaseStage):
 
 class FinalMortalityStage(BaseStage):
     """最终死亡率评估阶段（迁徙后）"""
+
+    uses_internal_request_budget = True
     
     def __init__(self):
         super().__init__(StageOrder.FINAL_MORTALITY.value, "最终死亡率评估")
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.environment_repository import environment_repository
+        environment_repository = engine.environment_repository
         
         # 重新分析生态位（如有迁徙）
         if ctx.migration_count > 0:
@@ -1141,8 +1158,9 @@ class PopulationUpdateStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.species_repository import species_repository
         from ..services.species.habitat_manager import habitat_manager
+
+        species_repository = engine.species_repository
         
         logger.info("计算种群变化（死亡+繁殖并行）...")
         ctx.emit_event("stage", "💀🐣 计算种群变化", "物种")
@@ -1373,13 +1391,13 @@ class PopulationUpdateStage(BaseStage):
     def _update_resource_dynamics(self, ctx: "SimulationContext", engine: "SimulationEngine"):
         """更新资源系统动态（计算消耗并触发再生）"""
         try:
-            from ..repositories.environment_repository import environment_repository
-            
             # 使用 engine 注入的 resource_manager，避免全局单例
             resource_mgr = engine.resource_manager if engine else None
             if resource_mgr is None:
                 logger.warning("[资源动态] 资源管理器未注入，跳过资源更新")
                 return
+
+            environment_repository = engine.environment_repository
             
             # 获取所有地块
             all_tiles = environment_repository.list_tiles()
@@ -1450,6 +1468,8 @@ class PopulationUpdateStage(BaseStage):
 
 class PostMigrationNicheStage(BaseStage):
     """迁徙后生态位重新分析阶段"""
+
+    uses_internal_request_budget = True
     
     def __init__(self):
         super().__init__(StageOrder.POST_MIGRATION_NICHE.value, "后迁徙生态位")
@@ -1463,7 +1483,7 @@ class PostMigrationNicheStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.environment_repository import environment_repository
+        environment_repository = engine.environment_repository
         
         if ctx.migration_count > 0:
             logger.info("重新分析生态位（迁徙后）...")
@@ -1624,6 +1644,8 @@ class SpeciationDataTransferStage(BaseStage):
 class GeneActivationStage(BaseStage):
     """基因激活阶段"""
     
+    uses_internal_request_budget = True
+
     def __init__(self):
         super().__init__(StageOrder.GENE_ACTIVATION.value, "基因激活")
     
@@ -1636,8 +1658,6 @@ class GeneActivationStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.species_repository import species_repository
-        
         logger.info("基因激活检查...")
         ctx.emit_event("stage", "🧬 基因激活", "进化")
         
@@ -1652,7 +1672,7 @@ class GeneActivationStage(BaseStage):
             if ctx.activation_events:
                 logger.info(f"[基因激活] {len(ctx.activation_events)} 个物种发生基因激活")
                 for species in ctx.species_batch:
-                    species_repository.upsert(species)
+                    engine.species_repository.upsert(species)
         except Exception as e:
             logger.warning(f"[基因激活] 失败: {e}")
             ctx.activation_events = []
@@ -1673,8 +1693,6 @@ class GeneDiversityStage(BaseStage):
         )
 
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.species_repository import species_repository
-
         logger.info("更新基因多样性半径...")
         ctx.emit_event("stage", "🧬 基因多样性", "进化")
 
@@ -1703,7 +1721,7 @@ class GeneDiversityStage(BaseStage):
                             "reason": change["reason"],
                         }
                     )
-                species_repository.upsert(sp)
+                engine.species_repository.upsert(sp)
             except Exception as e:
                 logger.warning(f"[基因多样性] 更新 {sp.lineage_code} 失败: {e}")
 
@@ -1713,8 +1731,16 @@ class GeneDiversityStage(BaseStage):
 class GeneFlowStage(BaseStage):
     """基因流动阶段"""
     
-    def __init__(self):
+    def __init__(
+        self,
+        genus_repository: GenusRepository | None = None,
+    ) -> None:
         super().__init__(StageOrder.GENE_FLOW.value, "基因流动")
+        if genus_repository is None:
+            from ..repositories.genus_repository import GenusRepository
+
+            genus_repository = GenusRepository()
+        self._genus_repository = genus_repository
     
     def get_dependency(self) -> StageDependency:
         return StageDependency(
@@ -1725,9 +1751,6 @@ class GeneFlowStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.species_repository import species_repository
-        from ..repositories.genus_repository import genus_repository
-        
         logger.info("基因流动计算...")
         ctx.emit_event("stage", "🔄 基因流动", "进化")
         
@@ -1745,7 +1768,7 @@ class GeneFlowStage(BaseStage):
             for genus_code, species_list in genus_groups.items():
                 if len(species_list) < 2:
                     continue
-                genus = genus_repository.get_by_code(genus_code)
+                genus = self._genus_repository.get_by_code(genus_code)
                 if not genus:
                     continue
                 flow_count = engine.gene_flow_service.apply_gene_flow(genus, species_list)
@@ -1756,7 +1779,7 @@ class GeneFlowStage(BaseStage):
             if ctx.gene_flow_count > 0:
                 logger.info(f"[基因流动] 发生了 {ctx.gene_flow_count} 对基因交流")
                 for species in ctx.species_batch:
-                    species_repository.upsert(species)
+                    engine.species_repository.upsert(species)
         except Exception as e:
             logger.warning(f"[基因流动] 失败: {e}")
             ctx.gene_flow_count = 0
@@ -1778,7 +1801,6 @@ class GeneticDriftStage(BaseStage):
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
         import random
-        from ..repositories.species_repository import species_repository
         
         logger.debug("遗传漂变检查...")
         
@@ -1804,7 +1826,7 @@ class GeneticDriftStage(BaseStage):
         if ctx.genetic_drift_count > 0:
             logger.info(f"[遗传漂变] {ctx.genetic_drift_count} 个物种发生漂变")
             for sp in ctx.species_batch:
-                species_repository.upsert(sp)
+                engine.species_repository.upsert(sp)
 
 
 class AutoHybridizationStage(BaseStage):
@@ -1840,7 +1862,7 @@ class AutoHybridizationStage(BaseStage):
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
         import random
-        from ..repositories.species_repository import species_repository
+        species_repository = engine.species_repository
         from ..services.species.hybridization import HybridizationService
         from ..services.species.genetic_distance import GeneticDistanceCalculator
         
@@ -2179,8 +2201,6 @@ class SubspeciesPromotionStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.species_repository import species_repository
-        
         logger.debug("亚种晋升检查...")
         
         ctx.promotion_count = 0
@@ -2216,6 +2236,8 @@ class SpeciationStage(BaseStage):
     - speciation_signal < 0.3: 低概率分化
     """
     
+    uses_internal_request_budget = True
+
     def __init__(self):
         super().__init__(StageOrder.SPECIATION.value, "物种分化", is_async=True)
     
@@ -2298,28 +2320,24 @@ class SpeciationStage(BaseStage):
             def speciation_stream_callback(event_type: str, message: str, category: str = "AI"):
                 ctx.emit_event(event_type, message, category)
             
-            ctx.branching_events = await asyncio.wait_for(
-                engine.speciation.process_async(
-                    mortality_results=ctx.combined_results,  # 【修复】使用所有物种
-                    existing_codes={s.lineage_code for s in ctx.species_batch},
-                    average_pressure=sum(ctx.modifiers.values()) / (len(ctx.modifiers) or 1),
-                    turn_index=ctx.turn_index,
-                    map_changes=ctx.map_changes,
-                    major_events=ctx.major_events,
-                    pressures=ctx.pressures,
-                    trophic_interactions=ctx.trophic_interactions,
-                    stream_callback=speciation_stream_callback,  # 【新增】传递心跳回调
-                    speciation_candidates=speciation_candidates if speciation_candidates else None,
-                ),
-                timeout=600
+            ctx.branching_events = await engine.speciation.process_async(
+                mortality_results=ctx.combined_results,  # 【修复】使用所有物种
+                existing_codes={s.lineage_code for s in ctx.species_batch},
+                average_pressure=sum(ctx.modifiers.values()) / (len(ctx.modifiers) or 1),
+                turn_index=ctx.turn_index,
+                map_changes=ctx.map_changes,
+                major_events=ctx.major_events,
+                pressures=ctx.pressures,
+                trophic_interactions=ctx.trophic_interactions,
+                stream_callback=speciation_stream_callback,  # 【新增】传递心跳回调
+                speciation_candidates=speciation_candidates if speciation_candidates else None,
             )
             
             if ctx.branching_events:
                 logger.info(f"[物种分化] 发生了 {len(ctx.branching_events)} 次分化")
                 
                 # 将新物种加入列表
-                from ..repositories.species_repository import species_repository
-                all_species_updated = species_repository.list_species()
+                all_species_updated = engine.species_repository.list_species()
                 new_species = [
                     sp for sp in all_species_updated
                     if sp.status == "alive" and sp.lineage_code not in {s.lineage_code for s in ctx.species_batch}
@@ -2349,7 +2367,7 @@ class SpeciationStage(BaseStage):
                 # 将新生产者/初级消费者立即集成到食物网，不等下一回合全量扫描
                 if new_species:
                     self._integrate_new_species_to_food_web(
-                        new_species, ctx, engine, species_repository
+                        new_species, ctx, engine, engine.species_repository
                     )
         
         except asyncio.TimeoutError:
@@ -2464,8 +2482,6 @@ class BackgroundManagementStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.species_repository import species_repository
-        
         logger.info("背景物种管理...")
         ctx.emit_event("stage", "🌾 背景物种管理", "生态")
         
@@ -2475,9 +2491,10 @@ class BackgroundManagementStage(BaseStage):
         if ctx.mass_extinction:
             promoted = engine.background_manager.promote_candidates(ctx.background_results)
             if promoted:
-                # 使用 ReemergenceService 评估物种重现
-                reemergence_service = ReemergenceService(species_repository)
-                ctx.reemergence_events = reemergence_service.evaluate_reemergence(promoted, ctx.modifiers)
+                ctx.reemergence_events = engine.background_manager.evaluate_reemergence(
+                    promoted,
+                    ctx.modifiers,
+                )
                 if ctx.reemergence_events:
                     ctx.emit_event("info", f"大灭绝后重现: {len(ctx.reemergence_events)} 个物种", "生态")
 
@@ -2485,6 +2502,9 @@ class BackgroundManagementStage(BaseStage):
 class BuildReportStage(BaseStage):
     """构建报告阶段"""
     
+    uses_internal_request_budget = True
+    is_degradable = True
+
     def __init__(self):
         super().__init__(StageOrder.BUILD_REPORT.value, "构建报告", is_async=True)
     
@@ -2497,7 +2517,6 @@ class BuildReportStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.environment_repository import environment_repository
         from ..schemas.responses import TurnReport
         
         # 【优化】检查是否需要生成报告（自动过回合/随机回合可跳过）
@@ -2531,7 +2550,7 @@ class BuildReportStage(BaseStage):
             # 使用 TurnReportService 构建报告
             turn_report_service = TurnReportService(
                 report_builder=engine.report_builder,
-                environment_repository=environment_repository,
+                environment_repository=engine.environment_repository,
                 trophic_service=engine.trophic_service,
                 emit_event_fn=ctx.emit_event,
             )
@@ -2544,23 +2563,20 @@ class BuildReportStage(BaseStage):
                 extinct_species = [sp for sp in ctx.all_species if sp.status == "extinct"]
                 all_species_for_report.extend(extinct_species)
             
-            ctx.report = await asyncio.wait_for(
-                turn_report_service.build_report(
-                    turn_index=ctx.turn_index,
-                    mortality_results=ctx.combined_results,
-                    pressures=ctx.pressures,
-                    branching_events=ctx.branching_events,
-                    background_summary=ctx.background_summary,
-                    reemergence_events=ctx.reemergence_events,
-                    major_events=ctx.major_events,
-                    map_changes=ctx.map_changes,
-                    migration_events=ctx.migration_events,
-                    stream_callback=on_narrative_chunk,
-                    all_species=all_species_for_report,
-                    ecological_realism_data=ctx.plugin_data.get("ecological_realism"),  # 【新增】
-                    gene_diversity_events=ctx.plugin_data.get("gene_diversity", {}).get("events", []),
-                ),
-                timeout=90
+            ctx.report = await turn_report_service.build_report(
+                turn_index=ctx.turn_index,
+                mortality_results=ctx.combined_results,
+                pressures=ctx.pressures,
+                branching_events=ctx.branching_events,
+                background_summary=ctx.background_summary,
+                reemergence_events=ctx.reemergence_events,
+                major_events=ctx.major_events,
+                map_changes=ctx.map_changes,
+                migration_events=ctx.migration_events,
+                stream_callback=on_narrative_chunk,
+                all_species=all_species_for_report,
+                ecological_realism_data=ctx.plugin_data.get("ecological_realism"),  # 【新增】
+                gene_diversity_events=ctx.plugin_data.get("gene_diversity", {}).get("events", []),
             )
             ctx.emit_event("stage", "✅ 报告生成完成", "报告")
         
@@ -2579,8 +2595,9 @@ class BuildReportStage(BaseStage):
                 branching_events=ctx.branching_events,
                 major_events=ctx.major_events,
             )
-        except Exception as e:
-            logger.error(f"[报告生成] 失败: {e}")
+        except Exception as exc:
+            logger.error("[报告生成] 失败 type=%s", type(exc).__name__)
+            self._mark_degradable_failure()
     
     def _build_simple_species_data(self, ctx: SimulationContext) -> list:
         """从上下文中构建简单的物种快照列表（用于跳过报告或超时时）"""
@@ -2718,12 +2735,10 @@ class SaveMapSnapshotStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.species_repository import species_repository
-        
         logger.info("保存地图栖息地快照...")
         ctx.emit_event("stage", "💾 保存地图快照", "系统")
         
-        all_species_final = species_repository.list_species()
+        all_species_final = engine.species_repository.list_species()
         
         # 获取地块级存活数据
         tile_survivors = {}
@@ -2755,8 +2770,7 @@ class VegetationCoverStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.environment_repository import environment_repository
-        from ..repositories.species_repository import species_repository
+        environment_repository = engine.environment_repository
         from ..services.geo.vegetation_cover import vegetation_cover_service
         
         logger.info("更新植被覆盖...")
@@ -2765,7 +2779,7 @@ class VegetationCoverStage(BaseStage):
         try:
             tiles = environment_repository.list_tiles()
             habitats = environment_repository.latest_habitats()
-            all_species = species_repository.list_species()
+            all_species = engine.species_repository.list_species()
             species_map = {sp.id: sp for sp in all_species if sp.id}
             
             updated_tiles = vegetation_cover_service.update_vegetation_cover(
@@ -2793,12 +2807,11 @@ class SavePopulationSnapshotStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.species_repository import species_repository
-        
         logger.info("保存人口快照...")
         ctx.emit_event("stage", "💾 保存种群快照", "系统")
         
         # 使用 PopulationSnapshotService 保存快照
+        species_repository = engine.species_repository
         all_species_final = species_repository.list_species()
         snapshot_service = PopulationSnapshotService(species_repository)
         snapshot_service.save_snapshots(all_species_final, ctx.turn_index)
@@ -2807,6 +2820,9 @@ class SavePopulationSnapshotStage(BaseStage):
 class EmbeddingStage(BaseStage):
     """Embedding 集成阶段"""
     
+    uses_internal_request_budget = True
+    is_degradable = True
+
     def __init__(self):
         super().__init__(StageOrder.EMBEDDING_INTEGRATION.value, "Embedding集成")
     
@@ -2853,6 +2869,7 @@ class EmbeddingStage(BaseStage):
         except Exception as e:
             logger.warning(f"[Embedding] 失败: {e}")
             ctx.embedding_turn_data = {}
+            self._mark_degradable_failure()
 
 
 class EmbeddingPluginsStage(BaseStage):
@@ -2870,6 +2887,9 @@ class EmbeddingPluginsStage(BaseStage):
     配置从 stage_config.yaml 加载。
     """
     
+    uses_internal_request_budget = True
+    is_degradable = True
+
     def __init__(self):
         super().__init__(StageOrder.EMBEDDING_PLUGINS.value, "Embedding扩展插件")
         self._manager = None
@@ -2960,6 +2980,7 @@ class EmbeddingPluginsStage(BaseStage):
                 
         except Exception as e:
             logger.warning(f"[EmbeddingPlugins] 执行失败: {e}")
+            self._mark_degradable_failure()
     
     def _sync_tensor_bridge(self, ctx: SimulationContext) -> None:
         """同步张量桥接器"""
@@ -2999,8 +3020,13 @@ class EmbeddingPluginsStage(BaseStage):
 class SaveHistoryStage(BaseStage):
     """保存历史记录阶段"""
     
-    def __init__(self):
+    def __init__(self, history_repository: HistoryRepository | None = None):
         super().__init__(StageOrder.SAVE_HISTORY.value, "保存历史记录")
+        if history_repository is None:
+            from ..repositories.history_repository import HistoryRepository
+
+            history_repository = HistoryRepository()
+        self._history_repository = history_repository
     
     def get_dependency(self) -> StageDependency:
         return StageDependency(
@@ -3011,7 +3037,6 @@ class SaveHistoryStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.history_repository import history_repository
         from ..models.history import TurnLog
         
         logger.info("保存历史记录...")
@@ -3030,7 +3055,7 @@ class SaveHistoryStage(BaseStage):
                 "has_narrative": "narrative" in embedding_turn_data,
             }
         
-        history_repository.log_turn(
+        self._history_repository.log_turn(
             TurnLog(
                 turn_index=ctx.report.turn_index,
                 pressures_summary=ctx.report.pressures_summary,
@@ -3042,6 +3067,8 @@ class SaveHistoryStage(BaseStage):
 
 class ExportDataStage(BaseStage):
     """导出数据阶段"""
+
+    is_degradable = True
     
     def __init__(self):
         super().__init__(StageOrder.EXPORT_DATA.value, "导出数据")
@@ -3080,7 +3107,7 @@ class FinalizeStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.environment_repository import environment_repository
+        environment_repository = engine.environment_repository
         
         logger.info("最终化回合...")
         
@@ -3135,7 +3162,7 @@ class DatabaseMaintenanceStage(BaseStage):
         )
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.environment_repository import environment_repository
+        environment_repository = engine.environment_repository
         
         turn = ctx.turn_index
         

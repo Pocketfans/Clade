@@ -111,7 +111,7 @@ export const SpeciesListHeader = memo(function SpeciesListHeader({
         {/* 状态过滤 */}
         <div className="filter-group">
           <select
-            value={filters.statusFilter}
+            value={filters.statusFilter ?? "all"}
             onChange={(e) => onStatusFilterChange(e.target.value as FilterOptions["statusFilter"])}
           >
             <option value="all">全部状态</option>

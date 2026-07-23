@@ -952,6 +952,88 @@
   gap: 8px;
 }
 
+/* ==================== 本地 AI 安全控制 ==================== */
+
+.local-ai-control {
+  margin: 0 0 24px;
+  border-left: 3px solid var(--s-warning);
+}
+
+.local-ai-control.is-enabled {
+  border-left-color: var(--s-success);
+}
+
+.local-ai-control .switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--s-primary);
+  outline-offset: 3px;
+}
+
+.local-ai-control__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--s-border);
+}
+
+.local-ai-control__title {
+  margin: 0;
+  color: var(--s-text);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.local-ai-control__description {
+  margin: 6px 0 0;
+  color: var(--s-text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.local-ai-control__notice {
+  margin: 16px 0 0;
+}
+
+.local-ai-control__token {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.local-ai-control__token label {
+  color: var(--s-text);
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.local-ai-control__token input {
+  width: 100%;
+  padding: 11px 14px;
+  color: var(--s-text);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--s-border);
+  border-radius: var(--s-radius-sm);
+  outline: none;
+  transition: border-color var(--s-duration-fast), box-shadow var(--s-duration-fast);
+}
+
+.local-ai-control__token input:focus {
+  border-color: var(--s-border-active);
+  box-shadow: 0 0 0 3px rgba(var(--s-primary-rgb), 0.1);
+}
+
+.local-ai-control__token-help {
+  color: var(--s-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.local-ai-control__error {
+  margin: 12px 0 0;
+}
+
 /* ==================== 功能网格 ==================== */
 
 .feature-grid {

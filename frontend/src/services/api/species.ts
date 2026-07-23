@@ -101,18 +101,20 @@ export async function fetchLineageTree(params?: LineageQueryParams): Promise<Lin
     headers["If-None-Match"] = _lineageCache.etag;
   }
 
-  const response = await fetch(url, { headers });
+  const response = await http.getResponse<LineageTree>(url, {
+    acceptedStatuses: [304],
+    headers,
+  });
 
   // 304 Not Modified: 使用缓存
-  if (response.status === 304 && _lineageCache && _lineageCache.params === paramsKey) {
-    return _lineageCache.data;
-  }
-
-  if (!response.ok) {
+  if (response.status === 304) {
+    if (_lineageCache && _lineageCache.params === paramsKey) {
+      return _lineageCache.data;
+    }
     throw new Error("获取族谱数据失败");
   }
 
-  const data = await response.json();
+  const data = response.data;
   const etag = response.headers.get("ETag") || "";
 
   // 更新缓存

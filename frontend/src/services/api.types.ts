@@ -362,6 +362,8 @@ export interface ProviderConfig {
   provider_type: ProviderType;  // API 类型：openai, anthropic, google
   base_url?: string | null;
   api_key?: string | null;
+  api_key_configured?: boolean;
+  api_key_clear_requested?: boolean;
   models: string[];  // 收藏的模型列表
   disabled_models?: string[];  // 禁用的模型列表（收藏但不启用）
   selected_models?: string[] | null; // 优先使用的模型（首个视为默认）
@@ -823,6 +825,9 @@ export interface MapEnvironmentConfig {
 export interface UIConfig {
   // 1. 服务商库
   providers: Record<string, ProviderConfig>;
+
+  // 是否允许访问本机 AI 服务（默认关闭）
+  allow_local_ai_endpoints?: boolean;
   
   // 2. 全局默认设置
   default_provider_id?: string | null;
@@ -891,11 +896,13 @@ export interface UIConfig {
   ai_model?: string | null;
   ai_base_url?: string | null;
   ai_api_key?: string | null;
+  ai_api_key_configured?: boolean;
   ai_timeout?: number;
   capability_configs?: Record<string, any> | null;
   embedding_provider?: string | null;
   embedding_base_url?: string | null;
   embedding_api_key?: string | null;
+  embedding_api_key_configured?: boolean;
 }
 
 export interface PressureDraft {

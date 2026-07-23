@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { AnalysisPanel, AnalysisSection, ActionButton, StatCard, EmptyState } from "./common/AnalysisPanel";
 import { dispatchEnergyChanged } from "./EnergyBar";
+import { http, isApiError } from "@/services/api";
 
 // ==================== 类型定义 ====================
 
@@ -156,8 +157,7 @@ export function DivinePowersPanel({ onClose }: Props) {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch("/api/divine/status");
-      const data = await res.json();
+      const data = await http.get<DivineStatus>("/api/divine/status");
       setStatus(data);
     } catch (e) {
       console.error("获取神力状态失败:", e);
@@ -173,21 +173,19 @@ export function DivinePowersPanel({ onClose }: Props) {
   const handleChoosePath = async (path: string) => {
     setActionLoading(true);
     try {
-      const res = await fetch("/api/divine/path/choose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(data.message || "神格选择成功！");
-        fetchStatus();
-      } else {
-        alert(data.detail || "选择神格失败");
-      }
+      const data = await http.post<{ message?: string }>(
+        "/api/divine/path/choose",
+        { path },
+      );
+      alert(data.message || "神格选择成功！");
+      fetchStatus();
     } catch (e) {
       console.error(e);
-      alert("请求失败，请检查网络连接");
+      alert(
+        isApiError(e)
+          ? e.detail || "选择神格失败"
+          : "请求失败，请检查网络连接",
+      );
     } finally {
       setActionLoading(false);
     }
@@ -208,22 +206,20 @@ export function DivinePowersPanel({ onClose }: Props) {
     
     setActionLoading(true);
     try {
-      const res = await fetch("/api/divine/skill/use", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skill_id: skillId, target }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(data.result?.details || "技能释放成功");
-        fetchStatus();
-        dispatchEnergyChanged();
-      } else {
-        alert(data.detail || "技能释放失败");
-      }
+      const data = await http.post<{ result?: { details?: string } }>(
+        "/api/divine/skill/use",
+        { skill_id: skillId, target },
+      );
+      alert(data.result?.details || "技能释放成功");
+      fetchStatus();
+      dispatchEnergyChanged();
     } catch (e) {
       console.error(e);
-      alert("请求失败，请检查网络连接");
+      alert(
+        isApiError(e)
+          ? e.detail || "技能释放失败"
+          : "请求失败，请检查网络连接",
+      );
     } finally {
       setActionLoading(false);
     }
@@ -239,21 +235,18 @@ export function DivinePowersPanel({ onClose }: Props) {
     
     setActionLoading(true);
     try {
-      const res = await fetch("/api/divine/miracle/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ miracle_id: miracleId, target }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(data.result?.details || "神迹释放成功");
-        fetchStatus();
-        dispatchEnergyChanged();
-      } else {
-        alert(data.detail || "神迹释放失败");
-      }
+      const data = await http.post<{ result?: { details?: string } }>(
+        "/api/divine/miracle/execute",
+        { miracle_id: miracleId, target },
+      );
+      alert(data.result?.details || "神迹释放成功");
+      fetchStatus();
+      dispatchEnergyChanged();
     } catch (e) {
       console.error(e);
+      if (isApiError(e)) {
+        alert(e.detail || "神迹释放失败");
+      }
     } finally {
       setActionLoading(false);
     }
@@ -276,27 +269,27 @@ export function DivinePowersPanel({ onClose }: Props) {
 
     setActionLoading(true);
     try {
-      const res = await fetch("/api/divine/wager/place", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const data = await http.post<{
+        message: string;
+        potential_return: number;
+      }>(
+        "/api/divine/wager/place",
+        {
           wager_type: wagerType,
           target_species: target,
           bet_amount: bet,
           secondary_species: secondary,
           predicted_outcome: predicted,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(`${data.message}\n潜在回报: ${data.potential_return} 能量`);
-        fetchStatus();
-        dispatchEnergyChanged();
-      } else {
-        alert(data.detail || "下注失败");
-      }
+        },
+      );
+      alert(`${data.message}\n潜在回报: ${data.potential_return} 能量`);
+      fetchStatus();
+      dispatchEnergyChanged();
     } catch (e) {
       console.error(e);
+      if (isApiError(e)) {
+        alert(e.detail || "下注失败");
+      }
     } finally {
       setActionLoading(false);
     }
@@ -512,8 +505,10 @@ function PathTab({
   const [skills, setSkills] = useState<SkillInfo[]>([]);
 
   useEffect(() => {
-    fetch("/api/divine/skills")
-      .then((r) => r.json())
+    http
+      .get<{ skills: SkillInfo[]; current_path: string | null }>(
+        "/api/divine/skills",
+      )
       .then((data) => setSkills(data.skills || []))
       .catch(console.error);
   }, [status]);
@@ -1004,22 +999,20 @@ function FaithTab({ status, onRefresh }: { status: DivineStatus; onRefresh: () =
 
     setActionLoading(true);
     try {
-      const res = await fetch("/api/divine/faith/add", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lineage_code: code }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(data.message || "添加信徒成功");
-        onRefresh();
-        dispatchEnergyChanged();
-      } else {
-        alert(data.detail || "添加失败");
-      }
+      const data = await http.post<{ message?: string }>(
+        "/api/divine/faith/add",
+        { lineage_code: code },
+      );
+      alert(data.message || "添加信徒成功");
+      onRefresh();
+      dispatchEnergyChanged();
     } catch (e) {
       console.error(e);
-      alert("请求失败，请检查网络连接");
+      alert(
+        isApiError(e)
+          ? e.detail || "添加失败"
+          : "请求失败，请检查网络连接",
+      );
     } finally {
       setActionLoading(false);
     }
@@ -1028,22 +1021,16 @@ function FaithTab({ status, onRefresh }: { status: DivineStatus; onRefresh: () =
   const handleBless = async (code: string) => {
     setActionLoading(true);
     try {
-      const res = await fetch("/api/divine/faith/bless", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lineage_code: code }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(data.message || "显圣成功！消耗20能量");
-        onRefresh();
-        dispatchEnergyChanged();
-      } else {
-        alert(data.detail || "显圣失败");
-      }
+      const data = await http.post<{ message?: string }>(
+        "/api/divine/faith/bless",
+        { lineage_code: code },
+      );
+      alert(data.message || "显圣成功！消耗20能量");
+      onRefresh();
+      dispatchEnergyChanged();
     } catch (e) {
       console.error(e);
-      alert("请求失败");
+      alert(isApiError(e) ? e.detail || "显圣失败" : "请求失败");
     } finally {
       setActionLoading(false);
     }
@@ -1052,22 +1039,16 @@ function FaithTab({ status, onRefresh }: { status: DivineStatus; onRefresh: () =
   const handleSanctify = async (code: string) => {
     setActionLoading(true);
     try {
-      const res = await fetch("/api/divine/faith/sanctify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lineage_code: code }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(data.message || "圣化成功！消耗40能量");
-        onRefresh();
-        dispatchEnergyChanged();
-      } else {
-        alert(data.detail || "圣化失败");
-      }
+      const data = await http.post<{ message?: string }>(
+        "/api/divine/faith/sanctify",
+        { lineage_code: code },
+      );
+      alert(data.message || "圣化成功！消耗40能量");
+      onRefresh();
+      dispatchEnergyChanged();
     } catch (e) {
       console.error(e);
-      alert("请求失败");
+      alert(isApiError(e) ? e.detail || "圣化失败" : "请求失败");
     } finally {
       setActionLoading(false);
     }
@@ -1444,26 +1425,26 @@ function WagersTab({
 
   const handleCheckWager = async (wagerId: string) => {
     try {
-      const res = await fetch("/api/divine/wager/check", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wager_id: wagerId }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        if (data.status === "resolved") {
-          const result = data.success ? "成功" : "失败";
-          alert(`预言${result}！${data.reason}\n${data.success ? `获得 ${data.reward} 能量` : `损失押注能量`}`);
-          onRefresh();
-          dispatchEnergyChanged();
-        } else {
-          alert(data.message);
-        }
+      const data = await http.post<{
+        status: string;
+        success?: boolean;
+        reason?: string;
+        reward?: number;
+        message?: string;
+      }>("/api/divine/wager/check", { wager_id: wagerId });
+      if (data.status === "resolved") {
+        const result = data.success ? "成功" : "失败";
+        alert(`预言${result}！${data.reason}\n${data.success ? `获得 ${data.reward} 能量` : `损失押注能量`}`);
+        onRefresh();
+        dispatchEnergyChanged();
       } else {
-        alert(data.detail);
+        alert(data.message);
       }
     } catch (e) {
       console.error(e);
+      if (isApiError(e)) {
+        alert(e.detail);
+      }
     }
   };
 

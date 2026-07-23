@@ -72,8 +72,8 @@ class TestNicheTensorCompute:
         assert overlap_matrix[0, 1] == overlap_matrix[1, 0]  # 对称
         
         # 物种3和其他物种无重叠
-        assert overlap_matrix[0, 2] == 0.1  # 最小重叠因子
-        assert overlap_matrix[1, 2] == 0.1
+        assert overlap_matrix[0, 2] == pytest.approx(0.1, abs=1e-6)
+        assert overlap_matrix[1, 2] == pytest.approx(0.1, abs=1e-6)
         
         # 验证指标
         assert metrics.species_count == 3
@@ -498,7 +498,7 @@ class TestIntegration:
         assert shared[0, 1] >= 1  # 至少1个共享地块
         
         # 物种3与1,2无共享
-        assert niche_overlap[0, 2] == 0.1  # 最小重叠因子
+        assert niche_overlap[0, 2] == pytest.approx(0.1, abs=1e-6)
         assert shared[0, 2] == 0
 
 

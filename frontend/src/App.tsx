@@ -45,6 +45,7 @@ const ModalsLayer = lazy(() => import("./components/ModalsLayer").then(m => ({ d
 
 // API（使用模块化 API）
 import {
+  http,
   runTurn,
   saveGame,
   fetchHistory,
@@ -351,8 +352,7 @@ function GameScene() {
   useEffect(() => {
     const fetchHintsInfo = async () => {
       try {
-        const res = await fetch("/api/hints");
-        const data = await res.json();
+        const data = await http.get<{ hints?: { priority: string }[] }>("/api/hints");
         const hints = data.hints || [];
         setHintsInfo({
           count: hints.length,

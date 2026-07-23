@@ -4,6 +4,10 @@
 
 import { http } from "./base";
 
+function adminRequestConfig(adminToken: string) {
+  return { headers: { "X-Clade-Admin-Token": adminToken } };
+}
+
 /**
  * 健康检查
  */
@@ -14,15 +18,27 @@ export async function checkHealth(): Promise<{ status: string }> {
 /**
  * 重置世界
  */
-export async function resetWorld(keepSaves: boolean, keepMap: boolean): Promise<{ success: boolean }> {
-  return http.post("/api/admin/reset", { keep_saves: keepSaves, keep_map: keepMap });
+export async function resetWorld(
+  adminToken: string,
+  keepSaves: boolean,
+  keepMap: boolean
+): Promise<{ success: boolean }> {
+  return http.post(
+    "/api/admin/reset",
+    { keep_saves: keepSaves, keep_map: keepMap },
+    adminRequestConfig(adminToken)
+  );
 }
 
 /**
  * 删除数据库
  */
-export async function dropDatabase(): Promise<{ success: boolean }> {
-  return http.post("/api/admin/drop-database", { confirm: true });
+export async function dropDatabase(adminToken: string): Promise<{ success: boolean }> {
+  return http.post(
+    "/api/admin/drop-database",
+    { confirm: true },
+    adminRequestConfig(adminToken)
+  );
 }
 
 /**

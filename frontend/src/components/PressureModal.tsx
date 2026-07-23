@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useCallback, useMemo, useState, useEffect } from "react";
 import type { PressureDraft, PressureTemplate, PressureIntensityConfig } from "@/services/api.types";
 
 interface Props {
@@ -123,7 +123,7 @@ export function PressureModal({
     if (tierTemplates.length > 0 && !tierTemplates.find(t => t.kind === selectedKind)) {
       setSelectedKind(tierTemplates[0].kind);
     }
-  }, [activeTier, templates]);
+  }, [activeTier, templates, selectedKind]);
 
   // 常量
   const PRESSURE_TIER_1_LIMIT = 3;
@@ -147,7 +147,7 @@ export function PressureModal({
   );
 
   // 消耗计算
-  const getPressureCost = (kind: string, intensityVal: number) => {
+  const getPressureCost = useCallback((kind: string, intensityVal: number) => {
     if (FREE_PRESSURE_KINDS.has(kind)) return 0;
     const tpl = templates.find(t => t.kind === kind);
     const baseCost = tpl?.base_cost ?? 20;
@@ -157,10 +157,10 @@ export function PressureModal({
     else if (intensityVal > PRESSURE_TIER_1_LIMIT) multiplier = PRESSURE_TIER_2_MULT;
     
     return Math.round(baseCost * intensityVal * multiplier);
-  };
+  }, [templates, PRESSURE_TIER_1_MULT, PRESSURE_TIER_2_MULT, PRESSURE_TIER_3_MULT]);
 
-  const currentCost = useMemo(() => getPressureCost(selectedKind, intensity), [selectedKind, intensity]);
-  const totalCost = useMemo(() => pressures.reduce((sum, p) => sum + getPressureCost(p.kind, p.intensity), 0), [pressures]);
+  const currentCost = useMemo(() => getPressureCost(selectedKind, intensity), [getPressureCost, selectedKind, intensity]);
+  const totalCost = useMemo(() => pressures.reduce((sum, p) => sum + getPressureCost(p.kind, p.intensity), 0), [getPressureCost, pressures]);
 
   // 限制检查
   const limitReached = pressures.length >= 3;

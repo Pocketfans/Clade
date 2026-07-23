@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import json
@@ -6,10 +6,22 @@ import logging
 import random
 import re
 import time
-from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field, replace
+from typing import Any, AsyncGenerator, AsyncIterator, Callable
+from urllib.parse import quote, urlencode
 
-import httpx
+from ..security import (
+    AI_JSON_MAX_BYTES,
+    DeadlineBudget,
+    DeadlineExpired,
+    RETRYABLE_OUTBOUND_CODES,
+    STREAM_EVENT_MAX_BYTES,
+    STREAM_MAX_BYTES,
+    OutboundRequestError,
+    SafeRuntimeClient,
+)
+from ..security.deadline import StreamBudget
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +35,59 @@ LB_ROUND_ROBIN = "round_robin"       # 轮询
 LB_RANDOM = "random"                 # 随机
 LB_LEAST_LATENCY = "least_latency"   # 最低延迟
 
+_STREAM_RESPONSE_ERROR = "AI stream response error"
+_PRIMARY_RESPONSE_ERROR = "AI response error"
+_PUBLIC_OUTBOUND_TIMEOUT = "The upstream request timed out"
+
+
+def _ensure_deadline(
+    supplied: DeadlineBudget | None,
+    *,
+    timeout: float,
+    started_at: float,
+) -> DeadlineBudget:
+    if supplied is not None:
+        return supplied
+    try:
+        return DeadlineBudget.from_timeout(timeout, started_at=started_at)
+    except ValueError:
+        raise OutboundRequestError(
+            "outbound_url_invalid", 400, "外部服务地址无效"
+        ) from None
+
+
+def _budget_phase_timeout(budget: DeadlineBudget | StreamBudget) -> float:
+    try:
+        return budget.phase_timeout()
+    except DeadlineExpired:
+        raise OutboundRequestError(
+            "outbound_timeout", 504, _PUBLIC_OUTBOUND_TIMEOUT
+        ) from None
+
+
+def _ensure_stream_budget(
+    supplied: StreamBudget | None,
+    *,
+    idle_timeout: float,
+    started_at: float,
+) -> StreamBudget:
+    if supplied is not None:
+        return supplied
+    try:
+        return StreamBudget.from_timeouts(
+            idle_timeout,
+            hard_timeout=600.0,
+            started_at=started_at,
+        )
+    except ValueError:
+        raise OutboundRequestError(
+            "outbound_url_invalid", 400, "外部服务地址无效"
+        ) from None
+
+
+class _PrimaryResponseError(Exception):
+    pass
+
 
 @dataclass
 class ProviderPoolConfig:
@@ -35,6 +100,13 @@ class ProviderPoolConfig:
     weight: int = 1  # 权重（用于加权轮询）
 
 
+@dataclass(frozen=True)
+class _RuntimeCredentialSnapshot:
+    base_url: str | None
+    api_key: str | None
+    provider_type: str | None
+
+
 @dataclass
 class ModelConfig:
     provider: str
@@ -42,6 +114,69 @@ class ModelConfig:
     endpoint: str | None = None
     extra_body: dict[str, Any] | None = None
     provider_type: str = PROVIDER_TYPE_OPENAI  # 新增：服务商类型
+
+
+@dataclass
+class _AsyncRequestLifecycle:
+    router: "ModelRouter"
+    capability: str
+    started_at: float
+    request_id: int = field(init=False)
+    queued: bool = field(init=False, default=True)
+    active: bool = field(init=False, default=False)
+    acquired_semaphore: asyncio.Semaphore | None = field(
+        init=False, default=None
+    )
+    stats_finished: bool = field(init=False, default=False)
+
+    def __post_init__(self) -> None:
+        self.request_id = self.router._begin_request_stats(self.capability)
+        self.router._queued_requests += 1
+
+    async def acquire(self, budget: DeadlineBudget | StreamBudget) -> None:
+        self.acquired_semaphore = await self.router._acquire_with_budget(budget)
+        if self.queued:
+            self.router._queued_requests -= 1
+            self.queued = False
+        self.router._active_requests += 1
+        self.active = True
+
+    @asynccontextmanager
+    async def slot(
+        self, budget: DeadlineBudget | StreamBudget
+    ) -> AsyncIterator[None]:
+        await self.acquire(budget)
+        try:
+            yield
+        finally:
+            self.release_attempt()
+
+    def release_attempt(self) -> None:
+        if self.active:
+            self.router._active_requests -= 1
+            self.active = False
+        if self.acquired_semaphore is not None:
+            self.acquired_semaphore.release()
+            self.acquired_semaphore = None
+
+    def queue_for_retry(self) -> None:
+        if not self.queued:
+            self.router._queued_requests += 1
+            self.queued = True
+
+    def finish(self, outcome: str) -> None:
+        self.stats_finished = self.router._finish_request_stats(
+            self.capability,
+            outcome,
+            time.monotonic() - self.started_at,
+            finished=self.stats_finished,
+        )
+
+    def close(self) -> None:
+        self.release_attempt()
+        if self.queued:
+            self.router._queued_requests -= 1
+            self.queued = False
 
 
 class ModelRouter:
@@ -56,26 +191,32 @@ class ModelRouter:
         concurrency_limit: int = 50,
         max_retries: int = 2,
         use_keepalive: bool = False,  # 是否启用连接复用（高效并发模式）
+        runtime_client: SafeRuntimeClient | None = None,
+        allow_local_ai_endpoints: bool = False,
     ) -> None:
         self.routes = defaults or {}
         self.prompts: dict[str, str] = {}
-        self.api_base_url = base_url.rstrip("/") if base_url else None
-        self.api_key = api_key
+        self._runtime_credential_snapshot = _RuntimeCredentialSnapshot(
+            base_url=base_url.rstrip("/") if base_url else None,
+            api_key=api_key,
+            provider_type=None,
+        )
         self.timeout = timeout
         self.overrides: dict[str, dict[str, Any]] = {}
         self.max_retries = max(1, max_retries)
         self.use_keepalive = use_keepalive  # 连接复用开关
+        self._runtime_client = runtime_client or SafeRuntimeClient()
+        self.allow_local_ai_endpoints = allow_local_ai_endpoints
         
         # 并发控制
         self.concurrency_limit = concurrency_limit
         self._semaphore = asyncio.Semaphore(concurrency_limit)
-        self._client_session: httpx.AsyncClient | None = None
-        
         # 【诊断日志】并发追踪
         self._active_requests = 0  # 当前活跃请求数
         self._queued_requests = 0  # 当前排队请求数
         self._total_requests = 0   # 总请求数
         self._total_timeouts = 0   # 总超时数
+        self._total_cancellations = 0
         self._request_stats: dict[str, dict] = {}  # 每个 capability 的统计
         self._last_summary_time = 0  # 上次输出摘要的时间
         self._summary_interval = 10  # 摘要输出间隔（秒）
@@ -125,6 +266,12 @@ class ModelRouter:
             del self._provider_pools[capability]
             if capability in self._lb_counters:
                 del self._lb_counters[capability]
+
+    def clear_provider_pools(self) -> None:
+        """Clear all runtime load-balancing provider state."""
+        self._provider_pools.clear()
+        self._lb_counters.clear()
+        self._provider_latencies.clear()
     
     def get_provider_pools_info(self) -> dict[str, list[str]]:
         """获取所有capability的服务商池信息"""
@@ -198,9 +345,66 @@ class ModelRouter:
             "queued_requests": self._queued_requests,
             "total_requests": self._total_requests,
             "total_timeouts": self._total_timeouts,
+            "total_cancellations": self._total_cancellations,
             "timeout_rate": f"{(self._total_timeouts / max(self._total_requests, 1)) * 100:.1f}%",
             "request_stats": dict(self._request_stats),
         }
+
+    def _begin_request_stats(self, capability: str) -> int:
+        self._total_requests += 1
+        stats = self._request_stats.setdefault(
+            capability,
+            {
+                "total": 0,
+                "success": 0,
+                "timeout": 0,
+                "error": 0,
+                "cancelled": 0,
+                "avg_time": 0,
+            },
+        )
+        stats.setdefault("cancelled", 0)
+        stats["total"] += 1
+        return self._total_requests
+
+    def _finish_request_stats(
+        self,
+        capability: str,
+        outcome: str,
+        elapsed: float,
+        *,
+        finished: bool,
+    ) -> bool:
+        if finished:
+            return True
+        stats = self._request_stats[capability]
+        stats[outcome] += 1
+        if outcome == "timeout":
+            self._total_timeouts += 1
+        elif outcome == "cancelled":
+            self._total_cancellations += 1
+        elif outcome == "success":
+            stats["avg_time"] = (
+                stats["avg_time"] * (stats["success"] - 1) + elapsed
+            ) / stats["success"]
+        return True
+
+    async def _acquire_with_budget(
+        self, budget: DeadlineBudget | StreamBudget
+    ) -> asyncio.Semaphore:
+        semaphore = self._semaphore
+        try:
+            queue_timeout = _budget_phase_timeout(budget)
+            await asyncio.wait_for(
+                semaphore.acquire(), timeout=queue_timeout
+            )
+        except OutboundRequestError:
+            raise
+        except (TimeoutError, asyncio.TimeoutError):
+            raise OutboundRequestError(
+                "outbound_timeout", 504, _PUBLIC_OUTBOUND_TIMEOUT
+            ) from None
+        return semaphore
     
     def _log_diagnostics(self, event: str, capability: str, extra: str = ""):
         """输出诊断日志到终端（更清晰的格式）"""
@@ -279,55 +483,68 @@ class ModelRouter:
     def configure_overrides(self, overrides: dict[str, dict[str, Any]]) -> None:
         self.overrides = overrides or {}
 
+    @property
+    def api_base_url(self) -> str | None:
+        return self._runtime_credential_snapshot.base_url
+
+    @api_base_url.setter
+    def api_base_url(self, value: str | None) -> None:
+        self._runtime_credential_snapshot = replace(
+            self._runtime_credential_snapshot,
+            base_url=value,
+        )
+
+    @property
+    def api_key(self) -> str | None:
+        return self._runtime_credential_snapshot.api_key
+
+    @api_key.setter
+    def api_key(self, value: str | None) -> None:
+        self._runtime_credential_snapshot = replace(
+            self._runtime_credential_snapshot,
+            api_key=value,
+        )
+
+    def configure_runtime_credentials(
+        self,
+        *,
+        base_url: str | None,
+        api_key: str | None,
+        provider_type: str | None,
+    ) -> None:
+        """Atomically publish one complete runtime credential tuple."""
+        self._runtime_credential_snapshot = _RuntimeCredentialSnapshot(
+            base_url=base_url,
+            api_key=api_key,
+            provider_type=provider_type,
+        )
+
+    def _select_runtime_credentials(
+        self,
+        override: dict[str, Any],
+        fallback_provider_type: str,
+    ) -> _RuntimeCredentialSnapshot:
+        if any(
+            field_name in override
+            for field_name in ("base_url", "api_key", "provider_type")
+        ):
+            return _RuntimeCredentialSnapshot(
+                base_url=override.get("base_url"),
+                api_key=override.get("api_key"),
+                provider_type=override.get("provider_type"),
+            )
+
+        snapshot = self._runtime_credential_snapshot
+        if snapshot.provider_type is None:
+            return replace(snapshot, provider_type=fallback_provider_type)
+        return snapshot
+
     def capabilities(self) -> list[str]:
         return list(self.routes.keys())
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Lazy init async client"""
-        if self._client_session is None or self._client_session.is_closed:
-            if self.use_keepalive:
-                # 高效并发模式：启用连接复用
-                # 适用于稳定的 API 服务（如 OpenAI 官方）
-                limits = httpx.Limits(
-                    max_keepalive_connections=self.concurrency_limit,
-                    max_connections=self.concurrency_limit + 10
-                )
-                self._client_session = httpx.AsyncClient(
-                    timeout=self.timeout, 
-                    limits=limits,
-                )
-                logger.info("[ModelRouter] 客户端使用高效并发模式（keep-alive 启用）")
-            else:
-                # 安全模式：禁用连接复用，避免某些 API 服务的连接卡住问题
-                # 适用于硅基流动等第三方 API
-                limits = httpx.Limits(
-                    max_keepalive_connections=0,  # 禁用 keep-alive
-                    max_connections=self.concurrency_limit + 10
-                )
-                self._client_session = httpx.AsyncClient(
-                    timeout=self.timeout, 
-                    limits=limits,
-                    http2=False,  # 禁用 HTTP/2
-                )
-                logger.debug("[ModelRouter] 客户端使用安全模式（keep-alive 禁用）")
-        return self._client_session
-
     async def reset_client(self):
-        """强制重置客户端会话"""
-        old_client = self._client_session
-        self._client_session = None  # 先置空，防止其他协程使用
-        
-        if old_client and not old_client.is_closed:
-            try:
-                await old_client.aclose()
-                logger.info("[ModelRouter] Client session closed successfully")
-            except Exception as e:
-                logger.warning(f"[ModelRouter] Error closing client: {e}")
-        
-        # 重置计数器，防止卡住
-        self._active_requests = 0
-        self._queued_requests = 0
-        logger.info("[ModelRouter] Client session reset, counters cleared")
+        """Compatibility no-op; safe requests own and close their clients."""
+        return None
 
     def _prepare_request(
         self, capability: str, payload: dict[str, Any], use_format_placeholder: bool = True
@@ -351,16 +568,20 @@ class ModelRouter:
             provider_type = lb_provider.provider_type
             model_name = lb_provider.model or override.get("model") or config.model
         else:
-            base_url = (override.get("base_url") or self.api_base_url)
-            api_key = override.get("api_key") or self.api_key
-            provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
+            credentials = self._select_runtime_credentials(
+                override,
+                getattr(config, "provider_type", PROVIDER_TYPE_OPENAI),
+            )
+            base_url = credentials.base_url
+            api_key = credentials.api_key
+            provider_type = credentials.provider_type
             model_name = override.get("model") or config.model
         
         timeout = override.get("timeout") or self.timeout
         extra_body = override.get("extra_body") or config.extra_body
         
         # 判断是否有有效的 API 凭据（来自 override 或全局配置）
-        has_valid_credentials = bool(base_url and api_key)
+        has_valid_credentials = bool(base_url and api_key and provider_type)
         
         # 如果 override 中有有效凭据，即使初始 provider 是 "local" 也应该使用 AI
         # 这允许用户通过设置默认服务商来覆盖 local 模式
@@ -388,12 +609,10 @@ class ModelRouter:
             }
         
         user_content = json.dumps(payload, ensure_ascii=False, indent=2)
-        base_url_stripped = base_url.rstrip('/')
         
         # 根据服务商类型构建请求
         if provider_type == PROVIDER_TYPE_ANTHROPIC:
             # Claude 原生 API
-            url = f"{base_url_stripped}/messages"
             body = {
                 "model": model_name,
                 "max_tokens": extra_body.get("max_tokens", 4096) if extra_body else 4096,
@@ -410,7 +629,6 @@ class ModelRouter:
             }
         elif provider_type == PROVIDER_TYPE_GOOGLE:
             # Gemini 原生 API
-            url = f"{base_url_stripped}/models/{model_name}:generateContent?key={api_key}"
             contents = [{"role": "user", "parts": [{"text": user_content}]}]
             body: dict[str, Any] = {"contents": contents}
             
@@ -435,12 +653,6 @@ class ModelRouter:
             headers = {"Content-Type": "application/json"}
         else:
             # OpenAI 兼容格式（默认）
-            endpoint = config.endpoint or "/chat/completions"
-            # 智能处理 endpoint 路径 - 检查是否已有 API 版本
-            if not self._has_api_version_suffix(base_url_stripped) and endpoint == "/chat/completions":
-                endpoint = "/v1/chat/completions"
-            url = f"{base_url_stripped}{endpoint}"
-            
             body = {
                 "model": model_name,
                 "messages": [
@@ -451,10 +663,22 @@ class ModelRouter:
             if extra_body:
                 body.update(extra_body)
             headers = {"Authorization": f"Bearer {api_key}"}
-            
+
+        request_base_url, request_target = self._provider_request_location(
+            provider_type,
+            base_url,
+            model_name,
+            config.endpoint,
+            api_key=api_key,
+            stream=False,
+        )
+
         return {
             "is_local": False,
-            "url": url,
+            "base_url": request_base_url,
+            "request_target": request_target,
+            "api_key": api_key,
+            "endpoint": config.endpoint,
             "body": body,
             "headers": headers,
             "timeout": timeout,
@@ -468,166 +692,258 @@ class ModelRouter:
             }
         }
 
-    def invoke(self, capability: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _provider_request_location(
+        self, provider_type, base_url, model_name, endpoint, *, api_key: str, stream
+    ) -> tuple[str, str]:
+        base_url_stripped = base_url.rstrip("/")
+
+        if provider_type == PROVIDER_TYPE_ANTHROPIC:
+            return base_url_stripped, "/messages"
+
+        if provider_type == PROVIDER_TYPE_GOOGLE:
+            action = "streamGenerateContent" if stream else "generateContent"
+            request_target = (
+                f"/models/{quote(str(model_name), safe='')}:{action}?"
+                f"{urlencode({'key': api_key})}"
+            )
+            return base_url_stripped, request_target
+
+        request_target = endpoint or "/chat/completions"
+        if (
+            request_target == "/chat/completions"
+            and not self._has_api_version_suffix(base_url_stripped)
+        ):
+            request_target = "/v1/chat/completions"
+        return base_url_stripped, request_target
+
+    def invoke(
+        self,
+        capability: str,
+        payload: dict[str, Any],
+        *,
+        budget: DeadlineBudget | None = None,
+    ) -> dict[str, Any]:
         """Sync invocation (blocking)"""
+        started_at = time.monotonic()
+        allow_local = self.allow_local_ai_endpoints
         req = self._prepare_request(capability, payload)
         if req["is_local"]:
             logger.debug(f"[ModelRouter] Local mode: {req['result']}")
             return req["result"]
-            
+
+        self._begin_request_stats(capability)
+        stats_finished = False
         try:
-            logger.debug(f"[ModelRouter] Sync invoke {capability} (provider={req['meta']['provider']})")
-            response = httpx.post(
-                req["url"],
-                json=req["body"],
-                headers=req["headers"],
-                timeout=req["timeout"],
+            effective_budget = _ensure_deadline(
+                budget, timeout=req["timeout"], started_at=started_at
             )
-            response.raise_for_status()
-            data = response.json()
-            content = self._extract_content(data, req.get("provider_type", PROVIDER_TYPE_OPENAI))
+            _budget_phase_timeout(effective_budget)
+            logger.debug(f"[ModelRouter] Sync invoke {capability} (provider={req['meta']['provider']})")
+            data = self._runtime_client.post_json(
+                req["base_url"],
+                request_target=req["request_target"],
+                headers=req["headers"],
+                json_body=req["body"],
+                allow_local=allow_local,
+                budget=effective_budget,
+                max_bytes=AI_JSON_MAX_BYTES,
+            )
+            content = self._extract_primary_content(
+                data, req.get("provider_type", PROVIDER_TYPE_OPENAI)
+            )
             parsed_content = self._parse_content(content)
-            
+            _budget_phase_timeout(effective_budget)
+        except _PrimaryResponseError:
+            stats_finished = self._finish_request_stats(
+                capability,
+                "error",
+                time.monotonic() - started_at,
+                finished=stats_finished,
+            )
+            logger.warning(
+                "[ModelRouter] Sync invoke invalid response %s code=invalid_response_shape",
+                capability,
+            )
+            return {
+                **req["meta"],
+                "error": _PRIMARY_RESPONSE_ERROR,
+            }
+        except OutboundRequestError as exc:
+            stats_finished = self._finish_request_stats(
+                capability,
+                "timeout" if exc.code == "outbound_timeout" else "error",
+                time.monotonic() - started_at,
+                finished=stats_finished,
+            )
+            logger.warning(
+                "[ModelRouter] Sync invoke failed %s code=%s",
+                capability,
+                exc.code,
+            )
+            return {
+                **req["meta"],
+                "error": exc.public_message,
+            }
+        else:
+            self._finish_request_stats(
+                capability,
+                "success",
+                time.monotonic() - started_at,
+                finished=stats_finished,
+            )
             return {
                 **req["meta"],
                 "content": parsed_content,
                 "raw": data,
             }
-        except httpx.HTTPError as exc:
-            return {
-                **req["meta"],
-                "error": str(exc),
-            }
 
-    async def ainvoke(self, capability: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Async invocation (non-blocking) with semaphore"""
+    async def ainvoke(
+        self,
+        capability: str,
+        payload: dict[str, Any],
+        *,
+        budget: DeadlineBudget | None = None,
+    ) -> dict[str, Any]:
+        """Async invocation (non-blocking) with semaphore."""
+        started_at = time.monotonic()
+        allow_local = self.allow_local_ai_endpoints
         req = self._prepare_request(capability, payload)
         if req["is_local"]:
             return req["result"]
 
-        # 【诊断】记录请求开始
-        self._total_requests += 1
-        self._queued_requests += 1
-        request_id = self._total_requests
-        queue_start = time.time()
-        
-        # 初始化 capability 统计
-        if capability not in self._request_stats:
-            self._request_stats[capability] = {"total": 0, "success": 0, "timeout": 0, "error": 0, "avg_time": 0}
-        self._request_stats[capability]["total"] += 1
-        
+        try:
+            effective_budget = _ensure_deadline(
+                budget, timeout=req["timeout"], started_at=started_at
+            )
+        except OutboundRequestError as exc:
+            return {**req["meta"], "error": exc.public_message}
+
+        lifecycle = _AsyncRequestLifecycle(self, capability, started_at)
+        request_id = lifecycle.request_id
+        queue_start = time.monotonic()
         self._log_diagnostics("排队", capability, f"请求#{request_id}")
 
-        last_error = "unknown error"
-        for attempt in range(self.max_retries):
-            async with self._semaphore:
-                # 【诊断】获取到信号量，开始处理
-                queue_time = time.time() - queue_start
-                self._queued_requests -= 1
-                self._active_requests += 1
-                process_start = time.time()
-                
-                self._log_diagnostics("开始处理", capability, f"请求#{request_id} 排队耗时:{queue_time:.2f}s 尝试:{attempt + 1}/{self.max_retries}")
-                
+        last_error = "AI request failed"
+        final_outcome = "error"
+        try:
+            for attempt in range(self.max_retries):
+                process_start = time.monotonic()
                 try:
+                    await lifecycle.acquire(effective_budget)
+                    queue_time = time.monotonic() - queue_start
+
+                    self._log_diagnostics(
+                        "开始处理",
+                        capability,
+                        (
+                            f"请求#{request_id} 排队耗时:{queue_time:.2f}s "
+                            f"尝试:{attempt + 1}/{self.max_retries}"
+                        ),
+                    )
                     timeout = req.get("timeout") or self.timeout
                     headers = {**req["headers"], "Connection": "close"}
-                    provider_type = req.get("provider_type", PROVIDER_TYPE_OPENAI)
-                    
-                    # 【调试】打印请求 URL（隐藏 API key）
-                    debug_url = req["url"].split("?")[0] if "?" in req["url"] else req["url"]
-                    logger.debug(f"[ModelRouter] 请求: {debug_url} (type={provider_type})")
-                    
-                    # 【核心修复】每次请求使用独立的临时客户端
-                    # 避免共享连接池导致的各种卡住问题
-                    async with httpx.AsyncClient(timeout=timeout, http2=False) as client:
-                        response = await client.post(
-                            req["url"],
-                            json=req["body"],
-                            headers=headers,
-                        )
-                        response.raise_for_status()
-                        data = response.json()
-                    
-                    # 【调试】打印响应状态
-                    logger.debug(f"[ModelRouter] 响应状态: {response.status_code}, 数据keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
-                    
-                    # 根据服务商类型解析响应
-                    content = self._extract_content(data, provider_type)
+                    provider_type = req.get(
+                        "provider_type", PROVIDER_TYPE_OPENAI
+                    )
+                    _budget_phase_timeout(effective_budget)
+                    provider_call_start = time.monotonic()
+                    data = await self._runtime_client.apost_json(
+                        req["base_url"],
+                        request_target=req["request_target"],
+                        headers=headers,
+                        json_body=req["body"],
+                        allow_local=allow_local,
+                        budget=effective_budget,
+                        max_bytes=AI_JSON_MAX_BYTES,
+                    )
+                    provider_latency = time.monotonic() - provider_call_start
+                    content = self._extract_primary_content(data, provider_type)
                     parsed_content = self._parse_content(content)
-                    
-                    # 【诊断】请求成功
-                    process_time = time.time() - process_start
-                    self._active_requests -= 1
-                    self._request_stats[capability]["success"] += 1
-                    # 更新平均时间
-                    stats = self._request_stats[capability]
-                    stats["avg_time"] = (stats["avg_time"] * (stats["success"] - 1) + process_time) / stats["success"]
-                    
-                    # 【负载均衡】记录服务商延迟
+                    _budget_phase_timeout(effective_budget)
+                except _PrimaryResponseError:
+                    lifecycle.finish("error")
+                    logger.warning(
+                        "[ModelRouter] Async invoke invalid response %s code=invalid_response_shape",
+                        capability,
+                    )
+                    return {**req["meta"], "error": _PRIMARY_RESPONSE_ERROR}
+                except OutboundRequestError as exc:
+                    last_error = exc.public_message
+                    final_outcome = (
+                        "timeout" if exc.code == "outbound_timeout" else "error"
+                    )
+                    process_time = time.monotonic() - process_start
+                    logger.warning(
+                        "[ModelRouter] Async invoke failed %s attempt=%s/%s code=%s duration=%.2fs",
+                        capability,
+                        attempt + 1,
+                        self.max_retries,
+                        exc.code,
+                        process_time,
+                    )
+                    if exc.code not in RETRYABLE_OUTBOUND_CODES:
+                        lifecycle.finish(final_outcome)
+                        return {**req["meta"], "error": exc.public_message}
+                except asyncio.CancelledError:
+                    lifecycle.finish("cancelled")
+                    raise
+                except Exception as exc:
+                    lifecycle.finish("error")
+                    self._log_diagnostics(
+                        "❌ 异常",
+                        capability,
+                        f"请求#{request_id} type={type(exc).__name__}",
+                    )
+                    return {**req["meta"], "error": "AI request failed"}
+                else:
+                    process_time = time.monotonic() - process_start
+                    lifecycle.finish("success")
                     lb_provider_id = req.get("lb_provider_id")
                     if lb_provider_id:
-                        self._record_provider_latency(lb_provider_id, process_time)
-                    
-                    self._log_diagnostics("✅ 成功", capability, f"请求#{request_id} 处理耗时:{process_time:.2f}s")
-                    
+                        self._record_provider_latency(
+                            lb_provider_id, provider_latency
+                        )
+                    self._log_diagnostics(
+                        "✅ 成功",
+                        capability,
+                        f"请求#{request_id} 处理耗时:{process_time:.2f}s",
+                    )
                     return {
                         **req["meta"],
                         "content": parsed_content,
                         "raw": data,
                     }
-                except httpx.TimeoutException as te:
-                    # 超时处理 - httpx原生超时会正确释放连接
-                    last_error = f"timeout after {timeout}s"
-                    self._total_timeouts += 1
-                    self._request_stats[capability]["timeout"] += 1
-                    process_time = time.time() - process_start
-                    total_wait = time.time() - queue_start
-                    
-                    # 详细的超时日志
-                    logger.error("=" * 60)
-                    logger.error(f"⏱️  请求超时详情 - {capability}")
-                    logger.error(f"   请求ID: #{request_id} | 尝试: {attempt + 1}/{self.max_retries}")
-                    logger.error(f"   超时设置: {timeout}s | 实际等待: {process_time:.1f}s | 总耗时: {total_wait:.1f}s")
-                    logger.error(f"   超时类型: {type(te).__name__}")
-                    logger.error(f"   当前状态: 活跃={self._active_requests} 排队={self._queued_requests} 超时率={self._total_timeouts}/{self._total_requests}")
-                    if self._active_requests >= self.concurrency_limit:
-                        logger.error(f"   ⚠️ 并发已满！可能是请求太多或API响应太慢")
-                    logger.error("=" * 60)
-                    
-                    self._active_requests -= 1
-                    self._log_diagnostics("⏱️ 超时", capability, f"请求#{request_id}")
-                    
-                    # 【修复】连续多次超时后重置客户端，清理可能的问题连接
-                    if attempt == self.max_retries - 1 and self._total_timeouts > 3:
-                        logger.warning(f"[ModelRouter] 连续超时次数过多({self._total_timeouts})，重置客户端连接")
-                        asyncio.create_task(self.reset_client())
-                        
-                except httpx.HTTPError as exc:
-                    last_error = str(exc)
-                    self._active_requests -= 1
-                    self._request_stats[capability]["error"] += 1
-                    self._log_diagnostics("❌ HTTP错误", capability, f"请求#{request_id} {exc}")
-                except Exception as e:
-                    last_error = str(e)
-                    self._active_requests -= 1
-                    self._request_stats[capability]["error"] += 1
-                    self._log_diagnostics("❌ 异常", capability, f"请求#{request_id} {e}")
-                    
-            if attempt < self.max_retries - 1:
-                self._queued_requests += 1  # 重试时重新排队
-                # 【优化】429 Rate Limit 需要更长的退避时间
-                sleep_time = min(2.0, 0.5 * (attempt + 1))
-                if "429" in last_error:
-                    sleep_time = 2.0 * (attempt + 1) # 2s, 4s, 6s...
-                    logger.warning(f"[ModelRouter] 触发429限流，等待 {sleep_time}s 后重试...")
-                
-                await asyncio.sleep(sleep_time)
-        
-        return {
-            **req["meta"],
-            "error": f"{last_error} (after {self.max_retries} attempts)",
-        }
+                finally:
+                    lifecycle.release_attempt()
+
+                if attempt < self.max_retries - 1:
+                    lifecycle.queue_for_retry()
+                    sleep_time = min(2.0, 0.5 * (attempt + 1))
+                    try:
+                        backoff_timeout = effective_budget.phase_timeout()
+                        await asyncio.wait_for(
+                            asyncio.sleep(sleep_time), timeout=backoff_timeout
+                        )
+                    except asyncio.CancelledError:
+                        lifecycle.finish("cancelled")
+                        raise
+                    except (DeadlineExpired, TimeoutError, asyncio.TimeoutError):
+                        last_error = _PUBLIC_OUTBOUND_TIMEOUT
+                        final_outcome = "timeout"
+                        break
+
+            lifecycle.finish(final_outcome)
+            if effective_budget.remaining() <= 0:
+                return {**req["meta"], "error": last_error}
+            return {
+                **req["meta"],
+                "error": f"{last_error} (after {self.max_retries} attempts)",
+            }
+        except asyncio.CancelledError:
+            lifecycle.finish("cancelled")
+            raise
+        finally:
+            lifecycle.close()
 
     def _stream_status_event(self, capability: str, state: str, **extra) -> dict[str, Any]:
         event = {
@@ -639,232 +955,444 @@ class ModelRouter:
         event.update(extra)
         return event
 
-    def _stream_error_event(self, capability: str, message: str) -> dict[str, Any]:
-        return {
+    def _stream_error_event(
+        self, capability: str, message: str, **extra: Any
+    ) -> dict[str, Any]:
+        event = {
             "type": "error",
             "message": message,
             "capability": capability,
             "timestamp": time.time(),
         }
+        event.update(extra)
+        return event
 
-    async def astream(self, capability: str, payload: dict[str, Any]) -> AsyncGenerator[Any, None]:
+    @staticmethod
+    def _finish_stream_event(
+        lifecycle: _AsyncRequestLifecycle, event: Any
+    ) -> None:
+        if not isinstance(event, dict):
+            return
+        if event.get("type") == "status":
+            state = event.get("state")
+            if state == "completed":
+                lifecycle.finish("success")
+            elif state == "interrupted":
+                lifecycle.finish("timeout")
+        elif event.get("type") == "error":
+            lifecycle.finish(
+                "timeout" if event.get("code") == "outbound_timeout" else "error"
+            )
+
+    async def _publish_stream_events(
+        self,
+        capability: str,
+        source: AsyncIterator[Any],
+        *,
+        budget: StreamBudget,
+        lifecycle: _AsyncRequestLifecycle,
+    ) -> AsyncGenerator[Any, None]:
+        iterator = source.__aiter__()
+        primary_cancel: asyncio.CancelledError | None = None
+        generator_closing = False
+        try:
+            while True:
+                try:
+                    event = await iterator.__anext__()
+                except StopAsyncIteration:
+                    return
+                self._finish_stream_event(lifecycle, event)
+                yield event
+        except asyncio.CancelledError as exc:
+            primary_cancel = exc
+            lifecycle.finish("cancelled")
+            raise
+        except GeneratorExit:
+            generator_closing = True
+            lifecycle.finish("cancelled")
+            raise
+        except OutboundRequestError as exc:
+            lifecycle.finish(
+                "timeout" if exc.code == "outbound_timeout" else "error"
+            )
+            if exc.code == "outbound_timeout" and budget.content_started:
+                yield self._stream_status_event(
+                    capability,
+                    "interrupted",
+                    reason=exc.code,
+                    partial=True,
+                )
+            else:
+                yield self._stream_error_event(
+                    capability, exc.public_message, code=exc.code
+                )
+            return
+        except Exception:
+            lifecycle.finish("error")
+            yield self._stream_error_event(capability, _STREAM_RESPONSE_ERROR)
+            return
+        finally:
+            if not lifecycle.stats_finished:
+                lifecycle.finish("cancelled")
+            try:
+                await iterator.aclose()
+            except asyncio.CancelledError:
+                if primary_cancel is None and not generator_closing:
+                    raise
+            except OutboundRequestError as exc:
+                logger.warning(
+                    "[ModelRouter] Stream source close failed %s code=%s",
+                    capability,
+                    exc.code,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[ModelRouter] Stream source close failed %s type=%s",
+                    capability,
+                    type(exc).__name__,
+                )
+            finally:
+                lifecycle.close()
+
+    async def astream(
+        self,
+        capability: str,
+        payload: dict[str, Any],
+        *,
+        budget: StreamBudget | None = None,
+    ) -> AsyncGenerator[Any, None]:
+        """Async streaming invocation with one logical budget and outcome."""
+        started_at = time.monotonic()
+        override = self.overrides.get(capability, {})
+        effective_budget = _ensure_stream_budget(
+            budget,
+            idle_timeout=override.get("timeout") or self.timeout,
+            started_at=started_at,
+        )
+        lifecycle = _AsyncRequestLifecycle(self, capability, started_at)
+        source = self._astream_impl(
+            capability,
+            payload,
+            budget=effective_budget,
+            lifecycle=lifecycle,
+        )
+        publisher = self._publish_stream_events(
+            capability,
+            source,
+            budget=effective_budget,
+            lifecycle=lifecycle,
+        )
+        try:
+            async for event in publisher:
+                yield event
+        finally:
+            await publisher.aclose()
+
+    async def _astream_impl(
+        self,
+        capability: str,
+        payload: dict[str, Any],
+        *,
+        budget: StreamBudget,
+        lifecycle: _AsyncRequestLifecycle,
+    ) -> AsyncGenerator[Any, None]:
         """Async streaming invocation. Yields status/error dicts and plain chunks."""
+        allow_local = self.allow_local_ai_endpoints
         req = self._prepare_request(capability, payload)
         if req["is_local"]:
             yield self._stream_error_event(capability, "Streaming not supported for local provider")
             return
 
         provider_type = req.get("provider_type", PROVIDER_TYPE_OPENAI)
-        
-        # 【修复】针对不同服务商调整流式参数
-        if provider_type == PROVIDER_TYPE_GOOGLE:
-            # Gemini: 切换 endpoint，不需要 stream=True 参数
-            req["url"] = req["url"].replace(":generateContent", ":streamGenerateContent")
-            logger.info(f"[ModelRouter] Gemini Stream URL: {req['url'].split('?')[0]}")
-        else:
-            # OpenAI/Anthropic: 需要 stream=True 参数
+        stream_base_url, stream_request_target = self._provider_request_location(
+            provider_type,
+            req["base_url"],
+            req["meta"]["model"],
+            req["endpoint"],
+            api_key=req["api_key"],
+            stream=True,
+        )
+        if provider_type != PROVIDER_TYPE_GOOGLE:
             req["body"]["stream"] = True
 
         yield self._stream_status_event(capability, "connecting")
 
-        async with self._semaphore:
-            logger.info(f"[ModelRouter] Async stream {capability} start (type={provider_type})")
-            timeout = req.get("timeout") or self.timeout
+        async with lifecycle.slot(budget):
+            logger.info(
+                "[ModelRouter] Async stream %s start (type=%s)",
+                capability,
+                provider_type,
+            )
             headers = {**req["headers"], "Connection": "close"}
-            
+            iterator: Any = None
+            primary_cancel: asyncio.CancelledError | None = None
+
             try:
-                # 【核心修复】使用临时客户端，避免共享连接池卡住
-                async with httpx.AsyncClient(timeout=timeout + 30, http2=False) as client:
-                    async with client.stream(
-                        "POST",
-                        req["url"],
-                        json=req["body"],
-                        headers=headers,
-                    ) as response:
-                        try:
-                            response.raise_for_status()
-                        except httpx.HTTPStatusError as e:
-                            # 尝试读取错误响应体
+                lines = self._runtime_client.astream_lines(
+                    stream_base_url,
+                    request_target=stream_request_target,
+                    headers=headers,
+                    json_body=req["body"],
+                    allow_local=allow_local,
+                    budget=budget,
+                    max_bytes=STREAM_MAX_BYTES,
+                    max_event_bytes=STREAM_EVENT_MAX_BYTES,
+                )
+                iterator = lines.__aiter__()
+                try:
+                    first_line = await iterator.__anext__()
+                except StopAsyncIteration:
+                    yield self._stream_status_event(capability, "connected")
+                    _budget_phase_timeout(budget)
+                    yield self._stream_status_event(capability, "completed")
+                    return
+
+                yield self._stream_status_event(capability, "connected")
+                first_chunk = True
+
+                async def incoming_lines() -> AsyncGenerator[str, None]:
+                    yield first_line
+                    async for next_line in iterator:
+                        yield next_line
+
+                def protocol_error(code: str, value: Any = None) -> None:
+                    logger.warning(
+                        "[ModelRouter] Stream protocol error %s provider=%s code=%s value_type=%s",
+                        capability,
+                        provider_type,
+                        code,
+                        type(value).__name__ if value is not None else "none",
+                    )
+
+                if provider_type == PROVIDER_TYPE_GOOGLE:
+                    decoder = json.JSONDecoder()
+                    buffer = ""
+                    async for line in incoming_lines():
+                        if not line:
+                            continue
+                        buffer += line
+                        while True:
+                            buffer = buffer.lstrip()
+                            while buffer.startswith("[") or buffer.startswith(","):
+                                buffer = buffer[1:].lstrip()
+                            if buffer.startswith("]"):
+                                buffer = buffer[1:].lstrip()
+                                continue
+                            if not buffer:
+                                break
                             try:
-                                error_body = await response.aread()
-                                logger.error(f"[ModelRouter] Stream HTTP error body: {error_body.decode('utf-8', errors='ignore')[:500]}")
-                            except:
-                                pass
-                            raise
-                            
-                        yield self._stream_status_event(capability, "connected")
-                        first_chunk = True
-                        
-                        # Gemini 解析逻辑
-                        if provider_type == PROVIDER_TYPE_GOOGLE:
-                            buffer = ""
-                            async for line in response.aiter_lines():
-                                if not line:
-                                    continue
-                                buffer += line
-                                
-                                # 尝试处理缓冲区
-                                while True:
-                                    buffer = buffer.strip()
-                                    # 移除根级数组标记
-                                    if buffer.startswith("["): buffer = buffer[1:].strip()
-                                    if buffer.startswith(","): buffer = buffer[1:].strip()
-                                    
-                                    if not buffer:
-                                        break
-                                        
-                                    # 使用正则分割对象 (查找 `},` 模式)
-                                    # 模式：`}` 后跟可选空白，然后是逗号，然后是可选空白，然后是 `{`
-                                    # 使用 lookbehind/lookahead 保留大括号
-                                    import re
-                                    parts = re.split(r'(?<=\})\s*,\s*(?=\{)', buffer)
-                                    
-                                    processed_count = 0
-                                    
-                                    for i, part in enumerate(parts):
-                                        is_last = (i == len(parts) - 1)
-                                        candidate = part.strip()
-                                        
-                                        # 如果是最后一部分，尝试移除末尾的 `]` (根数组结束符)
-                                        if is_last and candidate.endswith("]"):
-                                            candidate = candidate[:-1].strip()
-                                            
-                                        try:
-                                            chunk = json.loads(candidate)
-                                            
-                                            # --- 处理单个 Chunk ---
-                                            if "error" in chunk:
-                                                yield self._stream_error_event(capability, str(chunk["error"]))
-                                                # 遇到错误通常意味着流结束或中断
-                                                return
-                                            
-                                            candidates_list = chunk.get("candidates", [])
-                                            for candidate_obj in candidates_list:
-                                                content_obj = candidate_obj.get("content", {})
-                                                content_parts = content_obj.get("parts", [])
-                                                for p in content_parts:
-                                                    text = p.get("text", "")
-                                                    if text:
-                                                        if first_chunk:
-                                                            yield self._stream_status_event(capability, "receiving")
-                                                            first_chunk = False
-                                                        yield text
-                                            
-                                            if chunk.get("finishReason") == "STOP" or chunk.get("finish_reason") == "STOP":
-                                                pass # 正常结束
-                                            # ---------------------
-                                            
-                                            processed_count += 1
-                                            
-                                        except json.JSONDecodeError:
-                                            # 解析失败
-                                            if is_last:
-                                                # 最后一部分如果不完整，保留在buffer中等待更多数据
-                                                # 注意：这里我们需要保留原始的 part (包含可能的末尾 `]`)
-                                                # 因为如果它真的是不完整的，下次拼接后可能才是完整 JSON
-                                                buffer = part
-                                            else:
-                                                logger.warning(f"[ModelRouter] Gemini 中间分块解析失败: {candidate[:50]}...")
-                                                # 中间部分解析失败通常是致命的，但我们尝试继续
-                                    
-                                    # 缓冲区管理
-                                    if processed_count == len(parts):
-                                        buffer = "" # 全部成功处理
-                                        break # 退出 while，读取下一行
-                                    elif processed_count > 0:
-                                        # 处理了部分，最后一部分保留在 buffer 中
-                                        # while 循环会再次尝试（但通常应该 break 等待更多数据）
-                                        break 
-                                    else:
-                                        # 一个都没处理成功（通常是因为只有一个不完整的部分）
-                                        break
-                                        
-                        # Anthropic 解析逻辑
-                        elif provider_type == PROVIDER_TYPE_ANTHROPIC:
-                            async for line in response.aiter_lines():
-                                if not line.startswith("data:"):
-                                    continue
-                                    
-                                # 移除可能的空格
-                                data = line[5:].strip()
-                                if not data or data == "[DONE]":
-                                    break
-                                    
-                                try:
-                                    event = json.loads(data)
-                                    
-                                    # 处理错误消息
-                                    if event.get("type") == "error":
-                                        error_msg = event.get("error", {}).get("message", "Unknown error")
-                                        yield self._stream_error_event(capability, error_msg)
-                                        break
-                                        
-                                    if event.get("type") == "content_block_delta":
-                                        delta = event.get("delta", {})
-                                        text = delta.get("text", "")
+                                chunk, consumed = decoder.raw_decode(buffer)
+                            except json.JSONDecodeError:
+                                break
+                            buffer = buffer[consumed:]
+                            if not isinstance(chunk, dict):
+                                protocol_error("invalid_chunk_type", chunk)
+                                yield self._stream_error_event(
+                                    capability, _STREAM_RESPONSE_ERROR
+                                )
+                                return
+                            if "error" in chunk:
+                                protocol_error("upstream_error", chunk["error"])
+                                yield self._stream_error_event(
+                                    capability, _STREAM_RESPONSE_ERROR
+                                )
+                                return
+                            try:
+                                candidates = chunk.get("candidates", [])
+                                if not isinstance(candidates, list):
+                                    raise TypeError
+                                for candidate in candidates:
+                                    content_obj = candidate.get("content", {})
+                                    content_parts = content_obj.get("parts", [])
+                                    for part in content_parts:
+                                        text = part.get("text", "")
+                                        if not isinstance(text, str):
+                                            raise TypeError
                                         if text:
+                                            _budget_phase_timeout(budget)
+                                            budget.mark_content()
                                             if first_chunk:
-                                                yield self._stream_status_event(capability, "receiving")
+                                                yield self._stream_status_event(
+                                                    capability, "receiving"
+                                                )
                                                 first_chunk = False
                                             yield text
-                                except json.JSONDecodeError:
-                                    continue
+                            except (AttributeError, TypeError):
+                                protocol_error("invalid_chunk_shape", chunk)
+                                yield self._stream_error_event(
+                                    capability, _STREAM_RESPONSE_ERROR
+                                )
+                                return
 
-                        # OpenAI 解析逻辑 (默认)
-                        else:
-                            # 逐行读取，带超时保护
-                            iterator = response.aiter_lines()
-                            chunk_read_timeout = 120.0
-                            while True:
-                                try:
-                                    line = await asyncio.wait_for(iterator.__anext__(), timeout=chunk_read_timeout)
-                                except StopAsyncIteration:
-                                    break
-                                except asyncio.TimeoutError:
-                                    logger.error(f"[ModelRouter] Stream read timeout ({chunk_read_timeout}s) for {capability}")
-                                    yield self._stream_error_event(capability, f"Read timeout ({chunk_read_timeout}s)")
-                                    break
-                                    
-                                # 宽松检查 data: 前缀（有些兼容API可能没有空格）
-                                if not line.startswith("data:"):
-                                    continue
-                                    
-                                data = line[5:].strip()
-                                if not data or data == "[DONE]":
-                                    break
-                                    
-                                try:
-                                    chunk = json.loads(data)
-                                    
-                                    # 处理错误消息 (有些兼容 OpenAI 的 API 会在这里返回 error)
-                                    if "error" in chunk:
-                                        # 如果 error 是字符串
-                                        if isinstance(chunk["error"], str):
-                                            error_msg = chunk["error"]
-                                        # 如果 error 是字典
-                                        elif isinstance(chunk["error"], dict):
-                                            error_msg = chunk["error"].get("message", str(chunk["error"]))
-                                        else:
-                                            error_msg = str(chunk["error"])
-                                            
-                                        yield self._stream_error_event(capability, error_msg)
-                                        break
-                                        
-                                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                                    content = delta.get("content", "")
-                                    if content:
-                                        if first_chunk:
-                                            yield self._stream_status_event(capability, "receiving")
-                                            first_chunk = False
-                                        yield content
-                                except json.JSONDecodeError:
-                                    continue
+                    remaining = buffer.strip()
+                    while remaining.startswith("[") or remaining.startswith(","):
+                        remaining = remaining[1:].lstrip()
+                    while remaining.endswith("]"):
+                        remaining = remaining[:-1].rstrip()
+                    if remaining:
+                        protocol_error("malformed_json")
+                        yield self._stream_error_event(
+                            capability, _STREAM_RESPONSE_ERROR
+                        )
+                        return
 
-                                        
-                        yield self._stream_status_event(capability, "completed")
-            except Exception as e:
-                logger.error(f"[ModelRouter] Async stream error {capability}: {e}")
-                yield self._stream_error_event(capability, str(e))
+                elif provider_type == PROVIDER_TYPE_ANTHROPIC:
+                    async for line in incoming_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            break
+                        try:
+                            event = json.loads(data)
+                        except json.JSONDecodeError:
+                            protocol_error("malformed_json")
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        if not isinstance(event, dict):
+                            protocol_error("invalid_event_type", event)
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        if event.get("type") == "error":
+                            protocol_error("upstream_error", event.get("error"))
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        if event.get("type") == "content_block_delta":
+                            delta = event.get("delta", {})
+                            if not isinstance(delta, dict):
+                                protocol_error("invalid_delta_type", delta)
+                                yield self._stream_error_event(
+                                    capability, _STREAM_RESPONSE_ERROR
+                                )
+                                return
+                            text = delta.get("text", "")
+                            if not isinstance(text, str):
+                                protocol_error("invalid_delta_text", text)
+                                yield self._stream_error_event(
+                                    capability, _STREAM_RESPONSE_ERROR
+                                )
+                                return
+                            if text:
+                                _budget_phase_timeout(budget)
+                                budget.mark_content()
+                                if first_chunk:
+                                    yield self._stream_status_event(
+                                        capability, "receiving"
+                                    )
+                                    first_chunk = False
+                                yield text
+
+                else:
+                    async for line in incoming_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            protocol_error("malformed_json")
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        if not isinstance(chunk, dict):
+                            protocol_error("invalid_chunk_type", chunk)
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        if "error" in chunk:
+                            protocol_error("upstream_error", chunk["error"])
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        try:
+                            choices = chunk.get("choices", [])
+                            if not isinstance(choices, list):
+                                raise TypeError
+                            delta = choices[0].get("delta", {}) if choices else {}
+                            if not isinstance(delta, dict):
+                                raise TypeError
+                            content = delta.get("content", "")
+                            if not isinstance(content, str):
+                                raise TypeError
+                        except (AttributeError, TypeError):
+                            protocol_error("invalid_chunk_shape", chunk)
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        if content:
+                            _budget_phase_timeout(budget)
+                            budget.mark_content()
+                            if first_chunk:
+                                yield self._stream_status_event(
+                                    capability, "receiving"
+                                )
+                                first_chunk = False
+                            yield content
+
+                _budget_phase_timeout(budget)
+                yield self._stream_status_event(capability, "completed")
+            except asyncio.CancelledError as exc:
+                primary_cancel = exc
+                raise
+            except OutboundRequestError as exc:
+                logger.warning(
+                    "[ModelRouter] Async stream failed %s code=%s",
+                    capability,
+                    exc.code,
+                )
+                if exc.code == "outbound_timeout" and budget.content_started:
+                    yield self._stream_status_event(
+                        capability,
+                        "interrupted",
+                        reason=exc.code,
+                        partial=True,
+                    )
+                else:
+                    yield self._stream_error_event(
+                        capability, exc.public_message, code=exc.code
+                    )
+                return
+            except Exception as exc:
+                logger.error(
+                    "[ModelRouter] Async stream failed %s type=%s",
+                    capability,
+                    type(exc).__name__,
+                )
+                yield self._stream_error_event(capability, _STREAM_RESPONSE_ERROR)
+                return
+            finally:
+                if iterator is not None:
+                    close = getattr(iterator, "aclose", None)
+                    if close is not None:
+                        try:
+                            await close()
+                        except asyncio.CancelledError:
+                            if primary_cancel is None:
+                                raise
+                        except OutboundRequestError as exc:
+                            logger.warning(
+                                "[ModelRouter] Stream close failed %s code=%s",
+                                capability,
+                                exc.code,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "[ModelRouter] Stream close failed %s type=%s",
+                                capability,
+                                type(exc).__name__,
+                            )
 
     def _has_api_version_suffix(self, url: str) -> bool:
         """检查 URL 是否已包含 API 版本路径（如 /v1, /v1beta, /v2, /api/v1 等）
@@ -885,8 +1413,12 @@ class ModelRouter:
         capability: str,
         messages: list[dict[str, str]],
         response_format: dict[str, Any] | None = None,
+        *,
+        budget: DeadlineBudget | None = None,
     ) -> str:
         """Sync direct call"""
+        started_at = time.monotonic()
+        allow_local = self.allow_local_ai_endpoints
         config = self.resolve(capability)
         override = self.overrides.get(capability, {})
         
@@ -905,24 +1437,29 @@ class ModelRouter:
             model_name = lb_provider.model or override.get("model") or config.model
             extra_body = override.get("extra_body") or config.extra_body
         else:
-            base_url = override.get("base_url") or self.api_base_url
-            api_key = override.get("api_key") or self.api_key
+            credentials = self._select_runtime_credentials(
+                override,
+                getattr(config, "provider_type", PROVIDER_TYPE_OPENAI),
+            )
+            base_url = credentials.base_url
+            api_key = credentials.api_key
             model_name = override.get("model") or config.model
             extra_body = override.get("extra_body") or config.extra_body
-            provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
+            provider_type = credentials.provider_type
         
         timeout = override.get("timeout") or self.timeout
         
-        if config.provider == "local" or not base_url or not api_key:
+        if (
+            config.provider == "local"
+            or not base_url
+            or not api_key
+            or not provider_type
+        ):
             raise RuntimeError(f"Cannot call AI for capability {capability}: missing configuration")
-        
-        base_url_stripped = base_url.rstrip('/')
         
         # 根据 provider_type 处理不同的 API 格式
         if provider_type == PROVIDER_TYPE_GOOGLE:
             # Google Gemini 原生 API
-            url = f"{base_url_stripped}/models/{model_name}:generateContent?key={api_key}"
-            
             # 分离 system 和 user 消息
             system_parts = []
             user_contents = []
@@ -957,7 +1494,6 @@ class ModelRouter:
             headers = {"Content-Type": "application/json", "Connection": "close"}
         elif provider_type == PROVIDER_TYPE_ANTHROPIC:
             # Claude 原生 API
-            url = f"{base_url_stripped}/messages"
             system_content = None
             filtered_messages = []
             for msg in messages:
@@ -980,11 +1516,6 @@ class ModelRouter:
             }
         else:
             # OpenAI 兼容格式（默认）
-            endpoint = config.endpoint or "/chat/completions"
-            # 【修复】智能处理 endpoint 路径 - 检查是否已有 API 版本
-            if not self._has_api_version_suffix(base_url_stripped) and endpoint == "/chat/completions":
-                endpoint = "/v1/chat/completions"
-            url = f"{base_url_stripped}{endpoint}"
             body = {
                 "model": model_name,
                 "messages": messages,
@@ -995,20 +1526,75 @@ class ModelRouter:
                 body.update(extra_body)
             headers = {"Authorization": f"Bearer {api_key}", "Connection": "close"}
         
-        response = httpx.post(url, json=body, headers=headers, timeout=timeout)
-        response.raise_for_status()
-        data = response.json()
-        
-        # 根据 provider_type 解析响应
-        return self._extract_content(data, provider_type)
+        request_base_url, request_target = self._provider_request_location(
+            provider_type,
+            base_url,
+            model_name,
+            config.endpoint,
+            api_key=api_key,
+            stream=False,
+        )
+        self._begin_request_stats(capability)
+        stats_finished = False
+        try:
+            effective_budget = _ensure_deadline(
+                budget, timeout=timeout, started_at=started_at
+            )
+            _budget_phase_timeout(effective_budget)
+            data = self._runtime_client.post_json(
+                request_base_url,
+                request_target=request_target,
+                headers=headers,
+                json_body=body,
+                allow_local=allow_local,
+                budget=effective_budget,
+                max_bytes=AI_JSON_MAX_BYTES,
+            )
+            result = self._extract_capability_content(
+                data, provider_type, capability
+            )
+            _budget_phase_timeout(effective_budget)
+        except OutboundRequestError as exc:
+            stats_finished = self._finish_request_stats(
+                capability,
+                "timeout" if exc.code == "outbound_timeout" else "error",
+                time.monotonic() - started_at,
+                finished=stats_finished,
+            )
+            logger.warning(
+                "[ModelRouter] Capability call failed %s code=%s",
+                capability,
+                exc.code,
+            )
+            raise RuntimeError(exc.public_message) from None
+        except Exception:
+            self._finish_request_stats(
+                capability,
+                "error",
+                time.monotonic() - started_at,
+                finished=stats_finished,
+            )
+            raise
+        else:
+            self._finish_request_stats(
+                capability,
+                "success",
+                time.monotonic() - started_at,
+                finished=stats_finished,
+            )
+            return result
 
     async def acall_capability(
         self,
         capability: str,
         messages: list[dict[str, str]],
         response_format: dict[str, Any] | None = None,
+        *,
+        budget: DeadlineBudget | None = None,
     ) -> str:
         """Async direct call"""
+        started_at = time.monotonic()
+        allow_local = self.allow_local_ai_endpoints
         config = self.resolve(capability)
         override = self.overrides.get(capability, {})
         
@@ -1035,11 +1621,15 @@ class ModelRouter:
             
             logger.info(f"[acall_capability] 负载均衡选择: {capability} -> {lb_provider.provider_id}, model={model_name}")
         else:
-            base_url = override.get("base_url") or self.api_base_url
-            api_key = override.get("api_key") or self.api_key
+            credentials = self._select_runtime_credentials(
+                override,
+                getattr(config, "provider_type", PROVIDER_TYPE_OPENAI),
+            )
+            base_url = credentials.base_url
+            api_key = credentials.api_key
             model_name = override.get("model") or config.model
             extra_body = override.get("extra_body") or config.extra_body
-            provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
+            provider_type = credentials.provider_type
         
         timeout_value = override.get("timeout") or self.timeout or 60  # 确保有默认值
         
@@ -1050,16 +1640,17 @@ class ModelRouter:
                 f"请检查服务商配置的 selected_models 是否为空，或者 capability_routes 中的 model 配置。"
             )
         
-        if config.provider == "local" or not base_url or not api_key:
+        if (
+            config.provider == "local"
+            or not base_url
+            or not api_key
+            or not provider_type
+        ):
             raise RuntimeError(f"Cannot call AI for capability {capability}: missing configuration")
-        
-        base_url_stripped = base_url.rstrip('/')
         
         # 根据 provider_type 处理不同的 API 格式
         if provider_type == PROVIDER_TYPE_GOOGLE:
             # Google Gemini 原生 API
-            url = f"{base_url_stripped}/models/{model_name}:generateContent?key={api_key}"
-            
             # 分离 system 和 user 消息
             system_parts = []
             user_contents = []
@@ -1094,7 +1685,6 @@ class ModelRouter:
             headers = {"Content-Type": "application/json", "Connection": "close"}
         elif provider_type == PROVIDER_TYPE_ANTHROPIC:
             # Claude 原生 API
-            url = f"{base_url_stripped}/messages"
             system_content = None
             filtered_messages = []
             for msg in messages:
@@ -1117,11 +1707,6 @@ class ModelRouter:
             }
         else:
             # OpenAI 兼容格式（默认）
-            endpoint = config.endpoint or "/chat/completions"
-            # 【修复】智能处理 endpoint 路径 - 检查是否已有 API 版本
-            if not self._has_api_version_suffix(base_url_stripped) and endpoint == "/chat/completions":
-                endpoint = "/v1/chat/completions"
-            url = f"{base_url_stripped}{endpoint}"
             body = {
                 "model": model_name,
                 "messages": messages,
@@ -1132,49 +1717,61 @@ class ModelRouter:
                 body.update(extra_body)
             headers = {"Authorization": f"Bearer {api_key}", "Connection": "close"}
         
-        # 隐藏 API key 的调试 URL
-        debug_url = url.split("?")[0] if "?" in url else url
-        # 【诊断】打印实际发送的模型名
-        actual_model = body.get("model") if isinstance(body, dict) else "N/A"
-        logger.info(f"[acall_capability] {capability} -> {debug_url} (type={provider_type}, model={actual_model}, timeout={timeout_value}s)")
+        request_base_url, request_target = self._provider_request_location(
+            provider_type,
+            base_url,
+            model_name,
+            config.endpoint,
+            api_key=api_key,
+            stream=False,
+        )
         
-        async with self._semaphore:
-            try:
-                async with httpx.AsyncClient(timeout=timeout_value, http2=False) as client:
-                    response = await client.post(url, json=body, headers=headers)
-                    response.raise_for_status()
-                    data = response.json()
-                    
-                    # 调试日志：打印响应结构
-                    logger.debug(f"[acall_capability] {capability} 响应 keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
-                    
-            except httpx.TimeoutException:
-                logger.error(f"[acall_capability] {capability} 超时 ({timeout_value}s)")
-                raise RuntimeError(
-                    f"Async capability {capability} timed out after {timeout_value}s"
-                ) from None
-            except httpx.HTTPStatusError as e:
-                # 【诊断】打印请求体帮助调试 400 错误
-                import json as json_module
-                body_preview = json_module.dumps(body, ensure_ascii=False, default=str)[:500] if body else "None"
-                logger.error(
-                    f"[acall_capability] {capability} HTTP错误: {e.response.status_code}\n"
-                    f"  URL: {debug_url}\n"
-                    f"  Model: {model_name}\n"
-                    f"  请求体预览: {body_preview}\n"
-                    f"  响应: {e.response.text[:500]}"
-                )
-                raise RuntimeError(
-                    f"Async capability {capability} HTTP error: {e.response.status_code}"
-                ) from None
-            except Exception as e:
-                logger.error(f"[acall_capability] {capability} 异常: {type(e).__name__}: {e}")
+        try:
+            effective_budget = _ensure_deadline(
+                budget, timeout=timeout_value, started_at=started_at
+            )
+        except OutboundRequestError as exc:
+            raise RuntimeError(exc.public_message) from None
+
+        lifecycle = _AsyncRequestLifecycle(self, capability, started_at)
+        try:
+            await lifecycle.acquire(effective_budget)
+            _budget_phase_timeout(effective_budget)
+            data = await self._runtime_client.apost_json(
+                request_base_url,
+                request_target=request_target,
+                headers=headers,
+                json_body=body,
+                allow_local=allow_local,
+                budget=effective_budget,
+                max_bytes=AI_JSON_MAX_BYTES,
+            )
+            result = self._extract_capability_content(
+                data, provider_type, capability
+            )
+            _budget_phase_timeout(effective_budget)
+        except OutboundRequestError as exc:
+            outcome = "timeout" if exc.code == "outbound_timeout" else "error"
+            lifecycle.finish(outcome)
+            logger.warning(
+                "[ModelRouter] Async capability call failed %s code=%s",
+                capability,
+                exc.code,
+            )
+            raise RuntimeError(exc.public_message) from None
+        except asyncio.CancelledError:
+            lifecycle.finish("cancelled")
+            raise
+        except Exception:
+            lifecycle.finish("error")
+            if lifecycle.active:
                 raise
-            
-            content = self._extract_content(data, provider_type)
-            if not content:
-                logger.warning(f"[acall_capability] {capability} 返回内容为空，原始数据: {str(data)[:300]}")
-            return content
+            raise RuntimeError("AI request failed") from None
+        else:
+            lifecycle.finish("success")
+            return result
+        finally:
+            lifecycle.close()
 
     async def chat(
         self,
@@ -1182,6 +1779,8 @@ class ModelRouter:
         capability: str = "turn_report",
         system_prompt: str | None = None,
         max_tokens: int | None = None,
+        *,
+        budget: DeadlineBudget | None = None,
     ) -> str:
         """通用聊天接口 - 直接传入完整 prompt 文本进行对话
         
@@ -1199,6 +1798,8 @@ class ModelRouter:
         Raises:
             RuntimeError: 当配置缺失或调用失败时
         """
+        started_at = time.monotonic()
+        allow_local = self.allow_local_ai_endpoints
         config = self.resolve(capability)
         override = self.overrides.get(capability, {})
         
@@ -1217,16 +1818,25 @@ class ModelRouter:
             model_name = lb_provider.model or override.get("model") or config.model
             extra_body = override.get("extra_body") or config.extra_body
         else:
-            base_url = override.get("base_url") or self.api_base_url
-            api_key = override.get("api_key") or self.api_key
+            credentials = self._select_runtime_credentials(
+                override,
+                getattr(config, "provider_type", PROVIDER_TYPE_OPENAI),
+            )
+            base_url = credentials.base_url
+            api_key = credentials.api_key
             model_name = override.get("model") or config.model
             extra_body = override.get("extra_body") or config.extra_body
-            provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
+            provider_type = credentials.provider_type
         
         timeout_value = override.get("timeout") or self.timeout or 60
         
         # 检查是否为本地模式（无 API 配置）
-        if config.provider == "local" or not base_url or not api_key:
+        if (
+            config.provider == "local"
+            or not base_url
+            or not api_key
+            or not provider_type
+        ):
             logger.warning(f"[chat] {capability} 无 API 配置，返回占位符响应")
             return f"[本地模式] 无法生成响应: {prompt[:100]}..."
         
@@ -1236,12 +1846,9 @@ class ModelRouter:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         
-        base_url_stripped = base_url.rstrip('/')
-        
         # 根据 provider_type 处理不同的 API 格式
         if provider_type == PROVIDER_TYPE_GOOGLE:
             # Google Gemini 原生 API
-            url = f"{base_url_stripped}/models/{model_name}:generateContent?key={api_key}"
             contents = [{"role": "user", "parts": [{"text": prompt}]}]
             body: dict[str, Any] = {"contents": contents}
             
@@ -1266,7 +1873,6 @@ class ModelRouter:
             headers = {"Content-Type": "application/json", "Connection": "close"}
         elif provider_type == PROVIDER_TYPE_ANTHROPIC:
             # Claude 原生 API
-            url = f"{base_url_stripped}/messages"
             system_content = system_prompt
             filtered_messages = [{"role": "user", "content": prompt}]
             body = {
@@ -1284,11 +1890,6 @@ class ModelRouter:
             }
         else:
             # OpenAI 兼容格式（默认）
-            endpoint = config.endpoint or "/chat/completions"
-            if not self._has_api_version_suffix(base_url_stripped) and endpoint == "/chat/completions":
-                endpoint = "/v1/chat/completions"
-            url = f"{base_url_stripped}{endpoint}"
-            
             body = {
                 "model": model_name,
                 "messages": messages,
@@ -1299,41 +1900,122 @@ class ModelRouter:
                 body.update(extra_body)
             headers = {"Authorization": f"Bearer {api_key}", "Connection": "close"}
         
-        logger.debug(f"[chat] {capability} -> {url} (timeout={timeout_value}s)")
+        request_base_url, request_target = self._provider_request_location(
+            provider_type,
+            base_url,
+            model_name,
+            config.endpoint,
+            api_key=api_key,
+            stream=False,
+        )
         
-        async with self._semaphore:
-            try:
-                async with httpx.AsyncClient(timeout=timeout_value, http2=False) as client:
-                    response = await client.post(url, json=body, headers=headers)
-                    response.raise_for_status()
-                    data = response.json()
-            except httpx.TimeoutException:
-                logger.error(f"[chat] {capability} timeout after {timeout_value}s")
-                raise RuntimeError(f"Chat request timed out after {timeout_value}s") from None
-            except httpx.HTTPError as e:
-                logger.error(f"[chat] {capability} HTTP error: {e}")
-                raise RuntimeError(f"Chat request failed: {e}") from None
-            
-            return self._extract_content(data, provider_type)
+        try:
+            effective_budget = _ensure_deadline(
+                budget, timeout=timeout_value, started_at=started_at
+            )
+        except OutboundRequestError as exc:
+            raise RuntimeError(exc.public_message) from None
+
+        lifecycle = _AsyncRequestLifecycle(self, capability, started_at)
+        try:
+            await lifecycle.acquire(effective_budget)
+            _budget_phase_timeout(effective_budget)
+            data = await self._runtime_client.apost_json(
+                request_base_url,
+                request_target=request_target,
+                headers=headers,
+                json_body=body,
+                allow_local=allow_local,
+                budget=effective_budget,
+                max_bytes=AI_JSON_MAX_BYTES,
+            )
+            result = self._extract_capability_content(
+                data, provider_type, capability
+            )
+            _budget_phase_timeout(effective_budget)
+        except OutboundRequestError as exc:
+            outcome = "timeout" if exc.code == "outbound_timeout" else "error"
+            lifecycle.finish(outcome)
+            logger.warning(
+                "[ModelRouter] Chat failed %s code=%s",
+                capability,
+                exc.code,
+            )
+            raise RuntimeError(exc.public_message) from None
+        except asyncio.CancelledError:
+            lifecycle.finish("cancelled")
+            raise
+        except Exception:
+            lifecycle.finish("error")
+            if lifecycle.active:
+                raise
+            raise RuntimeError("AI request failed") from None
+        else:
+            lifecycle.finish("success")
+            return result
+        finally:
+            lifecycle.close()
 
     async def astream_capability(
         self,
         capability: str,
         messages: list[dict[str, str]],
         response_format: dict[str, Any] | None = None,
+        *,
+        budget: StreamBudget | None = None,
+    ) -> AsyncGenerator[Any, None]:
+        """Async direct stream call with one logical budget and outcome."""
+        started_at = time.monotonic()
+        override = self.overrides.get(capability, {})
+        effective_budget = _ensure_stream_budget(
+            budget,
+            idle_timeout=override.get("timeout") or self.timeout,
+            started_at=started_at,
+        )
+        lifecycle = _AsyncRequestLifecycle(self, capability, started_at)
+        source = self._astream_capability_impl(
+            capability,
+            messages,
+            response_format,
+            budget=effective_budget,
+            lifecycle=lifecycle,
+        )
+        publisher = self._publish_stream_events(
+            capability,
+            source,
+            budget=effective_budget,
+            lifecycle=lifecycle,
+        )
+        try:
+            async for event in publisher:
+                yield event
+        finally:
+            await publisher.aclose()
+
+    async def _astream_capability_impl(
+        self,
+        capability: str,
+        messages: list[dict[str, str]],
+        response_format: dict[str, Any] | None = None,
+        *,
+        budget: StreamBudget,
+        lifecycle: _AsyncRequestLifecycle,
     ) -> AsyncGenerator[Any, None]:
         """Async direct stream call yielding status events and chunks."""
+        allow_local = self.allow_local_ai_endpoints
         config = self.resolve(capability)
         override = self.overrides.get(capability, {})
-        
-        # 【负载均衡】如果启用且有服务商池，从池中选择服务商
+
         lb_provider: ProviderPoolConfig | None = None
         if self._lb_enabled and capability in self._provider_pools:
             lb_provider = self._select_provider_from_pool(capability)
             if lb_provider:
-                logger.debug(f"[astream_capability] 负载均衡: {capability} -> {lb_provider.provider_id}")
-        
-        # 优先级: 负载均衡选择 > override配置 > 全局配置
+                logger.debug(
+                    "[ModelRouter] Stream capability pool selected %s provider=%s",
+                    capability,
+                    lb_provider.provider_id,
+                )
+
         if lb_provider:
             base_url = lb_provider.base_url
             api_key = lb_provider.api_key
@@ -1341,172 +2023,90 @@ class ModelRouter:
             model_name = lb_provider.model or override.get("model") or config.model
             extra_body = override.get("extra_body") or config.extra_body
         else:
-            base_url = override.get("base_url") or self.api_base_url
-            api_key = override.get("api_key") or self.api_key
+            credentials = self._select_runtime_credentials(
+                override,
+                getattr(config, "provider_type", PROVIDER_TYPE_OPENAI),
+            )
+            base_url = credentials.base_url
+            api_key = credentials.api_key
             model_name = override.get("model") or config.model
             extra_body = override.get("extra_body") or config.extra_body
-            provider_type = override.get("provider_type") or getattr(config, "provider_type", PROVIDER_TYPE_OPENAI)
-        
-        timeout = override.get("timeout") or self.timeout
-        
-        if config.provider == "local" or not base_url or not api_key:
-            yield self._stream_error_event(capability, "Missing configuration for streaming")
+            provider_type = credentials.provider_type
+
+        if (
+            config.provider == "local"
+            or not base_url
+            or not api_key
+            or not provider_type
+        ):
+            yield self._stream_error_event(
+                capability, "Missing configuration for streaming"
+            )
             return
-        
-        base_url_stripped = base_url.rstrip('/')
-        
-        # Google 和 Anthropic 的流式 API 需要特殊处理
+
+        request_base_url, request_target = self._provider_request_location(
+            provider_type,
+            base_url,
+            model_name,
+            config.endpoint,
+            api_key=api_key,
+            stream=True,
+        )
+
         if provider_type == PROVIDER_TYPE_GOOGLE:
-            # Gemini 流式 API - 使用 streamGenerateContent
-            url = f"{base_url_stripped}/models/{model_name}:streamGenerateContent?key={api_key}"
-            
-            # 分离 system 和 user 消息
             system_parts = []
             user_contents = []
-            for msg in messages:
-                if msg["role"] == "system":
-                    system_parts.append({"text": msg["content"]})
+            for message in messages:
+                if message["role"] == "system":
+                    system_parts.append({"text": message["content"]})
                 else:
-                    role = "user" if msg["role"] == "user" else "model"
-                    user_contents.append({"role": role, "parts": [{"text": msg["content"]}]})
-            
-            body: dict[str, Any] = {"contents": user_contents if user_contents else [{"role": "user", "parts": [{"text": ""}]}]}
-            
-            # 使用 systemInstruction 设置系统提示
+                    role = "user" if message["role"] == "user" else "model"
+                    user_contents.append(
+                        {
+                            "role": role,
+                            "parts": [{"text": message["content"]}],
+                        }
+                    )
+            body: dict[str, Any] = {
+                "contents": user_contents
+                or [{"role": "user", "parts": [{"text": ""}]}]
+            }
             if system_parts:
                 body["systemInstruction"] = {"parts": system_parts}
-            
-            # 处理 generationConfig
             generation_config: dict[str, Any] = {}
             if extra_body:
                 if "generationConfig" in extra_body:
                     generation_config.update(extra_body["generationConfig"])
-                if "response_format" in extra_body:
-                    rf = extra_body["response_format"]
-                    if isinstance(rf, dict) and rf.get("type") == "json_object":
-                        generation_config["responseMimeType"] = "application/json"
-            # 处理函数参数中的 response_format
-            if response_format:
-                if isinstance(response_format, dict) and response_format.get("type") == "json_object":
+                extra_format = extra_body.get("response_format")
+                if (
+                    isinstance(extra_format, dict)
+                    and extra_format.get("type") == "json_object"
+                ):
                     generation_config["responseMimeType"] = "application/json"
+            if (
+                isinstance(response_format, dict)
+                and response_format.get("type") == "json_object"
+            ):
+                generation_config["responseMimeType"] = "application/json"
             if generation_config:
                 body["generationConfig"] = generation_config
-            
-            headers = {"Content-Type": "application/json", "Connection": "close"}
-            
-            # 调试日志
-            debug_url = url.split("?")[0]
-            logger.info(f"[astream_capability] Gemini 流式请求: {debug_url} (type={provider_type})")
-            
-            async with self._semaphore:
-                try:
-                    async with httpx.AsyncClient(timeout=timeout + 30, http2=False) as client:
-                        async with client.stream("POST", url, json=body, headers=headers) as response:
-                            yield self._stream_status_event(capability, "connected")
-                            first_chunk = True
-                            text_chunk_count = 0
-                            total_text_len = 0
-                        
-                        buffer = ""
-                        async for line in response.aiter_lines():
-                            if not line:
-                                continue
-                            buffer += line
-                            
-                            # 尝试处理缓冲区
-                            while True:
-                                buffer = buffer.strip()
-                                # 移除根级数组标记
-                                if buffer.startswith("["): buffer = buffer[1:].strip()
-                                if buffer.startswith(","): buffer = buffer[1:].strip()
-                                
-                                if not buffer:
-                                    break
-                                    
-                                # 使用正则分割对象 (查找 `},` 模式)
-                                import re
-                                parts = re.split(r'(?<=\})\s*,\s*(?=\{)', buffer)
-                                
-                                processed_count = 0
-                                
-                                for i, part in enumerate(parts):
-                                    is_last = (i == len(parts) - 1)
-                                    candidate = part.strip()
-                                    
-                                    # 如果是最后一部分，尝试移除末尾的 `]` (根数组结束符)
-                                    if is_last and candidate.endswith("]"):
-                                        candidate = candidate[:-1].strip()
-                                        
-                                    try:
-                                        chunk = json.loads(candidate)
-                                        
-                                        if "error" in chunk:
-                                            logger.error(f"[astream_capability] Gemini 错误: {chunk['error']}")
-                                            yield self._stream_error_event(capability, str(chunk["error"]))
-                                            return
-                                        
-                                        candidates = chunk.get("candidates", [])
-                                        for candidate_obj in candidates:
-                                            content = candidate_obj.get("content", {})
-                                            parts = content.get("parts", [])
-                                            for p in parts:
-                                                text = p.get("text", "")
-                                                if text:
-                                                    text_chunk_count += 1
-                                                    total_text_len += len(text)
-                                                    if first_chunk:
-                                                        yield self._stream_status_event(capability, "receiving")
-                                                        first_chunk = False
-                                                    yield text
-                                        
-                                        if chunk.get("finishReason") == "STOP" or chunk.get("finish_reason") == "STOP":
-                                            pass
-                                            
-                                        processed_count += 1
-                                        
-                                    except json.JSONDecodeError:
-                                        if is_last:
-                                            buffer = part
-                                        else:
-                                            logger.warning(f"[astream_capability] Gemini 中间分块解析失败: {candidate[:50]}...")
-                                
-                                if processed_count == len(parts):
-                                    buffer = ""
-                                    break
-                                elif processed_count > 0:
-                                    break
-                                else:
-                                    break
-                        
-                        logger.info(f"[astream_capability] Gemini 完成: {text_chunk_count} 文本chunks, {total_text_len} 字符")
-                        yield self._stream_status_event(capability, "completed")
-                except httpx.HTTPStatusError as e:
-                    error_preview = ""
-                    try:
-                        body_bytes = await e.response.aread()
-                        error_preview = body_bytes.decode("utf-8", errors="ignore")[:500]
-                    except Exception as body_err:
-                        error_preview = f"<无法读取响应体: {body_err}>"
-                    logger.error(f"[astream_capability] Gemini HTTP错误: {e.response.status_code} - {error_preview}")
-                    yield self._stream_error_event(capability, f"HTTP {e.response.status_code}")
-                except Exception as e:
-                    logger.error(f"[astream_capability] Gemini 异常: {type(e).__name__}: {e}")
-                    yield self._stream_error_event(capability, str(e))
-            return
-        
+            headers = {
+                "Content-Type": "application/json",
+                "Connection": "close",
+            }
         elif provider_type == PROVIDER_TYPE_ANTHROPIC:
-            # Anthropic 流式 API
-            url = f"{base_url_stripped}/messages"
             system_content = None
             filtered_messages = []
-            for msg in messages:
-                if msg["role"] == "system":
-                    system_content = msg["content"]
+            for message in messages:
+                if message["role"] == "system":
+                    system_content = message["content"]
                 else:
-                    filtered_messages.append(msg)
+                    filtered_messages.append(message)
             body = {
                 "model": model_name,
-                "max_tokens": extra_body.get("max_tokens", 4096) if extra_body else 4096,
+                "max_tokens": (
+                    extra_body.get("max_tokens", 4096) if extra_body else 4096
+                ),
                 "messages": filtered_messages,
                 "stream": True,
             }
@@ -1518,127 +2118,383 @@ class ModelRouter:
                 "Content-Type": "application/json",
                 "Connection": "close",
             }
-            
-            async with self._semaphore:
+        else:
+            body = {
+                "model": model_name,
+                "messages": messages,
+                "stream": True,
+            }
+            if response_format:
+                body["response_format"] = response_format
+            if extra_body:
+                body.update(extra_body)
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Connection": "close",
+            }
+
+        yield self._stream_status_event(capability, "connecting")
+
+        async with lifecycle.slot(budget):
+            iterator: Any = None
+            primary_cancel: asyncio.CancelledError | None = None
+            try:
+                lines = self._runtime_client.astream_lines(
+                    request_base_url,
+                    request_target=request_target,
+                    headers=headers,
+                    json_body=body,
+                    allow_local=allow_local,
+                    budget=budget,
+                    max_bytes=STREAM_MAX_BYTES,
+                    max_event_bytes=STREAM_EVENT_MAX_BYTES,
+                )
+                iterator = lines.__aiter__()
                 try:
-                    async with httpx.AsyncClient(timeout=timeout + 30, http2=False) as client:
-                        async with client.stream("POST", url, json=body, headers=headers) as response:
-                            response.raise_for_status()
-                            yield self._stream_status_event(capability, "connected")
-                            first_chunk = True
-                            
-                            async for line in response.aiter_lines():
-                                if not line.startswith("data:"):
-                                    continue
-                                    
-                                # 宽松检查 data: 前缀
-                                data = line[5:].strip()
-                                if not data or data == "[DONE]":
-                                    break
-                                    
-                                try:
-                                    event = json.loads(data)
-                                    
-                                    # 处理错误消息
-                                    if event.get("type") == "error":
-                                        error_msg = event.get("error", {}).get("message", "Unknown error")
-                                        yield self._stream_error_event(capability, error_msg)
-                                        break
-                                        
-                                    if event.get("type") == "content_block_delta":
-                                        delta = event.get("delta", {})
-                                        text = delta.get("text", "")
+                    first_line = await iterator.__anext__()
+                except StopAsyncIteration:
+                    yield self._stream_status_event(capability, "connected")
+                    _budget_phase_timeout(budget)
+                    yield self._stream_status_event(capability, "completed")
+                    return
+
+                yield self._stream_status_event(capability, "connected")
+                first_chunk = True
+
+                async def incoming_lines() -> AsyncGenerator[str, None]:
+                    yield first_line
+                    while True:
+                        try:
+                            yield await iterator.__anext__()
+                        except StopAsyncIteration:
+                            return
+
+                def protocol_error(code: str) -> None:
+                    logger.warning(
+                        "[ModelRouter] Stream capability protocol error %s "
+                        "provider=%s code=%s",
+                        capability,
+                        provider_type,
+                        code,
+                    )
+
+                if provider_type == PROVIDER_TYPE_GOOGLE:
+                    decoder = json.JSONDecoder()
+                    buffer = ""
+                    async for line in incoming_lines():
+                        if not line or line.startswith(":"):
+                            continue
+                        buffer += line
+                        while True:
+                            buffer = buffer.lstrip()
+                            while buffer.startswith("[") or buffer.startswith(","):
+                                buffer = buffer[1:].lstrip()
+                            if buffer.startswith("]"):
+                                buffer = buffer[1:].lstrip()
+                                continue
+                            if not buffer:
+                                break
+                            try:
+                                chunk, consumed = decoder.raw_decode(buffer)
+                            except json.JSONDecodeError:
+                                break
+                            buffer = buffer[consumed:]
+                            if not isinstance(chunk, dict):
+                                protocol_error("invalid_chunk_type")
+                                yield self._stream_error_event(
+                                    capability, _STREAM_RESPONSE_ERROR
+                                )
+                                return
+                            if "error" in chunk:
+                                protocol_error("upstream_error")
+                                yield self._stream_error_event(
+                                    capability, _STREAM_RESPONSE_ERROR
+                                )
+                                return
+                            try:
+                                candidates = chunk.get("candidates", [])
+                                if not isinstance(candidates, list):
+                                    raise TypeError
+                                for candidate in candidates:
+                                    if not isinstance(candidate, dict):
+                                        raise TypeError
+                                    content_obj = candidate.get("content", {})
+                                    if not isinstance(content_obj, dict):
+                                        raise TypeError
+                                    parts = content_obj.get("parts", [])
+                                    if not isinstance(parts, list):
+                                        raise TypeError
+                                    for part in parts:
+                                        if not isinstance(part, dict):
+                                            raise TypeError
+                                        text = part.get("text", "")
+                                        if not isinstance(text, str):
+                                            raise TypeError
                                         if text:
+                                            _budget_phase_timeout(budget)
+                                            budget.mark_content()
                                             if first_chunk:
-                                                yield self._stream_status_event(capability, "receiving")
+                                                yield self._stream_status_event(
+                                                    capability, "receiving"
+                                                )
                                                 first_chunk = False
                                             yield text
-                                except json.JSONDecodeError:
-                                    continue
-                            yield self._stream_status_event(capability, "completed")
-                except Exception as e:
-                    logger.error(f"[ModelRouter] Anthropic stream error {capability}: {e}")
-                    yield self._stream_error_event(capability, str(e))
-            return
-        
-        # OpenAI 兼容格式（默认）
-        endpoint = config.endpoint or "/chat/completions"
-        # 【修复】智能处理 endpoint 路径 - 检查是否已有 API 版本
-        if not self._has_api_version_suffix(base_url_stripped) and endpoint == "/chat/completions":
-            endpoint = "/v1/chat/completions"
-        url = f"{base_url_stripped}{endpoint}"
-        body = {
-            "model": model_name,
-            "messages": messages,
-            "stream": True
-        }
-        if response_format:
-            body["response_format"] = response_format
-        if extra_body:
-            body.update(extra_body)
-            
-        headers = {"Authorization": f"Bearer {api_key}", "Connection": "close"}
-        
-        async with self._semaphore:
-            try:
-                # 【核心修复】使用临时客户端，避免共享连接池卡住
-                async with httpx.AsyncClient(timeout=timeout + 30, http2=False) as client:
-                    async with client.stream(
-                        "POST", 
-                        url, 
-                        json=body, 
-                        headers=headers, 
-                    ) as response:
-                        response.raise_for_status()
-                        yield self._stream_status_event(capability, "connected")
-                        first_chunk = True
-                        
-                        iterator = response.aiter_lines()
-                        chunk_read_timeout = 120.0  # 单个 chunk 读取超时，让上层控制智能超时
-                        while True:
-                            try:
-                                line = await asyncio.wait_for(iterator.__anext__(), timeout=chunk_read_timeout)
-                            except StopAsyncIteration:
-                                break
-                            except asyncio.TimeoutError:
-                                logger.error(f"[ModelRouter] Stream capability read timeout ({chunk_read_timeout}s) for {capability}")
-                                yield self._stream_error_event(capability, f"Read timeout ({chunk_read_timeout}s)")
-                                break
-                            
-                            if not line.startswith("data:"):
-                                continue
-                                
-                            data = line[5:].strip()
-                            if not data or data == "[DONE]":
-                                break
-                                
-                            try:
-                                chunk = json.loads(data)
-                                
-                                # 处理错误消息
-                                if "error" in chunk:
-                                    if isinstance(chunk["error"], str):
-                                        error_msg = chunk["error"]
-                                    elif isinstance(chunk["error"], dict):
-                                        error_msg = chunk["error"].get("message", str(chunk["error"]))
-                                    else:
-                                        error_msg = str(chunk["error"])
-                                    yield self._stream_error_event(capability, error_msg)
-                                    break
-                                
-                                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                                content = delta.get("content", "")
-                                if content:
-                                    if first_chunk:
-                                        yield self._stream_status_event(capability, "receiving")
-                                        first_chunk = False
-                                    yield content
-                            except json.JSONDecodeError:
-                                continue
-                        yield self._stream_status_event(capability, "completed")
-            except Exception as e:
-                logger.error(f"[ModelRouter] Async capability stream error {capability}: {e}")
-                yield self._stream_error_event(capability, str(e))
+                            except (AttributeError, TypeError):
+                                protocol_error("invalid_chunk_shape")
+                                yield self._stream_error_event(
+                                    capability, _STREAM_RESPONSE_ERROR
+                                )
+                                return
+
+                    remaining = buffer.strip()
+                    while remaining.startswith("[") or remaining.startswith(","):
+                        remaining = remaining[1:].lstrip()
+                    while remaining.endswith("]"):
+                        remaining = remaining[:-1].rstrip()
+                    if remaining:
+                        protocol_error("malformed_json")
+                        yield self._stream_error_event(
+                            capability, _STREAM_RESPONSE_ERROR
+                        )
+                        return
+                elif provider_type == PROVIDER_TYPE_ANTHROPIC:
+                    async for line in incoming_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            break
+                        try:
+                            event = json.loads(data)
+                        except json.JSONDecodeError:
+                            protocol_error("malformed_json")
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        if not isinstance(event, dict):
+                            protocol_error("invalid_event_type")
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        if event.get("type") == "error":
+                            protocol_error("upstream_error")
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        if event.get("type") == "content_block_delta":
+                            delta = event.get("delta", {})
+                            if not isinstance(delta, dict):
+                                protocol_error("invalid_delta_type")
+                                yield self._stream_error_event(
+                                    capability, _STREAM_RESPONSE_ERROR
+                                )
+                                return
+                            text = delta.get("text", "")
+                            if not isinstance(text, str):
+                                protocol_error("invalid_delta_text")
+                                yield self._stream_error_event(
+                                    capability, _STREAM_RESPONSE_ERROR
+                                )
+                                return
+                            if text:
+                                _budget_phase_timeout(budget)
+                                budget.mark_content()
+                                if first_chunk:
+                                    yield self._stream_status_event(
+                                        capability, "receiving"
+                                    )
+                                    first_chunk = False
+                                yield text
+                else:
+                    async for line in incoming_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            protocol_error("malformed_json")
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        if not isinstance(chunk, dict):
+                            protocol_error("invalid_chunk_type")
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        if "error" in chunk:
+                            protocol_error("upstream_error")
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        try:
+                            choices = chunk.get("choices", [])
+                            if not isinstance(choices, list):
+                                raise TypeError
+                            delta = choices[0].get("delta", {}) if choices else {}
+                            if not isinstance(delta, dict):
+                                raise TypeError
+                            content = delta.get("content", "")
+                            if not isinstance(content, str):
+                                raise TypeError
+                        except (AttributeError, TypeError):
+                            protocol_error("invalid_chunk_shape")
+                            yield self._stream_error_event(
+                                capability, _STREAM_RESPONSE_ERROR
+                            )
+                            return
+                        if content:
+                            _budget_phase_timeout(budget)
+                            budget.mark_content()
+                            if first_chunk:
+                                yield self._stream_status_event(
+                                    capability, "receiving"
+                                )
+                                first_chunk = False
+                            yield content
+
+                _budget_phase_timeout(budget)
+                yield self._stream_status_event(capability, "completed")
+            except asyncio.CancelledError as exc:
+                primary_cancel = exc
+                raise
+            except OutboundRequestError as exc:
+                logger.warning(
+                    "[ModelRouter] Async capability stream failed %s code=%s",
+                    capability,
+                    exc.code,
+                )
+                if exc.code == "outbound_timeout" and budget.content_started:
+                    yield self._stream_status_event(
+                        capability,
+                        "interrupted",
+                        reason=exc.code,
+                        partial=True,
+                    )
+                else:
+                    yield self._stream_error_event(
+                        capability, exc.public_message, code=exc.code
+                    )
+                return
+            except Exception as exc:
+                logger.error(
+                    "[ModelRouter] Async capability stream failed %s type=%s",
+                    capability,
+                    type(exc).__name__,
+                )
+                yield self._stream_error_event(capability, _STREAM_RESPONSE_ERROR)
+                return
+            finally:
+                if iterator is not None:
+                    close = getattr(iterator, "aclose", None)
+                    if close is not None:
+                        try:
+                            await close()
+                        except asyncio.CancelledError:
+                            if primary_cancel is None:
+                                raise
+                        except OutboundRequestError as exc:
+                            logger.warning(
+                                "[ModelRouter] Capability stream close failed "
+                                "%s code=%s",
+                                capability,
+                                exc.code,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "[ModelRouter] Capability stream close failed "
+                                "%s type=%s",
+                                capability,
+                                type(exc).__name__,
+                            )
+    def _extract_capability_content(
+        self,
+        data: dict[str, Any],
+        provider_type: str,
+        capability: str,
+    ) -> str:
+        try:
+            return self._extract_primary_content(data, provider_type)
+        except _PrimaryResponseError:
+            logger.warning(
+                "[ModelRouter] Capability response invalid %s code=invalid_response_shape",
+                capability,
+            )
+            raise RuntimeError(_PRIMARY_RESPONSE_ERROR) from None
+
+    def _extract_primary_content(
+        self, data: dict[str, Any], provider_type: str
+    ) -> str:
+        """Extract content from a validated primary-invocation response shape."""
+        if not isinstance(data, dict) or "error" in data:
+            raise _PrimaryResponseError
+
+        if provider_type == PROVIDER_TYPE_ANTHROPIC:
+            blocks = data.get("content")
+            if not isinstance(blocks, list) or not blocks:
+                raise _PrimaryResponseError
+            texts: list[str] = []
+            for block in blocks:
+                if not isinstance(block, dict):
+                    raise _PrimaryResponseError
+                if block.get("type") != "text":
+                    continue
+                text = block.get("text")
+                if not isinstance(text, str):
+                    raise _PrimaryResponseError
+                texts.append(text)
+            if not texts:
+                raise _PrimaryResponseError
+            return "\n".join(texts)
+
+        if provider_type == PROVIDER_TYPE_GOOGLE:
+            candidates = data.get("candidates")
+            if not isinstance(candidates, list) or not candidates:
+                raise _PrimaryResponseError
+            candidate = candidates[0]
+            if not isinstance(candidate, dict):
+                raise _PrimaryResponseError
+            content = candidate.get("content")
+            if not isinstance(content, dict):
+                raise _PrimaryResponseError
+            parts = content.get("parts")
+            if not isinstance(parts, list) or not parts:
+                raise _PrimaryResponseError
+            texts: list[str] = []
+            for part in parts:
+                if not isinstance(part, dict):
+                    raise _PrimaryResponseError
+                if "text" not in part:
+                    continue
+                text = part["text"]
+                if not isinstance(text, str):
+                    raise _PrimaryResponseError
+                texts.append(text)
+            if not texts:
+                raise _PrimaryResponseError
+            return "\n".join(texts)
+
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise _PrimaryResponseError
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            raise _PrimaryResponseError
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise _PrimaryResponseError
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise _PrimaryResponseError
+        return content
 
     def _extract_content(self, data: dict, provider_type: str) -> str:
         """从不同API类型的响应中提取内容"""
@@ -1652,7 +2508,7 @@ class ModelRouter:
                         if block.get("type") == "text":
                             texts.append(block.get("text", ""))
                     return "\n".join(texts)
-                logger.warning(f"[ModelRouter] Anthropic 响应无内容: {str(data)[:500]}")
+                logger.warning("[ModelRouter] Anthropic response has no content")
                 return ""
             elif provider_type == PROVIDER_TYPE_GOOGLE:
                 # Gemini API 响应格式
@@ -1668,9 +2524,9 @@ class ModelRouter:
                 # 如果没有 candidates，检查是否有错误
                 error = data.get("error", {})
                 if error:
-                    logger.error(f"[ModelRouter] Gemini API 错误: {error}")
+                    logger.error("[ModelRouter] Google response reported an upstream error")
                 else:
-                    logger.warning(f"[ModelRouter] Gemini 响应无内容: {str(data)[:500]}")
+                    logger.warning("[ModelRouter] Google response has no content")
                 return ""
             else:
                 # OpenAI 兼容格式（默认）
@@ -1679,8 +2535,12 @@ class ModelRouter:
                     .get("message", {})
                     .get("content", "")
                 )
-        except Exception as e:
-            logger.warning(f"[ModelRouter] 响应解析失败 ({provider_type}): {e}, 原始数据: {str(data)[:300]}")
+        except Exception as exc:
+            logger.warning(
+                "[ModelRouter] Response parsing failed provider=%s type=%s",
+                provider_type,
+                type(exc).__name__,
+            )
             return str(data)
 
     def _parse_content(self, content: str) -> Any:
@@ -1724,8 +2584,11 @@ class ModelRouter:
                         return content
             
             return json.loads(cleaned)
-        except json.JSONDecodeError as e:
-            logger.warning(f"[ModelRouter] JSON解析失败: {e}, 内容前200字符: {content[:200]}")
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "[ModelRouter] JSON parsing failed type=%s",
+                type(exc).__name__,
+            )
             
             # 最后尝试：查找任何可能的JSON对象
             import re
@@ -1750,7 +2613,6 @@ async def staggered_gather(
     interval: float = 2.0,
     max_concurrent: int = 10,  # 【提升】默认并发从 3 提升到 10
     task_name: str = "任务",
-    task_timeout: float = 90.0,  # 【新增】单任务超时
     event_callback: Callable[[str, str, str], None] | None = None,  # 【新增】心跳回调
 ) -> list:
     """
@@ -1761,7 +2623,6 @@ async def staggered_gather(
         interval: 每个任务启动的间隔秒数
         max_concurrent: 最大同时执行的任务数
         task_name: 任务名称（用于日志）
-        task_timeout: 单个任务的超时时间（秒）
         event_callback: 事件回调函数，签名 (event_type, message, category)
     
     Returns:
@@ -1798,19 +2659,12 @@ async def staggered_gather(
             logger.debug(f"[间隔并行] {task_name} {idx + 1}/{len(coroutines)} 开始执行")
             emit_event("ai_parallel_task_start", f"🚀 {task_name} {idx + 1}/{len(coroutines)} 开始", "AI")
             try:
-                # 【关键修复】为每个任务添加超时保护
-                result = await asyncio.wait_for(coro, timeout=task_timeout)
+                result = await coro
                 results[idx] = result
                 completed_count += 1
                 elapsed = time.time() - start_time
                 logger.debug(f"[间隔并行] {task_name} {idx + 1}/{len(coroutines)} 完成 (耗时{elapsed:.1f}s)")
                 emit_event("ai_parallel_task_complete", f"✅ {task_name} {idx + 1}/{len(coroutines)} 完成 ({completed_count}/{len(coroutines)})", "AI")
-            except asyncio.TimeoutError:
-                elapsed = time.time() - start_time
-                logger.error(f"[间隔并行] ⏱️ {task_name} {idx + 1}/{len(coroutines)} 超时 (超过{task_timeout}s，实际{elapsed:.1f}s)")
-                results[idx] = TimeoutError(f"{task_name} {idx + 1} 超时")
-                completed_count += 1
-                emit_event("ai_parallel_task_timeout", f"⏱️ {task_name} {idx + 1}/{len(coroutines)} 超时 ({completed_count}/{len(coroutines)})", "AI")
             except Exception as e:
                 elapsed = time.time() - start_time
                 logger.warning(f"[间隔并行] {task_name} {idx + 1}/{len(coroutines)} 失败 (耗时{elapsed:.1f}s): {e}")
@@ -1826,7 +2680,7 @@ async def staggered_gather(
     
     # 发送开始事件
     emit_event("ai_parallel_batch_start", f"🔄 开始 {len(coroutines)} 个{task_name}（并发{max_concurrent}）", "AI")
-    logger.info(f"[间隔并行] 开始执行 {len(coroutines)} 个{task_name}（间隔{interval}s，最大并发{max_concurrent}，单任务超时{task_timeout}s）")
+    logger.info(f"[间隔并行] 开始执行 {len(coroutines)} 个{task_name}（间隔{interval}s，最大并发{max_concurrent}）")
     
     # 【新增】心跳任务：定期发送进度
     heartbeat_task = None

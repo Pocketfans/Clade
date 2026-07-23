@@ -83,12 +83,11 @@ class AncestryEmbeddingPlugin(EmbeddingPlugin):
         texts = []
         ids = []
         metadata_list = []
+        candidate_ancestries = []
         
         for sp in species_list:
             ancestry = self._compute_ancestry_vector(sp, ctx)
-            if ancestry and len(ancestry.vector) > 0:
-                self._ancestry_cache[sp.lineage_code] = ancestry
-                
+            if ancestry:
                 # 使用向量作为索引
                 texts.append(self._ancestry_to_text(ancestry, sp))
                 ids.append(sp.lineage_code)
@@ -96,6 +95,7 @@ class AncestryEmbeddingPlugin(EmbeddingPlugin):
                     "generation": ancestry.generation,
                     "ancestor_count": len(ancestry.ancestor_codes),
                 })
+                candidate_ancestries.append(ancestry)
         
         if not texts:
             return 0
@@ -106,8 +106,9 @@ class AncestryEmbeddingPlugin(EmbeddingPlugin):
         
         # 同时更新 ancestry 向量
         for i, code in enumerate(ids):
-            if code in self._ancestry_cache:
-                self._ancestry_cache[code].vector = np.array(vectors[i])
+            ancestry = candidate_ancestries[i]
+            ancestry.vector = np.array(vectors[i])
+            self._ancestry_cache[code] = ancestry
         
         return store.add_batch(ids, vectors, metadata_list)
     

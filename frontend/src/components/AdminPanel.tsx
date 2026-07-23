@@ -21,6 +21,7 @@ export function AdminPanel({ onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [dropLoading, setDropLoading] = useState(false);
   const [confirmText, setConfirmText] = useState("");
+  const [adminToken, setAdminToken] = useState("");
 
   useEffect(() => {
     runHealthCheck();
@@ -51,11 +52,21 @@ export function AdminPanel({ onClose }: Props) {
     
     setDropLoading(true);
     try {
-      const res = await dropDatabase();
+      const res = await dropDatabase(adminToken);
       alert(res.success ? "✅ 数据库已重置" : "❌ 操作失败");
       window.location.reload();
     } catch (err: unknown) {
-      alert("❌ 操作失败: " + (err instanceof Error ? err.message : "未知错误"));
+      const status =
+        typeof err === "object" && err !== null && "status" in err
+          ? (err as { status?: unknown }).status
+          : undefined;
+      if (status === 503) {
+        alert("服务端未配置管理员令牌");
+      } else if (status === 403) {
+        alert("管理员令牌无效");
+      } else {
+        alert("❌ 操作失败: " + (err instanceof Error ? err.message : "未知错误"));
+      }
     } finally {
       setDropLoading(false);
       setConfirmText("");
@@ -175,18 +186,32 @@ export function AdminPanel({ onClose }: Props) {
                 </div>
                 
                 <div className="danger-action">
+                  <div className="admin-token-field">
+                    <label htmlFor="admin-token" className="admin-token-label">
+                      管理员令牌
+                    </label>
+                    <input
+                      id="admin-token"
+                      type="password"
+                      autoComplete="off"
+                      placeholder="仅保存在当前窗口内存中"
+                      value={adminToken}
+                      onChange={(e) => setAdminToken(e.target.value)}
+                      className="admin-token-input"
+                    />
+                  </div>
                   <div className="confirm-input-group">
                     <input
                       type="text"
                       placeholder="输入 DELETE 确认"
                       value={confirmText}
-                      onChange={(e) => setConfirmText(e.target.value.toUpperCase())}
+                      onChange={(e) => setConfirmText(e.target.value)}
                       className="confirm-input"
                     />
                     <button 
                       className="danger-btn"
                       onClick={handleDropDatabase}
-                      disabled={dropLoading || confirmText !== "DELETE"}
+                      disabled={dropLoading || confirmText !== "DELETE" || adminToken.length === 0}
                     >
                       {dropLoading ? (
                         <>
@@ -506,6 +531,40 @@ export function AdminPanel({ onClose }: Props) {
             padding-top: 0.5rem;
           }
 
+          .admin-token-field {
+            display: flex;
+            flex-direction: column;
+            gap: 0.375rem;
+            margin-bottom: 0.625rem;
+          }
+
+          .admin-token-label {
+            font-size: 0.75rem;
+            color: rgba(240, 244, 232, 0.6);
+          }
+
+          .admin-token-input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0.625rem 0.875rem;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(244, 63, 94, 0.2);
+            border-radius: 0.5rem;
+            color: #f0f4e8;
+            font-size: 0.85rem;
+            font-family: 'SF Mono', monospace;
+          }
+
+          .admin-token-input::placeholder {
+            color: rgba(240, 244, 232, 0.3);
+          }
+
+          .admin-token-input:focus {
+            outline: none;
+            border-color: rgba(244, 63, 94, 0.4);
+            box-shadow: 0 0 0 2px rgba(244, 63, 94, 0.1);
+          }
+
           .confirm-input-group {
             display: flex;
             gap: 0.625rem;
@@ -521,7 +580,6 @@ export function AdminPanel({ onClose }: Props) {
             font-size: 0.85rem;
             font-family: 'SF Mono', monospace;
             letter-spacing: 0.1em;
-            text-transform: uppercase;
           }
 
           .confirm-input::placeholder {

@@ -7,7 +7,7 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useFoodWebData } from "@/components/FoodWebGraph/hooks/useFoodWebData";
-import type { SpeciesSnapshot } from "@/services/api.types";
+import type { FoodWebData, SpeciesSnapshot } from "@/services/api.types";
 
 // Mock API 模块
 vi.mock("@/services/api", () => ({
@@ -28,35 +28,49 @@ function createWrapper() {
       },
     },
   });
-  // eslint-disable-next-line react/display-name
-  return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-  );
+  function QueryWrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  }
+
+  return QueryWrapper;
 }
 
-const mockFoodWebData = {
-  species: [
+const mockFoodWebData: FoodWebData = {
+  nodes: [
     {
-      lineage_code: "A",
-      common_name: "Producer A",
+      id: "A",
+      name: "Producer A",
       trophic_level: 1,
+      population: 1000,
       diet_type: "producer",
+      habitat_type: "land",
       prey_count: 0,
       predator_count: 1,
-      is_keystone: false,
     },
     {
-      lineage_code: "B",
-      common_name: "Herbivore B",
+      id: "B",
+      name: "Herbivore B",
       trophic_level: 2,
+      population: 500,
       diet_type: "herbivore",
+      habitat_type: "land",
       prey_count: 1,
       predator_count: 0,
-      is_keystone: true,
     },
   ],
-  relationships: [{ predator: "B", prey: "A", strength: 0.8 }],
+  links: [
+    {
+      source: "A",
+      target: "B",
+      value: 0.8,
+      predator_name: "Herbivore B",
+      prey_name: "Producer A",
+    },
+  ],
   keystone_species: ["B"],
+  trophic_levels: { 1: ["A"], 2: ["B"] },
+  total_species: 2,
+  total_links: 1,
 };
 
 const mockAnalysis = {

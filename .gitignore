@@ -113,3 +113,6 @@ coverage.xml
 *.bak
 tmp/
 temp/
+
+# Isolated Git worktrees
+.worktrees/

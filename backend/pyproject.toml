@@ -7,7 +7,7 @@ name = "egame-sim"
 version = "0.1.0"
 description = "AI-driven evolutionary sandbox backend (GPU-only)"
 authors = [{ name = "Codex" }]
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.13"
 # NOTE: 本项目为 GPU-only 架构，需要支持 CUDA/Vulkan 的 GPU
 # taichi 会自动使用 GPU，如果没有 GPU 将无法启动
 dependencies = [
@@ -28,6 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
     "anyio>=4.4.0",
     "imageio>=2.31.0",
     "lz4>=4.0.0",
@@ -36,4 +37,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["app"]
+python_files = ["test_*.py"]
+addopts = ["--strict-markers", "--strict-config"]
 

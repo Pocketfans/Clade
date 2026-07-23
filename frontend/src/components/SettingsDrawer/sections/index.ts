@@ -3,6 +3,7 @@
  */
 
 export { ConnectionSection } from "./ConnectionSection";
+export { LocalAIEndpointControl } from "./LocalAIEndpointControl";
 export { EmbeddingSection } from "./EmbeddingSection";
 export { PerformanceSection } from "./PerformanceSection";
 export { SpeciationSection } from "./SpeciationSection";

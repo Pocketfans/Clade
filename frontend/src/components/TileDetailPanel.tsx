@@ -243,15 +243,16 @@ export function TileDetailPanel({ tile, habitats, selectedSpecies, onSelectSpeci
   const [showAllSpecies, setShowAllSpecies] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
   const [activeTab, setActiveTab] = useState<'env' | 'species'>('env');
+  const tileId = tile?.id;
 
   // 当 tile 变化时触发动画
   useEffect(() => {
-    if (tile) {
+    if (tileId !== undefined) {
       setIsAnimating(true);
       const timer = setTimeout(() => setIsAnimating(false), 600);
       return () => clearTimeout(timer);
     }
-  }, [tile?.id]);
+  }, [tileId]);
 
   // 过滤和排序栖息物种
   const filteredHabitats = useMemo(() => {

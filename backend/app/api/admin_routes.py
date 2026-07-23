@@ -4,7 +4,7 @@ import shutil
 import sys
 import logging
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import SQLModel, delete, select, Session
 
@@ -16,8 +16,13 @@ from ..models.environment import MapState
 from ..models.history import TurnLog
 from ..repositories.species_repository import species_repository
 from ..repositories.environment_repository import environment_repository
+from ..security.admin_token import require_admin_token
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(
+    prefix="/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_admin_token)],
+)
 settings = get_settings()
 logger = logging.getLogger(__name__)
 

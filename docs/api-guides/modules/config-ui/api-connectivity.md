@@ -1,52 +1,171 @@
-﻿# AI 接入连通性 – `/config/test-api`
+# AI 接入与出站请求安全
 
-> 同步记录在 Analytics & AI 模块，此处强调与 UI 配置的联动。
+> 配置探测、实际 AI 调用、流式输出和 Embedding 批次现在共用同一套出站地址策略与固定目标传输边界。无论地址来自默认服务商、能力覆盖、负载均衡池、环境变量、构造参数、旧版配置还是 UI 持久配置，都不能绕过运行时验证。
 
-- **Method**: `POST /api/config/test-api`
-- **实现**: `backend/app/api/routes.py#test_api_connection`
+## 配置探测接口
 
-## 请求体
+- **测试连接**：`POST /api/config/test-api`
+- **获取模型列表**：`POST /api/config/fetch-models`
+- **实现**：`backend/app/api/analytics.py#test_api_connection`、`backend/app/api/analytics.py#fetch_models`
+
+## 凭据来源与请求
+
+请求既可以直接提供服务商信息，也可以用 `provider_id` 引用当前已保存的服务商。直接提供的 `base_url`、`api_key`、`provider_type` 优先；缺少的值从已保存服务商补齐。
 
 ```json
 {
-  "type": "chat",           // "chat" 或 "embedding"
-  "base_url": "https://api.openai.com/v1",
-  "api_key": "sk-xxxx",
-  "model": "gpt-4o-mini",
-  "provider": "openai"      // 可选，当前仅用于提示
+  "provider_id": "default",
+  "provider_type": "openai",
+  "base_url": "https://api.example.com/v1",
+  "api_key": "<API_KEY>"
 }
 ```
 
-`type=chat`：路由会自动补全 `/chat/completions`，兼容以下情况：
-- Base URL 已以 `/v1` 结尾：直接拼接 `/chat/completions`
-- Azure OpenAI：若 URL 已包含 `chat/completions` 则不会重复追加
+无论 Base URL 来自本次请求还是已保存配置，都会经过同一套外部 URL 安全策略。`provider_id` 只负责选择已保存配置，不能绕过安全检查。
 
-`type=embedding`：调用 `{base_url}/embeddings`。
+测试连接会向受控的 `/models` 端点发出一次 GET；Anthropic 类型改用受控的 `/messages` 端点。获取非 Anthropic 模型列表时，只发出一次 GET：同一个响应先检查状态，只有状态为 200 才限长读取并解析 JSON。非 200 响应不读取上游正文，也不会为了读取 JSON 再发第二个请求。Anthropic 模型列表沿用内置列表，不发模型列表请求。
+
+## 实际 AI 与 Embedding 请求
+
+`ModelRouter` 的七个可联网入口全部通过统一安全运行时客户端：
+
+- 同步 `invoke`；
+- 异步 `ainvoke`；
+- 流式 `astream`；
+- 旧版同步 `call_capability`；
+- 旧版异步 `acall_capability`；
+- `chat`；
+- 旧版流式 `astream_capability`。
+
+这七个入口覆盖 OpenAI、Anthropic、Google 的同步、异步与流式调用。请求先按原有规则选择默认服务商、能力覆盖或负载均衡池成员，再对已经选中的服务商执行安全验证。环境变量或构造参数提供的地址、旧版迁移地址及 UI 刷新后的地址也走同一边界，没有来源豁免。
+
+每次调用把两部分分开处理：
+
+1. `base_url` 只表示服务商 origin 和可选基础路径，不允许带 query 或 fragment，由 URL 策略完成规范化、DNS 与地址分类。
+2. `request_target` 是服务端按服务商类型控制的同源路径和必要 query，必须以单个 `/` 开头，不能是绝对 URL、`//` 网络路径、反斜杠、fragment、空白、控制字符或嵌套 URL。
+
+最终目标保留已经验证的基础路径，不能改变协议、主机或端口。Google 模型名先按单个路径段编码，API Key 只通过标准 query 编码加入实际请求目标；本文不展示完整 query。运行时错误、日志和诊断信息也不会记录完整目标。
+
+`EmbeddingService` 的每个远程批次都通过相同安全客户端向服务端控制的 `/embeddings` 目标发出请求。公开 `embed()` 开始时会捕获一份不可变配置，缓存查询、所有顺序或并发批次、缓存写入和磁盘元数据始终使用这同一份服务商、模型与策略快照。因此运行中刷新配置不会混用新旧地址、凭据或缓存命名空间；下一次调用才会看到完整的新配置。
+
+### Embedding 缓存如何隔离
+
+可以把 Embedding 缓存理解为一组贴有来源标签的抽屉。v2 缓存不会只看“服务商类型和模型名称”，还会区分结果来自真实远程服务还是本地假向量，并为远程地址计算 SHA-256 摘要：
+
+- 真实远程缓存的标签包含来源、provider、model 和规范化 endpoint 的 SHA-256。即使 provider 与 model 相同，只要切换到另一个端点，就会使用另一个缓存空间，不会拿到旧端点生成的向量。
+- 本地/未配置服务时生成的确定性假向量放在单独的本地假向量空间。要求真实向量的 `require_real=true` 请求只查询当前远程服务的真实结果，不能命中本地假向量。
+- 已配置远程服务连接失败或超时、重试耗尽后临时返回的 fallback 假向量不会写入内存或磁盘缓存。下次请求仍会重新尝试真实服务。
+- 磁盘缓存命中前会核对来源、完整命名空间和端点摘要。metadata 不保存原始 endpoint、API Key 或请求目标。摘要只用于稳定区分端点，不是加密或保密边界；掌握候选地址的人仍可能通过比对摘要识别端点。
+- 旧版缓存没有 v2 来源与端点标签，因此升级后会自动失效。系统不会危险地批量删除旧文件，而是在再次需要某段文本时按新规则生成缓存；用户无需手动清理或迁移。
+
+一次请求中如果多个并发批次有的拿到真实向量、有的因可用性故障临时降级，只有真实结果会缓存，最终返回顺序仍与输入顺序一致。
 
 ## 响应
+
+连接成功：
 
 ```json
 {
   "success": true,
-  "message": "✅ API 连接成功！",
-  "details": "模型：gpt-4o-mini | 响应时间：0.42s"
+  "message": "连接成功"
 }
 ```
 
-- 失败时 `success=false`，`message` 包含图标 + 错误类型（HTTP、超时等），`details` 包含返回的部分报文。
-- `httpx.TimeoutException`、`HTTPStatusError`、JSON 解析错误都会被捕获并转化为易读信息。
+模型列表成功：
 
-## 作用
+```json
+{
+  "success": true,
+  "models": [
+    { "id": "example-model", "name": "example-model" }
+  ]
+}
+```
 
-- Settings Drawer 可先调用该接口验证第三方配置，再将成功的 base_url/api_key 写入 `UIConfig.providers`。
-- 可用于快速测试不同 provider（DeepSeek、SiliconFlow、自建代理等）的可访问性与响应时间。
+上游返回非 200 时，接口保留兼容的 HTTP 200 业务失败结果，例如：
 
-## 安全
+```json
+{
+  "success": false,
+  "error": "API 返回非成功状态"
+}
+```
 
-- 后端日志不会打印完整 `api_key`。
-- 建议在前端只保存必要信息；成功后立刻调用 `/config/ui` 写入，避免将 key 存在浏览器本地。
+模型列表失败结果还会包含空的 `models` 数组。该结果不包含上游状态正文。URL 策略、DNS、连接、超时、大小或解析失败则使用下表中的 HTTP 状态和结构化 `detail`：
 
-## 前端
+```json
+{
+  "detail": {
+    "code": "outbound_timeout",
+    "message": "外部服务请求超时"
+  }
+}
+```
 
-- `frontend/src/services/api.ts#testApiConnection`
-- `SettingsDrawer` 在“AI 服务”标签页中使用，验证成功后可以提示“写入路由表”。
+## 状态与错误码
+
+| HTTP | 错误码 | 场景 | 处理建议 |
+| ---: | --- | --- | --- |
+| 400 | `outbound_url_invalid` | URL 格式、协议、凭据、query、fragment 或端口非法 | 检查 Base URL |
+| 400 | `outbound_https_required` | 公网地址使用 HTTP | 改用 HTTPS |
+| 400 | `local_ai_disabled` | 回环地址有效，但本地 AI 开关关闭 | 在设置中使用管理员令牌开启 |
+| 400 | `private_network_blocked` | 私网、链路本地或其他特殊地址 | 改用允许的公网地址或精确回环地址 |
+| 502 | `outbound_dns_failed` | DNS 失败或没有返回地址 | 检查域名与 DNS |
+| 502 | `outbound_connect_failed` | 外部服务不可达 | 检查服务状态与地址 |
+| 502 | `outbound_response_too_large` | 模型列表正文超过 1 MiB | 缩小服务返回内容 |
+| 502 | `outbound_bad_response` | 模型列表响应非预期或无法解析 | 检查服务响应格式 |
+| 504 | `outbound_timeout` | DNS、连接、读取或总体操作超时 | 稍后重试或检查服务 |
+| 503 | `admin_token_unconfigured` | 修改本地 AI 开关，但服务端未配置管理员令牌 | 启动前设置 `CLADE_ADMIN_TOKEN` |
+| 403 | `admin_token_invalid` | 修改本地 AI 开关时令牌缺失或错误 | 重新输入管理员令牌 |
+
+最后两项由 `POST /api/config/ui` 在本地 AI 开关发生变化时返回，列在这里便于设置界面统一处理安全错误。
+
+## 外部 URL 安全边界
+
+- 公网服务必须使用 HTTPS。域名本次解析得到的每一个 IP 都必须是全局可路由地址；只要混入一个私有或特殊地址，整个请求就会被拒绝。
+- 默认禁止回环、家庭局域网、链路本地、保留、多播、未指定及其他非全局地址。
+- 只有 `allow_local_ai_endpoints=true` 时才例外允许规范化后的 `localhost`、字面量 `127.0.0.1` 和 `::1`。`localhost` 的全部解析结果还必须都是回环地址。`*.localhost`、其他 `127.0.0.0/8` 地址和局域网地址始终不允许。
+- 本地例外可以使用 HTTP 或 HTTPS；公网地址仍只能使用 HTTPS。
+- 策略批准 DNS 结果后，实际 TCP 连接只使用本次批准的 IP，不再进行第二次不受约束的 DNS 查询；HTTP Host、HTTPS SNI 与证书验证仍使用原始规范主机名。
+- 不读取系统或环境代理配置，不自动跟随 3xx 重定向，也不允许 Unix socket。探测端点只能是服务端控制的 `/models` 或 `/messages`；运行时 AI 与 Embedding 目标同样由服务端按服务商类型构造和校验。
+- 连接测试的连接、读取、写入和连接池等待各不超过 5 秒，总截止时间为 10 秒；它只读取响应状态，不读取完整正文。
+- 模型列表的连接、写入和连接池等待各不超过 5 秒，单次读取不超过 10 秒，总截止时间为 15 秒。总截止时间包含 DNS、连接、响应头和正文读取。
+- 模型列表正文上限精确为 `1_048_576` 字节（1 MiB）。响应声明超限时不读取正文；未声明长度时最多读到上限加 1 字节后拒绝。客户端要求未压缩响应并拒绝响应压缩，避免压缩内容绕过大小边界。
+
+## 运行时响应、超时与清理
+
+运行时客户端强制请求未压缩响应，并拒绝任何非 `identity` 的 `Content-Encoding`。3xx、4xx、5xx、非法编码及响应头已声明超限时都不会读取上游正文。未声明长度时，客户端只读到对应上限加 1 字节，以便确认超限后立即关闭。
+
+| 运行时响应 | 总大小上限 | 单行/事件上限 |
+| --- | ---: | ---: |
+| 普通 AI JSON | 8 MiB | 不适用 |
+| Embedding JSON | 16 MiB | 不适用 |
+| AI 行流式响应 | 16 MiB | 1 MiB |
+
+普通响应必须是 JSON 对象，再由 OpenAI、Anthropic、Google 的既有解析器验证业务结构。流式响应按原始字节限长拆行，并以严格 UTF-8 解码；状态、编码、大小或格式不合法时只返回一次固定错误并结束流。Embedding 响应还必须满足严格的索引结构：条目数准确，索引是从 0 开始的完整、唯一、有效整数集合，向量必须是非空、有限的数值列表；即使上游乱序，结果也按输入顺序恢复。
+
+普通 AI 请求使用当前能力或全局配置的 `timeout` 作为端到端总时限，默认 60 秒。计时从逻辑请求入口开始，包含本地请求准备、并发队列、URL 校验、DNS、已批准 IP 的连接尝试、TLS、写入、读取、响应解析、重试退避和后续重试；这些阶段不会各自重新获得一份完整时限。运行时建连最多 10 秒、写入最多 30 秒、连接池等待最多 10 秒，但每个阶段的实际等待还会被当时剩余的总时限进一步收紧。总时限耗尽后不再开始新的 DNS、连接、退避或重试。
+
+流式请求把同一个 `timeout` 配置解释为“等待新的非空 AI 内容”的最长时间。初次等待从逻辑入口开始，因此并发排队、DNS、连接和首段真实内容都在第一个等待窗口内；收到真实内容后，后续每次只限制等待下一段真实内容的时间。连接状态、心跳、SSE 注释、空行和协议控制事件不会延长这个窗口。除此之外，每条流从逻辑入口起还有固定 600 秒（10 分钟）的总时长上限，包含排队时间，并且不会因为持续收到内容而重置。
+
+如果流在已经显示部分文字后超时，界面会保留这些已显示文字并提示“AI 生成中断，已使用备用结果”，但残缺内容不会被当作完整报告或结构化业务结果；相关功能会改用现有的完整规则备用结果。尚未显示真实内容时发生超时，则按普通超时错误结束。调用方主动取消与超时不同：取消会继续向上层传播并记录为取消，不会记为超时、触发普通重试或伪装成流式中断。
+
+同步、异步和流式请求在成功、失败、超时、调用方取消、提前停止或业务解析异常时都会关闭响应、流、客户端和连接池。
+
+## 重试、服务商切换与 Embedding 降级
+
+- URL、HTTPS、本地/私网、DNS 安全、请求目标、响应状态、编码、大小、JSON 或业务结构错误都属于不可重试的安全/响应错误，立即结束。
+- 只有 `outbound_connect_failed` 与 `outbound_timeout` 属于可用性错误；仅当对应 AI 入口原本配置了重试时，才按原有次数和退避重试。
+- 普通请求的所有尝试和退避共享同一个端到端总时限；退避后没有剩余时间时不会开始下一次 DNS、连接或网络请求。
+- 每次网络重试都重新执行 URL 与 DNS 验证，但始终针对本次已经选中的同一服务商。选中的负载均衡池成员不安全或失败时，不会暗中选择其他成员。
+- Embedding 的连接失败或超时会按既有上限重试。只有重试耗尽、`require_real=false`，并且本次请求开始时已经启用假向量，才允许使用假向量。
+- 上述远程故障 fallback 假向量只用于本次结果，不进入缓存；成功的真实远程向量和本地未配置场景的确定性假向量分别进入互不相通的 v2 缓存空间。
+- Embedding 的 URL/DNS/HTTPS/本地策略、状态、编码、大小、JSON 或索引/向量结构错误一律不重试为假向量，也不会被假向量掩盖。
+
+设置界面刷新 `allow_local_ai_endpoints` 或服务商配置后，`ModelRouter` 与 `EmbeddingService` 会收到当前策略。已经开始的请求继续使用自己的不可变快照；后续请求使用刷新后的完整配置。旧版 Embedding 地址、环境变量和服务商池配置只保留作为配置来源，实际联网时仍执行相同验证。
+
+## 敏感信息处理
+
+API Key 和管理员令牌不会出现在公开错误、响应或日志中。公开错误使用固定错误码和固定中文提示。错误、流式事件和日志同样不会包含 Authorization、`x-api-key` 等请求头、完整 URL 或请求目标、Google query、请求正文或提示词、上游响应正文或流片段、解析器或网络库的原始异常文本。
+
+前端通过 `frontend/src/services/api/config.ts` 调用这些接口。API Key 只按请求或服务端已保存配置使用；管理员令牌只用于修改本地 AI 开关，不属于探测请求体。

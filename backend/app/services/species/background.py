@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from ...models.species import Species
-from ...repositories.species_repository import species_repository
 from ...schemas.responses import BackgroundSummary, ReemergenceEvent
 from ...simulation.species import MortalityResult
+
+if TYPE_CHECKING:
+    from .reemergence import ReemergenceService
 
 
 @dataclass(slots=True)
@@ -19,8 +21,13 @@ class BackgroundConfig:
 class BackgroundSpeciesManager:
     """管理规则引擎托管的小型背景物种。"""
 
-    def __init__(self, config: BackgroundConfig) -> None:
+    def __init__(
+        self,
+        config: BackgroundConfig,
+        reemergence_service: "ReemergenceService",
+    ) -> None:
         self.config = config
+        self._reemergence_service = reemergence_service
 
     def summarize(self, results: Sequence[MortalityResult]) -> list[BackgroundSummary]:
         buckets: dict[str, dict] = {}
@@ -73,6 +80,13 @@ class BackgroundSpeciesManager:
             species = result.species
             promoted.append(species)
         return promoted
+
+    def evaluate_reemergence(
+        self,
+        candidates: list[Species],
+        modifiers: dict[str, float] | None = None,
+    ) -> list[Any]:
+        return self._reemergence_service.evaluate_reemergence(candidates, modifiers)
 
     def _infer_role(self, species: Species) -> str:
         description = species.description

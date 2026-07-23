@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { Trophy, Star, Lock, Unlock, Filter, Search, Sparkles, Crown, Target, Flame } from "lucide-react";
 import { AnalysisPanel, AnalysisSection, EmptyState } from "./common/AnalysisPanel";
+import { http } from "@/services/api";
 
 interface Achievement {
   id: string;
@@ -63,8 +64,7 @@ export function AchievementsPanel({ onClose }: Props) {
 
   async function fetchAchievements() {
     try {
-      const response = await fetch("/api/achievements");
-      const data = await response.json();
+      const data = await http.get<{ achievements?: Achievement[]; stats?: AchievementStats }>("/api/achievements");
       setAchievements(data.achievements || []);
       setStats(data.stats || null);
     } catch (error) {

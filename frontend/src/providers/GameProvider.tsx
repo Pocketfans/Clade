@@ -32,6 +32,7 @@ import type {
 } from "@/services/api.types";
 import type { GameDataState, GameDataActions } from "./types";
 import type { ViewMode } from "@/components/MapViewSelector";
+import type { UpdateUIConfigOptions } from "@/services/api";
 
 // 使用模块化 API
 import {
@@ -207,8 +208,11 @@ export function GameProvider({ children, viewMode, onViewModeChange }: GameProvi
     invalidateLineageCache();
   }, []);
 
-  const updateUIConfigAction = useCallback(async (config: UIConfig) => {
-    const saved = await apiUpdateUIConfig(config);
+  const updateUIConfigAction = useCallback(async (
+    config: UIConfig,
+    options: UpdateUIConfigOptions = {},
+  ) => {
+    const saved = await apiUpdateUIConfig(config, options);
     setUIConfig(saved);
   }, []);
 

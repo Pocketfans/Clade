@@ -45,7 +45,6 @@ class CriticalAnalyzer:
                 capability="critical_detail",
                 payload=payload,
                 task_name=f"Critical分析[{item.species.common_name[:8]}]",
-                timeout=60,
                 heartbeat_interval=2.0,
             )
             return response

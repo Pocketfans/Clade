@@ -6,7 +6,7 @@ from datetime import datetime
 
 from ..models.genus import Genus
 from ..models.species import Species
-from ..repositories.genus_repository import genus_repository
+from ..repositories.genus_repository import GenusRepository
 from ..repositories.species_repository import species_repository
 from ..services.species.trophic import TrophicLevelCalculator
 
@@ -1600,7 +1600,7 @@ def seed_thriving_ecosystem() -> None:
     print(f"[Seed·繁荣生态] 剧本加载完成，共 {len(created_species)} 个物种")
 
 
-def _seed_genera():
+def _seed_genera(genus_repository: GenusRepository) -> None:
     """创建初始属"""
     genera_data = [
         {"code": "A", "name_latin": "Algaprimordia", "name_common": "原藻属"},

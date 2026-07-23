@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Literal, Sequence
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from ..security.save_paths import validate_save_name
 
 
 PressureType = Literal[
@@ -80,19 +82,27 @@ class QueueRequest(BaseModel):
     rounds: int = Field(ge=1, le=20, default=1)
 
 
-class CreateSaveRequest(BaseModel):
+class SaveNameRequest(BaseModel):
     save_name: str = Field(min_length=1, max_length=50)
+
+    @field_validator("save_name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return validate_save_name(value)
+
+
+class CreateSaveRequest(SaveNameRequest):
     scenario: str = Field(default="原初大陆")
     species_prompts: list[str] | None = None  # 用于空白剧本的物种描述
     map_seed: int | None = None  # 可选的地图种子
 
 
-class SaveGameRequest(BaseModel):
-    save_name: str
+class SaveGameRequest(SaveNameRequest):
+    pass
 
 
-class LoadGameRequest(BaseModel):
-    save_name: str
+class LoadGameRequest(SaveNameRequest):
+    pass
 
 
 class GenerateSpeciesRequest(BaseModel):

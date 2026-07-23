@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from ...services.species.niche import NicheAnalyzer
     from ...services.species.speciation import SpeciationService
     from ...services.species.background import BackgroundSpeciesManager
+    from ...services.species.reemergence import ReemergenceService
     from ...services.species.tiering import SpeciesTieringService
     from ...services.species.reproduction import ReproductionService
     from ...services.species.hybridization import HybridizationService
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from ...services.species.species_generator import SpeciesGenerator
     from ...ai.model_router import ModelRouter
     from ...services.system.embedding import EmbeddingService
+    from ...repositories.genus_repository import GenusRepository
 
 
 class SpeciesServiceProvider:
@@ -31,6 +33,7 @@ class SpeciesServiceProvider:
     embedding_service: 'EmbeddingService'
     model_router: 'ModelRouter'
     config_service: Any
+    genus_repository: 'GenusRepository'
     
     def _get_or_override(self, name: str, factory: Callable[[], Any]) -> Any:
         """Get service instance, preferring override if set"""
@@ -53,8 +56,17 @@ class SpeciesServiceProvider:
             'speciation_service',
             lambda: SpeciationService(
                 self.model_router,
-                config=self.config_service.get_speciation()
+                config=self.config_service.get_speciation(),
+                genus_repository=self.genus_repository,
             )
+        )
+
+    @cached_property
+    def reemergence_service(self) -> 'ReemergenceService':
+        from ...services.species.reemergence import ReemergenceService
+        return self._get_or_override(
+            'reemergence_service',
+            lambda: ReemergenceService(self.species_repository),
         )
     
     @cached_property
@@ -67,7 +79,8 @@ class SpeciesServiceProvider:
                     population_threshold=self.settings.background_population_threshold,
                     mass_extinction_threshold=self.settings.mass_extinction_threshold,
                     promotion_quota=self.settings.background_promotion_quota,
-                )
+                ),
+                reemergence_service=self.reemergence_service,
             )
         )
     

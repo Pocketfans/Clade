@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
+import { http } from "@/services/api";
 
 interface EnergyStatus {
   enabled: boolean;
@@ -25,8 +26,7 @@ export function EnergyBar({ className = "", onOpenHistory }: Props) {
 
   async function fetchEnergy() {
     try {
-      const response = await fetch("/api/energy");
-      const data = await response.json();
+      const data = await http.get<EnergyStatus>("/api/energy");
       setEnergy(data);
     } catch (e) {
       console.error("获取能量状态失败:", e);

@@ -21,7 +21,7 @@ import warnings
 
 from ...models.genus import Genus
 from ...models.species import Species
-from ...repositories.genus_repository import genus_repository
+from ...repositories.genus_repository import GenusRepository
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,15 @@ class GeneLibraryService:
         无需维护独立的属级基因库。
     """
     
-    def __init__(self):
+    def __init__(
+        self,
+        genus_repository: GenusRepository | None = None,
+    ) -> None:
+        self._genus_repository = (
+            genus_repository
+            if genus_repository is not None
+            else GenusRepository()
+        )
         warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     
     def record_discovery(
@@ -55,7 +63,7 @@ class GeneLibraryService:
         if not discoveries:
             return
         
-        genus = genus_repository.get_by_code(genus_code)
+        genus = self._genus_repository.get_by_code(genus_code)
         if not genus:
             return
         
@@ -89,7 +97,7 @@ class GeneLibraryService:
                     logger.info(f"[基因库] {genus.name_common}属发现新器官: {organ_name} (by {discoverer_code})")
         
         genus.updated_turn = turn
-        genus_repository.upsert(genus)
+        self._genus_repository.upsert(genus)
     
     def inherit_dormant_genes(
         self, 
@@ -259,13 +267,13 @@ class GeneLibraryService:
     
     def update_activation_count(self, genus_code: str, gene_name: str, gene_type: str):
         """更新基因激活计数"""
-        genus = genus_repository.get_by_code(genus_code)
+        genus = self._genus_repository.get_by_code(genus_code)
         if not genus or not genus.gene_library:
             return
         
         if gene_type in genus.gene_library and gene_name in genus.gene_library[gene_type]:
             genus.gene_library[gene_type][gene_name]["activation_count"] += 1
-            genus_repository.upsert(genus)
+            self._genus_repository.upsert(genus)
     
     def _infer_pressure_types(self, trait_name: str) -> list[str]:
         """根据特质名推断触发压力类型"""

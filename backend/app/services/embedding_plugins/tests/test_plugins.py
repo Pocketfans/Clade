@@ -143,6 +143,32 @@ class MockMultiVectorStore:
         return self._stores.get(name)
 
 
+@pytest.fixture
+def registered_builtin_plugins():
+    from ..ancestry_embedding import AncestryEmbeddingPlugin
+    from ..behavior_strategy import BehaviorStrategyPlugin
+    from ..evolution_space import EvolutionSpacePlugin
+    from ..food_web_embedding import FoodWebEmbeddingPlugin
+    from ..registry import PluginRegistry
+    from ..tile_embedding import TileBiomePlugin
+
+    plugin_classes = {
+        "ancestry": AncestryEmbeddingPlugin,
+        "behavior_strategy": BehaviorStrategyPlugin,
+        "evolution_space": EvolutionSpacePlugin,
+        "food_web": FoodWebEmbeddingPlugin,
+        "tile_biome": TileBiomePlugin,
+    }
+
+    PluginRegistry.clear()
+    for name, plugin_class in plugin_classes.items():
+        PluginRegistry.register(name, plugin_class)
+
+    yield
+
+    PluginRegistry.clear()
+
+
 # ==================== 测试 Registry ====================
 
 class TestPluginRegistry:
@@ -240,18 +266,13 @@ class TestPluginManager:
 # ==================== 测试 BehaviorStrategy 插件 ====================
 
 class TestBehaviorStrategyPlugin:
-    def setup_method(self):
+    @pytest.fixture(autouse=True)
+    def setup_plugin(self, registered_builtin_plugins):
         from ..registry import PluginRegistry
-        PluginRegistry.clear()
-        from .. import behavior_strategy  # 注册插件
-        
+
         self.service = MockEmbeddingService()
         self.plugin = PluginRegistry.get_instance("behavior_strategy", self.service)
         self.plugin.initialize()
-    
-    def teardown_method(self):
-        from ..registry import PluginRegistry
-        PluginRegistry.clear()
     
     def test_infer_behavior_profile(self):
         species = MockSpecies()
@@ -288,18 +309,13 @@ class TestBehaviorStrategyPlugin:
 # ==================== 测试 FoodWeb 插件 ====================
 
 class TestFoodWebPlugin:
-    def setup_method(self):
+    @pytest.fixture(autouse=True)
+    def setup_plugin(self, registered_builtin_plugins):
         from ..registry import PluginRegistry
-        PluginRegistry.clear()
-        from .. import food_web_embedding
-        
+
         self.service = MockEmbeddingService()
         self.plugin = PluginRegistry.get_instance("food_web", self.service)
         self.plugin.initialize()
-    
-    def teardown_method(self):
-        from ..registry import PluginRegistry
-        PluginRegistry.clear()
     
     def test_build_ecological_positions(self):
         ctx = MockContext()
@@ -342,18 +358,13 @@ class TestFoodWebPlugin:
 # ==================== 测试 TileBiome 插件 ====================
 
 class TestTileBiomePlugin:
-    def setup_method(self):
+    @pytest.fixture(autouse=True)
+    def setup_plugin(self, registered_builtin_plugins):
         from ..registry import PluginRegistry
-        PluginRegistry.clear()
-        from .. import tile_embedding
-        
+
         self.service = MockEmbeddingService()
         self.plugin = PluginRegistry.get_instance("tile_biome", self.service)
         self.plugin.initialize()
-    
-    def teardown_method(self):
-        from ..registry import PluginRegistry
-        PluginRegistry.clear()
     
     def test_build_tile_profiles(self):
         ctx = MockContext()
@@ -388,18 +399,13 @@ class TestTileBiomePlugin:
 # ==================== 测试 EvolutionSpace 插件 ====================
 
 class TestEvolutionSpacePlugin:
-    def setup_method(self):
+    @pytest.fixture(autouse=True)
+    def setup_plugin(self, registered_builtin_plugins):
         from ..registry import PluginRegistry
-        PluginRegistry.clear()
-        from .. import evolution_space
-        
+
         self.service = MockEmbeddingService()
         self.plugin = PluginRegistry.get_instance("evolution_space", self.service)
         self.plugin.initialize()
-    
-    def teardown_method(self):
-        from ..registry import PluginRegistry
-        PluginRegistry.clear()
     
     def test_collect_evolution_events(self):
         ctx = MockContext()
@@ -429,18 +435,13 @@ class TestEvolutionSpacePlugin:
 # ==================== 测试 Ancestry 插件 ====================
 
 class TestAncestryPlugin:
-    def setup_method(self):
+    @pytest.fixture(autouse=True)
+    def setup_plugin(self, registered_builtin_plugins):
         from ..registry import PluginRegistry
-        PluginRegistry.clear()
-        from .. import ancestry_embedding
-        
+
         self.service = MockEmbeddingService()
         self.plugin = PluginRegistry.get_instance("ancestry", self.service)
         self.plugin.initialize()
-    
-    def teardown_method(self):
-        from ..registry import PluginRegistry
-        PluginRegistry.clear()
     
     def test_get_ancestor_chain(self):
         species = MockSpecies(lineage_code="A_B_C_D")
@@ -450,12 +451,11 @@ class TestAncestryPlugin:
     
     def test_predict_genetic_inertia(self):
         species = MockSpecies()
-        
-        # 添加一些历史
-        self.plugin._trait_history[species.lineage_code] = {
-            "攻击性": [5, 5, 5, 5, 5],  # 稳定 = 高惯性
-        }
-        
+        ctx = MockContext(all_species=[species])
+
+        for _ in range(5):
+            self.plugin.build_index(ctx)
+
         inertia = self.plugin.predict_genetic_inertia(species, "攻击性")
         assert inertia["inertia"] > 0.5
         assert inertia["trend_direction"] == "stable"
@@ -471,23 +471,31 @@ class TestAncestryPlugin:
         count = self.plugin.build_index(ctx)
         assert count == 3
 
+    def test_build_index_embedding_failure_does_not_publish_empty_cache(self):
+        existing_species = MockSpecies(lineage_code="A")
+        assert self.plugin.build_index(MockContext(all_species=[existing_species])) == 1
+        existing_ancestry = self.plugin._ancestry_cache["A"]
+
+        self.service.embed = Mock(return_value=[])
+        count = self.plugin.build_index(
+            MockContext(
+                all_species=[existing_species, MockSpecies(lineage_code="A_B")]
+            )
+        )
+
+        assert count == 0
+        assert set(self.plugin._ancestry_cache) == {"A"}
+        assert self.plugin._ancestry_cache["A"] is existing_ancestry
+
 
 # ==================== 降级路径测试 ====================
 
+@pytest.mark.usefixtures("registered_builtin_plugins")
 class TestDegradationPaths:
     """测试插件在缺少数据时的降级处理"""
-    
-    def setup_method(self):
-        from ..registry import PluginRegistry
-        PluginRegistry.clear()
-    
-    def teardown_method(self):
-        from ..registry import PluginRegistry
-        PluginRegistry.clear()
-    
+
     def test_behavior_strategy_degradation_no_traits(self):
         """行为策略：缺少 abstract_traits 时应降级"""
-        from .. import behavior_strategy
         from ..registry import PluginRegistry
         
         service = MockEmbeddingService()
@@ -504,7 +512,6 @@ class TestDegradationPaths:
     
     def test_behavior_strategy_empty_species_list(self):
         """行为策略：空物种列表应返回 0"""
-        from .. import behavior_strategy
         from ..registry import PluginRegistry
         
         service = MockEmbeddingService()
@@ -519,7 +526,6 @@ class TestDegradationPaths:
     
     def test_tile_biome_degradation_no_tiles(self):
         """地块向量：缺少 all_tiles 时应走降级路径"""
-        from .. import tile_embedding
         from ..registry import PluginRegistry
         
         service = MockEmbeddingService()
@@ -536,7 +542,6 @@ class TestDegradationPaths:
     
     def test_tile_biome_with_list_habitats(self):
         """地块向量：all_habitats 为 list 时应正确处理"""
-        from .. import tile_embedding
         from ..registry import PluginRegistry
         
         service = MockEmbeddingService()
@@ -555,7 +560,6 @@ class TestDegradationPaths:
     
     def test_food_web_degradation_no_food_web_analysis(self):
         """食物网：缺少 food_web_analysis 时应使用 prey_species"""
-        from .. import food_web_embedding
         from ..registry import PluginRegistry
         
         service = MockEmbeddingService()
@@ -576,7 +580,6 @@ class TestDegradationPaths:
     
     def test_ancestry_empty_trait_history(self):
         """血统：无特征历史时应返回低置信度"""
-        from .. import ancestry_embedding
         from ..registry import PluginRegistry
         
         service = MockEmbeddingService()
@@ -591,7 +594,6 @@ class TestDegradationPaths:
     
     def test_search_on_empty_index(self):
         """所有插件：索引为空时搜索应返回空列表"""
-        from .. import behavior_strategy
         from ..registry import PluginRegistry
         
         service = MockEmbeddingService()
@@ -604,7 +606,6 @@ class TestDegradationPaths:
     
     def test_stats_track_degraded_mode(self):
         """统计信息应记录降级模式"""
-        from .. import behavior_strategy
         from ..registry import PluginRegistry
         
         service = MockEmbeddingService()

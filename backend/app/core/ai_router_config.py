@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import TYPE_CHECKING, Optional
 
-from ..ai.model_router import ModelConfig, ModelRouter, ProviderPoolConfig
+from ..ai.model_router import (
+    PROVIDER_TYPE_OPENAI,
+    ModelConfig,
+    ModelRouter,
+    ProviderPoolConfig,
+)
 from ..models.config import CapabilityRouteConfig, ProviderConfig, UIConfig
 
 if TYPE_CHECKING:
@@ -11,6 +17,46 @@ if TYPE_CHECKING:
     from ..services.system.embedding import EmbeddingService
 
 logger = logging.getLogger(__name__)
+
+
+def _migrate_legacy_ai_config(config: UIConfig) -> None:
+    if not config.ai_api_key or config.providers:
+        return
+
+    default_provider_id = str(uuid.uuid4())[:8]
+    config.providers[default_provider_id] = ProviderConfig(
+        id=default_provider_id,
+        name="Default Provider",
+        type=config.ai_provider or "openai",
+        base_url=config.ai_base_url,
+        api_key=config.ai_api_key,
+    )
+    config.default_provider_id = default_provider_id
+    config.default_model = config.ai_model
+
+    if not config.capability_configs:
+        return
+    first_value = next(iter(config.capability_configs.values()), None)
+    if not isinstance(first_value, dict) or "api_key" not in first_value:
+        return
+
+    for capability, legacy_config in config.capability_configs.items():
+        if legacy_config.get("api_key") or legacy_config.get("base_url"):
+            provider_id = f"custom_{capability}"
+            config.providers[provider_id] = ProviderConfig(
+                id=provider_id,
+                name=f"Custom for {capability}",
+                type=legacy_config.get("provider", "openai"),
+                base_url=legacy_config.get("base_url") or config.ai_base_url,
+                api_key=legacy_config.get("api_key") or config.ai_api_key,
+            )
+        else:
+            provider_id = default_provider_id
+        config.capability_routes[capability] = CapabilityRouteConfig(
+            provider_id=provider_id,
+            model=legacy_config.get("model"),
+            timeout=legacy_config.get("timeout", 60),
+        )
 
 
 def _pick_provider_model(provider: Optional[ProviderConfig]) -> Optional[str]:
@@ -51,6 +97,38 @@ def _resolve_final_model(
     return None
 
 
+def _commit_embedding_runtime_config(
+    embedding_service: 'EmbeddingService',
+    *,
+    allow_local_ai_endpoints: bool,
+    runtime_values: dict[str, object] | None,
+) -> None:
+    atomic_configure = getattr(embedding_service, "configure_runtime_config", None)
+    if callable(atomic_configure):
+        if runtime_values is None:
+            atomic_configure(
+                enabled=False,
+                allow_local_ai_endpoints=allow_local_ai_endpoints,
+            )
+        else:
+            atomic_configure(
+                **runtime_values,
+                allow_local_ai_endpoints=allow_local_ai_endpoints,
+            )
+        return
+
+    # Compatibility for old callers and lightweight test doubles.
+    embedding_service.allow_local_ai_endpoints = allow_local_ai_endpoints
+    if runtime_values is None:
+        embedding_service.enabled = False
+        return
+    embedding_service.provider = runtime_values["provider"]
+    embedding_service.api_base_url = runtime_values["base_url"]
+    embedding_service.api_key = runtime_values["api_key"]
+    embedding_service.model = runtime_values["model"]
+    embedding_service.enabled = runtime_values["enabled"]
+
+
 def configure_model_router(
     config: UIConfig,
     model_router: ModelRouter,
@@ -58,10 +136,20 @@ def configure_model_router(
     settings: 'Settings',
 ) -> UIConfig:
     """Apply UI routing config to the provided ModelRouter instance."""
+    model_router.configure_runtime_credentials(
+        base_url=getattr(settings, "ai_base_url", None),
+        api_key=getattr(settings, "ai_api_key", None),
+        provider_type=PROVIDER_TYPE_OPENAI,
+    )
+    model_router.overrides = {}
+    model_router.clear_provider_pools()
+
     if not config:
         return config
-    
-    model_router.overrides = {}
+
+    _migrate_legacy_ai_config(config)
+
+    model_router.allow_local_ai_endpoints = config.allow_local_ai_endpoints
     
     if config.ai_concurrency_limit > 0:
         model_router.set_concurrency_limit(config.ai_concurrency_limit)
@@ -73,8 +161,11 @@ def configure_model_router(
     default_model_name = config.default_model
     
     if default_provider:
-        model_router.api_base_url = default_provider.base_url
-        model_router.api_key = default_provider.api_key
+        model_router.configure_runtime_credentials(
+            base_url=default_provider.base_url,
+            api_key=default_provider.api_key,
+            provider_type=default_provider.provider_type or PROVIDER_TYPE_OPENAI,
+        )
         if not default_model_name:
             default_model_name = _pick_provider_model(default_provider)
             if default_model_name:
@@ -96,9 +187,12 @@ def configure_model_router(
         
         current_route = model_router.routes.get(capability)
         provider = providers.get(route_config.provider_id)
-        selectable_provider_ids = [
-            pid for pid in (route_config.provider_ids or []) if pid in providers
-        ]
+        selectable_provider_ids = []
+        seen_provider_ids = set()
+        for pid in route_config.provider_ids or []:
+            if pid in providers and pid not in seen_provider_ids:
+                seen_provider_ids.add(pid)
+                selectable_provider_ids.append(pid)
         
         if not provider and selectable_provider_ids and not lb_enabled:
             first_pid = selectable_provider_ids[0]
@@ -207,21 +301,30 @@ def configure_model_router(
     
     emb_provider = providers.get(config.embedding_provider_id) if config.embedding_provider_id else None
     
+    embedding_runtime_values: dict[str, object] | None = None
     if emb_provider and embedding_service:
-        embedding_service.provider = emb_provider.type
-        embedding_service.api_base_url = emb_provider.base_url
-        embedding_service.api_key = emb_provider.api_key
-        embedding_service.model = config.embedding_model
-        embedding_service.enabled = True
+        embedding_runtime_values = {
+            "provider": emb_provider.type,
+            "base_url": emb_provider.base_url,
+            "api_key": emb_provider.api_key,
+            "model": config.embedding_model,
+            "enabled": True,
+        }
     elif getattr(config, "embedding_api_key", None) and getattr(config, "embedding_base_url", None):
         if embedding_service:
-            embedding_service.provider = settings.embedding_provider
-            embedding_service.api_base_url = config.embedding_base_url
-            embedding_service.api_key = config.embedding_api_key
-            embedding_service.model = config.embedding_model
-            embedding_service.enabled = True
-    elif embedding_service:
-        embedding_service.enabled = False
+            embedding_runtime_values = {
+                "provider": settings.embedding_provider,
+                "base_url": config.embedding_base_url,
+                "api_key": config.embedding_api_key,
+                "model": config.embedding_model,
+                "enabled": True,
+            }
+    if embedding_service:
+        _commit_embedding_runtime_config(
+            embedding_service,
+            allow_local_ai_endpoints=config.allow_local_ai_endpoints,
+            runtime_values=embedding_runtime_values,
+        )
     
     return config
 

@@ -3,17 +3,24 @@
  * 单列布局，清晰的卡片分组
  */
 
-import { memo, useState, type Dispatch } from "react";
+import { memo, useMemo, useState, type Dispatch } from "react";
 import type { UIConfig, ProviderConfig, CapabilityRouteConfig } from "@/services/api.types";
 import type { SettingsAction } from "../types";
 import { SectionHeader, Card, SliderRow, NumberInput, ToggleRow, InfoBox, SelectRow } from "../common/Controls";
-import { getProviderLogo } from "../reducer";
+import {
+  canonicalizeProviderRecords,
+  getCanonicalProviderId,
+  getProviderLogo,
+} from "../reducer";
 
 interface Props {
   config: UIConfig;
   providers: Record<string, ProviderConfig>;
   dispatch: Dispatch<SettingsAction>;
 }
+
+const hasUsableApiKey = (provider: ProviderConfig) =>
+  Boolean(provider.api_key || provider.api_key_configured) && !provider.api_key_clear_requested;
 
 // 预设配置
 const PRESETS = [
@@ -138,11 +145,12 @@ export const PerformanceSection = memo(function PerformanceSection({
   };
 
   // 获取可用的服务商列表
-  const providerList = Object.values(providers).filter((p) => p.api_key);
+  const canonicalProviders = useMemo(() => canonicalizeProviderRecords(providers), [providers]);
+  const providerList = Object.values(canonicalProviders).filter(hasUsableApiKey);
 
   // 获取服务商的模型列表（排除禁用的）
   const getProviderModels = (providerId: string): string[] => {
-    const provider = providers[providerId];
+    const provider = canonicalProviders[providerId];
     if (!provider?.models) return [];
     const disabledModels = provider.disabled_models || [];
     return provider.models.filter(m => !disabledModels.includes(m));
@@ -150,7 +158,11 @@ export const PerformanceSection = memo(function PerformanceSection({
 
   // 获取功能路由配置
   const getCapabilityRoute = (capKey: string): CapabilityRouteConfig => {
-    return config.capability_routes?.[capKey] || { timeout: 60 };
+    const route = config.capability_routes?.[capKey] || { timeout: 60 };
+    return {
+      ...route,
+      provider_id: getCanonicalProviderId(providers, route.provider_id),
+    };
   };
 
   // 判断功能是否使用自定义配置
@@ -159,7 +171,10 @@ export const PerformanceSection = memo(function PerformanceSection({
     return !!(route?.provider_id || route?.model);
   };
 
-  const defaultProviderId = config.default_provider_id || config.ai_provider || null;
+  const defaultProviderId = getCanonicalProviderId(
+    providers,
+    config.default_provider_id || config.ai_provider
+  ) || null;
   const defaultModel = config.default_model || config.ai_model || null;
   const aiTimeout = config.ai_timeout || 60;
 
@@ -262,7 +277,7 @@ export const PerformanceSection = memo(function PerformanceSection({
                           desc="留空则使用默认服务商"
                           value={route.provider_id || ""}
                           options={[
-                            { value: "", label: `使用默认 ${defaultProviderId ? `(${providers[defaultProviderId]?.name || defaultProviderId})` : ''}` },
+                            { value: "", label: `使用默认 ${defaultProviderId ? `(${canonicalProviders[defaultProviderId]?.name || defaultProviderId})` : ''}` },
                             ...providerList.map(p => ({ value: p.id, label: `${getProviderLogo(p)} ${p.name}` }))
                           ]}
                           onChange={(v) => handleRouteUpdate(cap.key, "provider_id", v || null)}
@@ -365,12 +380,12 @@ export const PerformanceSection = memo(function PerformanceSection({
       {/* 超时配置 */}
       <Card title="超时与并发" icon="⏱️">
         <InfoBox>
-          超时时间决定了系统等待 AI 响应的最长时间。如果 AI 在超时前未能完成，系统将使用规则降级处理。
+          普通 AI 请求从排队到获得完整结果共用一个端到端总时限；流式生成时，此处设置的是等待下一段 AI 内容的最长时间，整段流式生成总计最多运行 10 分钟。超时后系统会使用规则生成的备用结果。
         </InfoBox>
 
         <SliderRow
           label="全局超时时间"
-          desc="单次 AI 请求的最大等待时间（可在功能模块中单独覆盖）"
+          desc="普通请求的端到端总时限；流式请求等待新内容的时限（可在功能模块中单独覆盖）"
           value={aiTimeout}
           min={15}
           max={300}

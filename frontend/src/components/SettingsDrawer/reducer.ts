@@ -64,12 +64,69 @@ export function getInitialProviders(config: UIConfig): Record<string, ProviderCo
   for (const [id, p] of Object.entries(providers)) {
     updated[id] = {
       ...p,
+      id,
       provider_type: p.provider_type || (p.type as ProviderType) || "openai",
       selected_models: Array.isArray(p.selected_models) ? p.selected_models : (p.selected_models ? [p.selected_models] : []),
       disabled_models: p.disabled_models || [],
     };
   }
   return updated;
+}
+
+export function canonicalizeProviderRecords(
+  providers: Record<string, ProviderConfig>
+): Record<string, ProviderConfig> {
+  return Object.fromEntries(
+    Object.entries(providers).map(([providerId, provider]) => [
+      providerId,
+      provider.id === providerId ? provider : { ...provider, id: providerId },
+    ])
+  );
+}
+
+export function getCanonicalProviderId(
+  providers: Record<string, ProviderConfig>,
+  providerId: string | null | undefined
+): string | null | undefined {
+  if (!providerId || providers[providerId]) return providerId;
+  return Object.entries(providers).find(([, provider]) => provider.id === providerId)?.[0] || providerId;
+}
+
+export function normalizeProviderIdentities(config: UIConfig): UIConfig {
+  const providers = config.providers || {};
+  const normalizeId = (providerId: string | null | undefined) =>
+    getCanonicalProviderId(providers, providerId);
+  const normalizeProviderIds = (providerIds: string[] | null | undefined) => {
+    if (!providerIds) return providerIds;
+    const seen = new Set<string>();
+    return providerIds
+      .map((providerId) => getCanonicalProviderId(providers, providerId) || providerId)
+      .filter((providerId) => {
+        if (seen.has(providerId)) return false;
+        seen.add(providerId);
+        return true;
+      });
+  };
+  const capabilityRoutes = Object.fromEntries(
+    Object.entries(config.capability_routes || {}).map(([capability, route]) => [
+      capability,
+      {
+        ...route,
+        provider_id: normalizeId(route.provider_id),
+        provider_ids: normalizeProviderIds(route.provider_ids),
+      },
+    ])
+  );
+
+  return {
+    ...config,
+    providers: getInitialProviders(config),
+    capability_routes: capabilityRoutes,
+    default_provider_id: normalizeId(config.default_provider_id),
+    ai_provider: normalizeId(config.ai_provider),
+    embedding_provider_id: normalizeId(config.embedding_provider_id),
+    embedding_provider: normalizeId(config.embedding_provider),
+  };
 }
 
 export function getProviderLogo(provider: ProviderConfig): string {
@@ -117,7 +174,7 @@ export function settingsReducer(state: SettingsState, action: SettingsAction): S
       return { ...state, selectedProviderId: action.id };
 
     case "SET_FORM":
-      return { ...state, form: action.form };
+      return { ...state, form: normalizeProviderIdentities(action.form) };
 
     case "UPDATE_PROVIDER":
       return {
@@ -127,6 +184,39 @@ export function settingsReducer(state: SettingsState, action: SettingsAction): S
           providers: {
             ...state.form.providers,
             [action.id]: { ...state.form.providers[action.id], [action.field]: action.value },
+          },
+        },
+      };
+
+    case "UPDATE_PROVIDER_API_KEY":
+      return {
+        ...state,
+        form: {
+          ...state.form,
+          providers: {
+            ...state.form.providers,
+            [action.providerId]: {
+              ...state.form.providers[action.providerId],
+              api_key: action.apiKey,
+              api_key_clear_requested: false,
+            },
+          },
+        },
+      };
+
+    case "CLEAR_PROVIDER_API_KEY":
+      return {
+        ...state,
+        form: {
+          ...state.form,
+          providers: {
+            ...state.form.providers,
+            [action.providerId]: {
+              ...state.form.providers[action.providerId],
+              api_key: "",
+              api_key_configured: false,
+              api_key_clear_requested: true,
+            },
           },
         },
       };
@@ -429,17 +519,16 @@ export function settingsReducer(state: SettingsState, action: SettingsAction): S
 // ============ 创建初始状态 ============
 
 export function createInitialState(config: UIConfig): SettingsState {
+  const normalizedConfig = normalizeProviderIdentities(config);
   const initialConfig = {
-    ...config,
-    providers: getInitialProviders(config),
-    capability_routes: config.capability_routes || {},
-    speciation: { ...DEFAULT_SPECIATION_CONFIG, ...(config.speciation || {}) },
-    reproduction: { ...DEFAULT_REPRODUCTION_CONFIG, ...(config.reproduction || {}) },
-    mortality: { ...DEFAULT_MORTALITY_CONFIG, ...(config.mortality || {}) },
-    ecology_balance: { ...DEFAULT_ECOLOGY_BALANCE_CONFIG, ...(config.ecology_balance || {}) },
-    map_environment: { ...DEFAULT_MAP_ENVIRONMENT_CONFIG, ...(config.map_environment || {}) },
-    pressure_intensity: { ...DEFAULT_PRESSURE_INTENSITY_CONFIG, ...(config.pressure_intensity || {}) },
-    gene_diversity: { ...DEFAULT_GENE_DIVERSITY_CONFIG, ...(config.gene_diversity || {}) },
+    ...normalizedConfig,
+    speciation: { ...DEFAULT_SPECIATION_CONFIG, ...(normalizedConfig.speciation || {}) },
+    reproduction: { ...DEFAULT_REPRODUCTION_CONFIG, ...(normalizedConfig.reproduction || {}) },
+    mortality: { ...DEFAULT_MORTALITY_CONFIG, ...(normalizedConfig.mortality || {}) },
+    ecology_balance: { ...DEFAULT_ECOLOGY_BALANCE_CONFIG, ...(normalizedConfig.ecology_balance || {}) },
+    map_environment: { ...DEFAULT_MAP_ENVIRONMENT_CONFIG, ...(normalizedConfig.map_environment || {}) },
+    pressure_intensity: { ...DEFAULT_PRESSURE_INTENSITY_CONFIG, ...(normalizedConfig.pressure_intensity || {}) },
+    gene_diversity: { ...DEFAULT_GENE_DIVERSITY_CONFIG, ...(normalizedConfig.gene_diversity || {}) },
   };
 
   return {

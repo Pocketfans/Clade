@@ -20,11 +20,6 @@ export type {
   TabId,
 } from "./types";
 
-// Hooks
-export { useDivinePowers } from "./hooks/useDivinePowers";
-
-
-
 
 
 

@@ -2,12 +2,18 @@
  * ConnectionSection - 服务商连接配置 (全新设计)
  */
 
-import { memo, useCallback, useEffect, useState, type Dispatch } from "react";
+import { memo, useCallback, useEffect, useMemo, useState, type Dispatch } from "react";
 import type { ProviderConfig, ProviderType } from "@/services/api.types";
 import type { SettingsAction, TestResult } from "../types";
 import { testApiConnection, fetchProviderModels, type ModelInfo } from "@/services/api";
 import { PROVIDER_API_TYPES } from "../constants";
-import { getProviderLogo, getProviderTypeBadge, generateId } from "../reducer";
+import {
+  canonicalizeProviderRecords,
+  generateId,
+  getCanonicalProviderId,
+  getProviderLogo,
+  getProviderTypeBadge,
+} from "../reducer";
 import { SectionHeader, ActionButton, InfoBox, ConfigGroup } from "../common/Controls";
 
 interface Props {
@@ -19,6 +25,9 @@ interface Props {
   dispatch: Dispatch<SettingsAction>;
 }
 
+const hasUsableApiKey = (provider: ProviderConfig) =>
+  Boolean(provider.api_key || provider.api_key_configured) && !provider.api_key_clear_requested;
+
 export const ConnectionSection = memo(function ConnectionSection({
   providers,
   selectedProviderId,
@@ -27,8 +36,12 @@ export const ConnectionSection = memo(function ConnectionSection({
   showApiKeys,
   dispatch,
 }: Props) {
-  const providerList = Object.values(providers);
-  const selectedProvider = selectedProviderId ? providers[selectedProviderId] : null;
+  const canonicalProviders = useMemo(() => canonicalizeProviderRecords(providers), [providers]);
+  const canonicalSelectedProviderId = getCanonicalProviderId(providers, selectedProviderId);
+  const providerList = Object.values(canonicalProviders);
+  const selectedProvider = canonicalSelectedProviderId
+    ? canonicalProviders[canonicalSelectedProviderId]
+    : null;
   const selectedProviderDefaultModel = selectedProvider?.selected_models?.[0] || "";
 
   const [fetchingModels, setFetchingModels] = useState<string | null>(null);
@@ -110,7 +123,7 @@ export const ConnectionSection = memo(function ConnectionSection({
 
   // 测试连接
   const handleTest = useCallback(async (provider: ProviderConfig) => {
-    if (!provider.api_key || !provider.base_url) {
+    if (!hasUsableApiKey(provider) || !provider.base_url) {
       dispatch({
         type: "SET_TEST_RESULT",
         providerId: provider.id,
@@ -124,8 +137,9 @@ export const ConnectionSection = memo(function ConnectionSection({
     try {
       const result = await testApiConnection({
         type: "chat",
+        provider_id: provider.id,
         base_url: provider.base_url,
-        api_key: provider.api_key,
+        api_key: provider.api_key || "",
         model: provider.models?.[0] || "gpt-3.5-turbo",
         provider_type: provider.provider_type || "openai",
       });
@@ -141,6 +155,21 @@ export const ConnectionSection = memo(function ConnectionSection({
     }
   }, [dispatch]);
 
+  const handleClearApiKey = useCallback((providerId: string, provider: ProviderConfig) => {
+    dispatch({
+      type: "SET_CONFIRM_DIALOG",
+      dialog: {
+        isOpen: true,
+        title: "清除已保存密钥",
+        message: `确定要清除 ${provider.name} 已保存的 API Key 吗？保存配置后生效。`,
+        variant: "danger",
+        onConfirm: () => {
+          dispatch({ type: "CLEAR_PROVIDER_API_KEY", providerId });
+        },
+      },
+    });
+  }, [dispatch]);
+
   // 删除服务商
   const handleDelete = useCallback((id: string) => {
     dispatch({
@@ -152,17 +181,17 @@ export const ConnectionSection = memo(function ConnectionSection({
         variant: "danger",
         onConfirm: () => {
           dispatch({ type: "REMOVE_PROVIDER", id });
-          if (selectedProviderId === id) {
+          if (canonicalSelectedProviderId === id) {
             dispatch({ type: "SELECT_PROVIDER", id: null });
           }
         },
       },
     });
-  }, [dispatch, selectedProviderId]);
+  }, [canonicalSelectedProviderId, dispatch]);
 
   // 获取模型列表
   const handleFetchModels = useCallback(async (provider: ProviderConfig) => {
-    if (!provider.api_key || !provider.base_url) {
+    if (!hasUsableApiKey(provider) || !provider.base_url) {
       setModelFetchError((prev) => ({
         ...prev,
         [provider.id]: "请先填写 API Key 和 Base URL",
@@ -179,8 +208,9 @@ export const ConnectionSection = memo(function ConnectionSection({
 
     try {
       const result = await fetchProviderModels({
+        provider_id: provider.id,
         base_url: provider.base_url,
-        api_key: provider.api_key,
+        api_key: provider.api_key || "",
         provider_type: provider.provider_type || "openai",
       });
 
@@ -203,7 +233,7 @@ export const ConnectionSection = memo(function ConnectionSection({
     } finally {
       setFetchingModels(null);
     }
-  }, [dispatch]);
+  }, []);
 
   return (
     <div className="section-page">
@@ -369,13 +399,12 @@ export const ConnectionSection = memo(function ConnectionSection({
                       value={selectedProvider.api_key || ""}
                       onChange={(e) =>
                         dispatch({
-                          type: "UPDATE_PROVIDER",
-                          id: selectedProvider.id,
-                          field: "api_key",
-                          value: e.target.value,
+                          type: "UPDATE_PROVIDER_API_KEY",
+                          providerId: selectedProvider.id,
+                          apiKey: e.target.value,
                         })
                       }
-                      placeholder="sk-..."
+                      placeholder={selectedProvider.api_key_configured ? "已配置；留空会保留现有密钥" : "sk-..."}
                     />
                     <button
                       type="button"
@@ -386,6 +415,15 @@ export const ConnectionSection = memo(function ConnectionSection({
                     >
                       {showApiKeys[selectedProvider.id] ? "🙈" : "👁️"}
                     </button>
+                    {selectedProvider.api_key_configured && !selectedProvider.api_key && (
+                      <button
+                        type="button"
+                        className="btn btn-outline danger"
+                        onClick={() => handleClearApiKey(selectedProviderId!, selectedProvider)}
+                      >
+                        清除已保存密钥
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -537,7 +575,7 @@ export const ConnectionSection = memo(function ConnectionSection({
                     onClick={() => handleTest(selectedProvider)}
                     variant="primary"
                     loading={testingProviderId === selectedProvider.id}
-                    disabled={testingProviderId !== null}
+                    disabled={testingProviderId !== null || !hasUsableApiKey(selectedProvider) || !selectedProvider.base_url}
                     icon="🔍"
                   />
                   <ActionButton
@@ -545,7 +583,7 @@ export const ConnectionSection = memo(function ConnectionSection({
                     onClick={() => handleFetchModels(selectedProvider)}
                     variant="secondary"
                     loading={fetchingModels === selectedProvider.id}
-                    disabled={fetchingModels !== null || !selectedProvider.api_key || !selectedProvider.base_url}
+                    disabled={fetchingModels !== null || !hasUsableApiKey(selectedProvider) || !selectedProvider.base_url}
                     icon="📋"
                   />
                 </div>

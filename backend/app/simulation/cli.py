@@ -223,11 +223,11 @@ async def run_simulation(
         # 尝试导入引擎
         from .engine import SimulationEngine
         from ..schemas.requests import TurnCommand
-        from ..repositories.species_repository import species_repository
-        from ..repositories.environment_repository import environment_repository
         
         # 创建引擎
         engine = SimulationEngine()
+        species_repository = engine.species_repository
+        environment_repository = engine.environment_repository
         
         # 获取初始物种数
         try:

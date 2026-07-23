@@ -164,6 +164,7 @@ class PipelineMetrics:
     total_duration_ms: float = 0.0
     stage_metrics: list[StageMetrics] = field(default_factory=list)
     failed_stages: list[str] = field(default_factory=list)
+    degraded_stages: list[str] = field(default_factory=list)
     
     def get_performance_table(self) -> str:
         """生成性能表格（按耗时排序）"""
@@ -212,8 +213,10 @@ class PipelineMetrics:
             "total_duration_ms": round(self.total_duration_ms, 2),
             "stage_count": len(self.stage_metrics),
             "failed_count": len(self.failed_stages),
+            "degraded_count": len(self.degraded_stages),
             "stages": [m.to_dict() for m in self.stage_metrics],
             "failed_stages": self.failed_stages,
+            "degraded_stages": self.degraded_stages,
         }
 
 
@@ -246,6 +249,7 @@ class PipelineResult:
     total_duration_ms: float
     stage_results: list[StageResult] = field(default_factory=list)
     failed_stages: list[str] = field(default_factory=list)
+    degraded_stages: list[str] = field(default_factory=list)
     metrics: PipelineMetrics | None = None
     
     def get_failed_stage_names(self) -> list[str]:
@@ -401,6 +405,7 @@ class Pipeline:
         start_time = time.perf_counter()
         stage_results: list[StageResult] = []
         failed_stages: list[str] = []
+        degraded_stages: list[str] = []
         stage_metrics: list[StageMetrics] = []
         overall_success = True
         
@@ -471,11 +476,17 @@ class Pipeline:
             
             if not result.success:
                 failed_stages.append(stage.name)
-                overall_success = False
-                
-                if not self.config.continue_on_error:
-                    logger.error(f"[Pipeline] 阶段 '{stage.name}' 失败，终止流水线")
-                    break
+                if getattr(stage, "is_degradable", False):
+                    degraded_stages.append(stage.name)
+                    logger.warning(
+                        f"[Pipeline] 可降级阶段 '{stage.name}' 失败，继续核心回合"
+                    )
+                else:
+                    overall_success = False
+
+                    if not self.config.continue_on_error:
+                        logger.error(f"[Pipeline] 阶段 '{stage.name}' 失败，终止流水线")
+                        break
             
             # 记录时间
             if self.config.log_timing:
@@ -516,6 +527,7 @@ class Pipeline:
             total_duration_ms=total_duration,
             stage_metrics=stage_metrics,
             failed_stages=failed_stages,
+            degraded_stages=degraded_stages,
         )
         
         return PipelineResult(
@@ -523,6 +535,7 @@ class Pipeline:
             total_duration_ms=total_duration,
             stage_results=stage_results,
             failed_stages=failed_stages,
+            degraded_stages=degraded_stages,
             metrics=pipeline_metrics,
         )
     
@@ -543,15 +556,36 @@ class Pipeline:
             阶段执行结果
         """
         from .stages import StageResult
+
+        consume_degradable_failure = getattr(
+            stage, "_consume_degradable_failure", None
+        )
+        if callable(consume_degradable_failure):
+            consume_degradable_failure()
         
         try:
-            if self.config.stage_timeout > 0:
+            if (
+                self.config.stage_timeout > 0
+                and not stage.uses_internal_request_budget
+            ):
                 await asyncio.wait_for(
                     stage.execute(ctx, engine),
                     timeout=self.config.stage_timeout
                 )
             else:
                 await stage.execute(ctx, engine)
+
+            if (
+                callable(consume_degradable_failure)
+                and consume_degradable_failure()
+            ):
+                return StageResult(
+                    stage_name=stage.name,
+                    success=False,
+                    error=RuntimeError(
+                        f"Stage '{stage.name}' completed with degraded output"
+                    ),
+                )
             
             return StageResult(
                 stage_name=stage.name,

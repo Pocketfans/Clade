@@ -704,9 +704,7 @@ export function GenealogyGraphView({ nodes: rawNodes, spacingX = 160, spacingY =
             }
         });
         nodeContainer.on('pointermove', (e: FederatedPointerEvent) => {
-             if (hoveredNode === node.data) {
-                 setTooltipPos({ x: e.global.x, y: e.global.y });
-             }
+             setTooltipPos({ x: e.global.x, y: e.global.y });
         });
         nodeContainer.on('pointerleave', () => setHoveredNode(null));
 

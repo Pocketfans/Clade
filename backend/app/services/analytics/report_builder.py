@@ -1,10 +1,12 @@
 ﻿from __future__ import annotations
 
-import asyncio
-from typing import Sequence, Callable, Awaitable
+from typing import Sequence, Callable, Awaitable, TYPE_CHECKING
 
+from ...ai.streaming_helper import stream_invoke_with_heartbeat
 from ...schemas.responses import SpeciesSnapshot
-from ...simulation.environment import ParsedPressure
+
+if TYPE_CHECKING:
+    from ...simulation.environment import ParsedPressure
 
 
 import logging
@@ -27,6 +29,7 @@ class ReportBuilder:
         migration_events: Sequence | None = None,
         branching_events: Sequence | None = None,  # 【兼容】V2参数，V1忽略
         stream_callback: Callable[[str], Awaitable[None] | None] | None = None,
+        event_callback: Callable[[str, str, str], None] | None = None,
     ) -> str:
         """生成结构化、易读的回合叙事 (Async)。"""
         
@@ -53,69 +56,29 @@ class ReportBuilder:
                 "migrations": [f"{item.lineage_code}迁徙" for item in (migration_events or [])[:3]],
             }
             
-            content_parts = []
-            chunk_count = 0
-            
-            # 【优化】流式读取的超时保护
-            async def stream_with_timeout():
-                nonlocal content_parts, chunk_count
-                last_chunk_time = asyncio.get_event_loop().time()
-                chunk_timeout = 20.0  # 单个chunk最长等待20秒（减少等待）
-                
-                async for chunk in self.router.astream("turn_report", payload):
-                    current_time = asyncio.get_event_loop().time()
-                    
-                    # 【新增】检查单个 chunk 超时
-                    if current_time - last_chunk_time > chunk_timeout:
-                        logger.warning(f"[ReportBuilder] 单个chunk超时（{chunk_timeout}秒），提前结束流读取")
-                        break
-                    
-                    # 处理可能的状态/错误事件字典
-                    if isinstance(chunk, dict):
-                        event_type = chunk.get("type")
-                        event_state = chunk.get("state")
-                        
-                        if event_type == "error":
-                            logger.warning(f"[ReportBuilder] Stream error event: {chunk}")
-                            break  # 遇到错误时退出
-                        
-                        # 【关键修复】处理completed状态，结束流读取
-                        if event_type == "status" and event_state == "completed":
-                            logger.debug("[ReportBuilder] Stream completed signal received")
-                            break
-                        
-                        continue
-                    
-                    # 更新最后一次收到数据的时间
-                    last_chunk_time = current_time
-                    chunk_count += 1
-                    
-                    # 确保 chunk 是字符串
-                    if not isinstance(chunk, str):
-                        chunk = str(chunk)
-                        
-                    content_parts.append(chunk)
-                    if stream_callback:
-                        # 尝试调用回调，支持同步和异步
-                        if asyncio.iscoroutinefunction(stream_callback):
-                            await stream_callback(chunk)
-                        else:
-                            stream_callback(chunk)
-                
-                # 流正常结束时记录
-                if chunk_count > 0:
-                    logger.info(f"[ReportBuilder] 流式读取完成，共收到 {chunk_count} 个chunks")
-            
             try:
-                # 【优化】整体流式读取超时减少到60秒（原90秒太长）
-                await asyncio.wait_for(stream_with_timeout(), timeout=60.0)
-            except asyncio.TimeoutError:
-                # 【优化】超时后记录更多信息，帮助诊断
-                logger.error(f"[ReportBuilder] 流式读取超时（60秒），已收到 {chunk_count} 个chunks，使用已收到的内容")
-            except Exception as e:
-                logger.error(f"[ReportBuilder] Stream error: {e}, 已收到 {chunk_count} 个chunks")
-                
-            full_text = "".join(content_parts)
+                outcome = await stream_invoke_with_heartbeat(
+                    router=self.router,
+                    capability="turn_report",
+                    payload=payload,
+                    task_name="回合报告",
+                    event_callback=event_callback,
+                    chunk_callback=stream_callback,
+                )
+                if outcome.completed:
+                    full_text = outcome.content
+                else:
+                    logger.warning(
+                        "[ReportBuilder] 流式生成未完整结束 (%s)，使用结构化模板",
+                        outcome.reason,
+                    )
+                    full_text = ""
+            except Exception as exc:
+                logger.error(
+                    "[ReportBuilder] Stream error type=%s",
+                    type(exc).__name__,
+                )
+                full_text = ""
         
         # turn_report 返回的是 Markdown 格式文本，无需 JSON 解析
         # 直接检查内容有效性即可

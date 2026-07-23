@@ -13,10 +13,12 @@ Token 使用：约 500-1500（取决于物种数量）
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass
 from typing import Sequence, Callable, Awaitable, Any
 
+from ...ai.streaming_helper import stream_call_with_heartbeat
 from ...schemas.responses import SpeciesSnapshot
 from ...simulation.environment import ParsedPressure
 from ...simulation.constants import get_time_config
@@ -653,6 +655,7 @@ class ReportBuilderV2:
         species_details: dict[str, Any] | None = None,
         turn_index: int = 0,
         heartbeat_callback: Callable[[int], Awaitable[None] | None] | None = None,
+        event_callback: Callable[[str, str, str], None] | None = None,
     ) -> str:
         """生成 LLM 驱动的纪录片风格叙事
         
@@ -692,10 +695,10 @@ class ReportBuilderV2:
                 turn_index=turn_index,
                 stream_callback=stream_callback,
                 heartbeat_callback=heartbeat_callback,
-                timeout=60,
+                event_callback=event_callback,
             )
             
-            if narrative:
+            if narrative and len(narrative) > 50:
                 logger.info(f"[ReportV2] LLM叙事生成成功: 回合{turn_index}, {len(highlight_species)}个重点物种, {len(narrative)}字")
                 return narrative
             else:
@@ -705,8 +708,11 @@ class ReportBuilderV2:
         except asyncio.TimeoutError:
             logger.warning(f"[ReportV2] LLM生成超时，使用简化报告")
             return self._generate_fallback_report(stats, pressures, highlight_species)
-        except Exception as e:
-            logger.error(f"[ReportV2] LLM生成失败: {e}")
+        except Exception as exc:
+            logger.error(
+                "[ReportV2] LLM生成失败 type=%s",
+                type(exc).__name__,
+            )
             return self._generate_fallback_report(stats, pressures, highlight_species)
 
     async def _stream_narrative_with_heartbeat(
@@ -715,89 +721,63 @@ class ReportBuilderV2:
         turn_index: int,
         stream_callback: Callable[[str], Awaitable[None] | None] | None = None,
         heartbeat_callback: Callable[[int], Awaitable[None] | None] | None = None,
-        timeout: float = 60,
+        event_callback: Callable[[str, str, str], None] | None = None,
     ) -> str:
         """使用流式传输生成叙事，支持心跳监测
         
         与分化逻辑一致：监测AI是否持续输出，而不是简单超时
         """
         messages = [{"role": "user", "content": prompt}]
-        narrative_chunks = []
         chunk_count = 0
-        last_chunk_time = asyncio.get_event_loop().time()
-        is_connected = False
-        is_receiving = False
-        
-        # 单个chunk读取超时（30秒没有新数据视为卡住）
-        chunk_timeout = 30.0
-        
-        try:
-            async for item in self.router.astream_capability("turn_report", messages):
-                current_time = asyncio.get_event_loop().time()
-                
-                # 检查是否超过总超时
-                if current_time - last_chunk_time > chunk_timeout:
-                    logger.warning(f"[ReportV2] 流式读取超时: {chunk_timeout}秒无新数据")
-                    break
-                
-                # 处理状态事件
-                if isinstance(item, dict):
-                    status = item.get("status")
-                    if status == "connected":
-                        is_connected = True
-                        logger.info(f"[ReportV2] 🔗 叙事生成已连接")
-                    elif status == "receiving":
-                        is_receiving = True
-                        logger.info(f"[ReportV2] 📥 叙事正在接收...")
-                    elif status == "completed":
-                        logger.info(f"[ReportV2] ✅ 叙事接收完成: {chunk_count} chunks, {len(''.join(narrative_chunks))}字")
-                        break
-                    elif status == "error":
-                        error_msg = item.get("error", "Unknown error")
-                        logger.error(f"[ReportV2] ❌ 流式错误: {error_msg}")
-                        break
-                    continue
-                
-                # 处理内容chunk
-                if isinstance(item, str) and item:
-                    narrative_chunks.append(item)
-                    chunk_count += 1
-                    last_chunk_time = current_time
-                    
-                    # 发送心跳回调（每5个chunk一次，避免过于频繁）
-                    if heartbeat_callback and chunk_count % 5 == 0:
-                        try:
-                            if asyncio.iscoroutinefunction(heartbeat_callback):
-                                await heartbeat_callback(chunk_count)
-                            else:
-                                heartbeat_callback(chunk_count)
-                        except Exception as e:
-                            logger.debug(f"[ReportV2] 心跳回调异常: {e}")
-                    
-                    # 实时流式回调
-                    if stream_callback:
-                        try:
-                            if asyncio.iscoroutinefunction(stream_callback):
-                                await stream_callback(item)
-                            else:
-                                stream_callback(item)
-                        except Exception as e:
-                            logger.debug(f"[ReportV2] 流式回调异常: {e}")
-            
-            narrative = "".join(narrative_chunks).strip()
-            return narrative
-            
-        except asyncio.TimeoutError:
-            # 如果已收到部分内容，返回已有内容
-            if narrative_chunks:
-                logger.warning(f"[ReportV2] 流式超时，返回已收到的 {chunk_count} chunks")
-                return "".join(narrative_chunks).strip()
-            raise
-        except Exception as e:
-            logger.error(f"[ReportV2] 流式生成异常: {e}")
-            if narrative_chunks:
-                return "".join(narrative_chunks).strip()
-            raise
+
+        async def handle_chunk(chunk: str) -> None:
+            nonlocal chunk_count
+            chunk_count += 1
+
+            if heartbeat_callback and chunk_count % 5 == 0:
+                try:
+                    result = heartbeat_callback(chunk_count)
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception as exc:
+                    logger.debug(
+                        "[ReportV2] 心跳回调异常 type=%s",
+                        type(exc).__name__,
+                    )
+
+            if stream_callback:
+                try:
+                    result = stream_callback(chunk)
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception as exc:
+                    logger.debug(
+                        "[ReportV2] 流式回调异常 type=%s",
+                        type(exc).__name__,
+                    )
+
+        outcome = await stream_call_with_heartbeat(
+            router=self.router,
+            capability="turn_report",
+            messages=messages,
+            task_name=f"第{turn_index}回合报告",
+            event_callback=event_callback,
+            chunk_callback=handle_chunk,
+        )
+        if not outcome.completed:
+            logger.warning(
+                "[ReportV2] 流式生成未完整结束 (%s)，使用简化报告",
+                outcome.reason,
+            )
+            return ""
+
+        narrative = outcome.content.strip()
+        logger.info(
+            "[ReportV2] 叙事接收完成: %s chunks, %s字",
+            chunk_count,
+            len(narrative),
+        )
+        return narrative
 
     def _generate_fallback_report(
         self, 

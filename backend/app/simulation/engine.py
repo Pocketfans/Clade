@@ -44,6 +44,8 @@ from ..services.species.trophic_interaction import TrophicInteractionService
 from ..services.species.food_web_manager import FoodWebManager
 
 if TYPE_CHECKING:
+    from ..repositories.environment_repository import EnvironmentRepository
+    from ..repositories.species_repository import SpeciesRepository
     from ..services.species.background import BackgroundSpeciesManager
 
 from ..services.analytics.critical_analyzer import CriticalAnalyzer
@@ -104,6 +106,8 @@ class SimulationEngine:
         niche_analyzer: NicheAnalyzer,
         speciation: SpeciationService,
         background_manager: "BackgroundSpeciesManager",
+        species_repository: "SpeciesRepository",
+        environment_repository: "EnvironmentRepository",
         tiering: SpeciesTieringService,
         focus_processor: FocusBatchProcessor,
         critical_analyzer: CriticalAnalyzer,
@@ -136,6 +140,8 @@ class SimulationEngine:
         self.niche_analyzer = niche_analyzer
         self.speciation = speciation
         self.background_manager = background_manager
+        self.species_repository = species_repository
+        self.environment_repository = environment_repository
         self.tiering = tiering
         self.focus_processor = focus_processor
         self.critical_analyzer = critical_analyzer
@@ -268,6 +274,7 @@ class SimulationEngine:
         mode: str | None = None,
     ) -> TurnReport | None:
         """使用 Pipeline 执行单个回合"""
+        from ..core.database import transaction_scope
         from .pipeline import PipelineResult
         
         # 初始化 Pipeline（如果需要）
@@ -295,8 +302,11 @@ class SimulationEngine:
         logger.info(f"[Pipeline] 执行回合 {self.turn_counter}")
         self._emit_event("turn_start", f"📅 开始回合 {self.turn_counter}", "系统")
         
-        # 执行流水线
-        result: PipelineResult = await self._pipeline.execute(ctx, self)
+        # 执行流水线；所有仓储写入在整个回合成功前保持可回滚
+        with transaction_scope() as transaction:
+            result: PipelineResult = await self._pipeline.execute(ctx, self)
+            if not result.success:
+                transaction.rollback()
         
         # 保存性能指标
         self._last_pipeline_metrics = result.metrics
@@ -307,8 +317,9 @@ class SimulationEngine:
             for stage_name in result.failed_stages:
                 logger.warning(f"  - {stage_name}")
         
-        # 增加回合计数器（无论成功失败都要推进）
-        self.turn_counter += 1
+        # 只有完整成功的回合才推进计数器
+        if result.success:
+            self.turn_counter += 1
         
         return ctx.report
     

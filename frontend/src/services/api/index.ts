@@ -9,7 +9,7 @@
  */
 
 // 基础设施
-export { http, createEventSource } from "./base";
+export { http, createEventSource, isApiError } from "./base";
 export type { ApiError, RequestConfig, SSEEventHandler } from "./base";
 
 // 回合相关
@@ -56,8 +56,17 @@ export {
   updateUIConfig,
   testApiConnection,
   fetchProviderModels,
+  getConfigErrorMessage,
+  SECURITY_GUIDANCE,
 } from "./config";
-export type { ApiTestParams, ApiTestResult, ModelInfo, FetchModelsResult } from "./config";
+export type {
+  ApiTestParams,
+  ApiTestResult,
+  ModelInfo,
+  FetchModelsResult,
+  OutboundErrorCode,
+  UpdateUIConfigOptions,
+} from "./config";
 
 // 存档相关
 export {

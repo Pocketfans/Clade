@@ -640,20 +640,21 @@ async def get_species_biography(species_code: str, container = Depends(get_conta
 
 # ==================== 插件 API ====================
 
-_plugin_manager = None
+_plugin_managers: dict[int, tuple[Any, Any]] = {}
 
-def _get_plugin_manager():
+def _get_plugin_manager(container):
     """获取插件管理器（延迟初始化）"""
-    global _plugin_manager
-    
-    if _plugin_manager is not None:
-        return _plugin_manager
+    cache_key = id(container)
+    cached = _plugin_managers.get(cache_key)
+    if cached is not None:
+        cached_container, cached_manager = cached
+        if cached_container is container:
+            return cached_manager
     
     try:
-        from . import routes
         from pathlib import Path
         
-        embedding_service = getattr(routes, 'embedding_service', None)
+        embedding_service = getattr(container, 'embedding_service', None)
         
         if embedding_service is None:
             logger.warning("[PluginAPI] EmbeddingService 不可用，插件功能已禁用")
@@ -667,7 +668,7 @@ def _get_plugin_manager():
         load_all_plugins()
         
         # 获取当前模式（从 simulation_engine）
-        simulation_engine = getattr(routes, 'simulation_engine', None)
+        simulation_engine = getattr(container, 'simulation_engine', None)
         mode = "full"  # 默认值
         if simulation_engine:
             mode = getattr(simulation_engine, '_pipeline_mode', None) or \
@@ -676,27 +677,28 @@ def _get_plugin_manager():
         # 获取配置文件路径
         config_path = Path(__file__).parent.parent / "simulation" / "stage_config.yaml"
         
-        _plugin_manager = EmbeddingPluginManager(
+        plugin_manager = EmbeddingPluginManager(
             embedding_service, 
             mode=mode,
             config_path=config_path
         )
-        count = _plugin_manager.load_plugins()
+        count = plugin_manager.load_plugins()
         
         if count == 0:
             logger.info(f"[PluginAPI] 模式 {mode} 无启用的插件")
         else:
             logger.info(f"[PluginAPI] 模式 {mode} 已加载 {count} 个插件")
         
-        return _plugin_manager
+        _plugin_managers[cache_key] = (container, plugin_manager)
+        return plugin_manager
     except Exception as e:
         logger.error(f"[PluginAPI] 初始化插件管理器失败: {e}")
         return None
 
 
-def _check_plugin_available(plugin_name: str):
+def _check_plugin_available(plugin_name: str, container):
     """检查插件是否可用，返回错误响应或 None"""
-    manager = _get_plugin_manager()
+    manager = _get_plugin_manager(container)
     if not manager:
         raise HTTPException(
             status_code=503, 
@@ -738,9 +740,9 @@ def _check_index_not_empty(plugin, plugin_name: str):
 
 
 @router.get("/plugins/status")
-async def get_plugins_status() -> dict[str, Any]:
+async def get_plugins_status(container = Depends(get_container)) -> dict[str, Any]:
     """获取所有插件状态"""
-    manager = _get_plugin_manager()
+    manager = _get_plugin_manager(container)
     if not manager:
         return {
             "success": False, 
@@ -759,9 +761,12 @@ async def get_plugins_status() -> dict[str, Any]:
 # ==================== 行为策略插件 API ====================
 
 @router.get("/behavior/profile/{species_code}")
-async def get_behavior_profile(species_code: str) -> dict[str, Any]:
+async def get_behavior_profile(
+    species_code: str,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """获取物种行为档案"""
-    plugin = _check_plugin_available("behavior_strategy")
+    plugin = _check_plugin_available("behavior_strategy", container)
     
     species = _get_species_by_code(species_code)
     if not species:
@@ -790,9 +795,13 @@ async def get_behavior_profile(species_code: str) -> dict[str, Any]:
 
 
 @router.get("/behavior/similar/{species_code}")
-async def get_similar_behaviors(species_code: str, top_k: int = 5) -> dict[str, Any]:
+async def get_similar_behaviors(
+    species_code: str,
+    top_k: int = 5,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """查找行为相似的物种"""
-    plugin = _check_plugin_available("behavior_strategy")
+    plugin = _check_plugin_available("behavior_strategy", container)
     _check_index_not_empty(plugin, "behavior_strategy")
     
     species = _get_species_by_code(species_code)
@@ -814,9 +823,12 @@ class BehaviorConflictRequest(BaseModel):
 
 
 @router.post("/behavior/conflicts")
-async def check_behavior_conflicts(request: BehaviorConflictRequest) -> dict[str, Any]:
+async def check_behavior_conflicts(
+    request: BehaviorConflictRequest,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """检测两个物种的行为冲突"""
-    plugin = _check_plugin_available("behavior_strategy")
+    plugin = _check_plugin_available("behavior_strategy", container)
     
     species_a = _get_species_by_code(request.species_code_a)
     species_b = _get_species_by_code(request.species_code_b)
@@ -841,9 +853,11 @@ async def check_behavior_conflicts(request: BehaviorConflictRequest) -> dict[str
 
 
 @router.get("/behavior/summary")
-async def get_behavior_summary() -> dict[str, Any]:
+async def get_behavior_summary(
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """获取行为分布摘要"""
-    plugin = _check_plugin_available("behavior_strategy")
+    plugin = _check_plugin_available("behavior_strategy", container)
     
     try:
         summary = plugin.get_behavior_summary()
@@ -861,9 +875,12 @@ async def get_behavior_summary() -> dict[str, Any]:
 # ==================== 生态网络插件 API ====================
 
 @router.get("/food-web/keystone")
-async def get_keystone_species(top_k: int = 5) -> dict[str, Any]:
+async def get_keystone_species(
+    top_k: int = 5,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """获取关键物种"""
-    plugin = _check_plugin_available("food_web")
+    plugin = _check_plugin_available("food_web", container)
     
     try:
         keystones = plugin.find_keystone_species(top_k=top_k)
@@ -880,9 +897,11 @@ async def get_keystone_species(top_k: int = 5) -> dict[str, Any]:
 
 
 @router.get("/food-web/stability")
-async def get_ecosystem_stability() -> dict[str, Any]:
+async def get_ecosystem_stability(
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """获取生态稳定性指标"""
-    plugin = _check_plugin_available("food_web")
+    plugin = _check_plugin_available("food_web", container)
     
     try:
         stability = plugin.calculate_ecosystem_stability()
@@ -899,9 +918,12 @@ class ReplacementRequest(BaseModel):
 
 
 @router.post("/food-web/replacement")
-async def find_replacement_candidates(request: ReplacementRequest) -> dict[str, Any]:
+async def find_replacement_candidates(
+    request: ReplacementRequest,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """为灭绝物种寻找补位候选"""
-    plugin = _check_plugin_available("food_web")
+    plugin = _check_plugin_available("food_web", container)
     _check_index_not_empty(plugin, "food_web")
     
     try:
@@ -917,9 +939,11 @@ async def find_replacement_candidates(request: ReplacementRequest) -> dict[str, 
 
 
 @router.get("/food-web/summary")
-async def get_food_web_summary() -> dict[str, Any]:
+async def get_food_web_summary(
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """获取食物网摘要"""
-    plugin = _check_plugin_available("food_web")
+    plugin = _check_plugin_available("food_web", container)
     
     try:
         summary = plugin.get_network_summary()
@@ -937,9 +961,12 @@ async def get_food_web_summary() -> dict[str, Any]:
 # ==================== 地块向量插件 API ====================
 
 @router.get("/tiles/hotspots")
-async def get_ecological_hotspots(top_k: int = 10) -> dict[str, Any]:
+async def get_ecological_hotspots(
+    top_k: int = 10,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """获取生态热点区域"""
-    plugin = _check_plugin_available("tile_biome")
+    plugin = _check_plugin_available("tile_biome", container)
     
     try:
         hotspots = plugin.find_ecological_hotspots(top_k=top_k)
@@ -961,9 +988,12 @@ class SpeciesTileMatchRequest(BaseModel):
 
 
 @router.post("/tiles/species-match")
-async def match_species_to_tiles(request: SpeciesTileMatchRequest) -> dict[str, Any]:
+async def match_species_to_tiles(
+    request: SpeciesTileMatchRequest,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """为物种找最佳地块"""
-    plugin = _check_plugin_available("tile_biome")
+    plugin = _check_plugin_available("tile_biome", container)
     
     species = _get_species_by_code(request.species_code)
     if not species:
@@ -982,9 +1012,11 @@ async def match_species_to_tiles(request: SpeciesTileMatchRequest) -> dict[str, 
 
 
 @router.get("/tiles/summary")
-async def get_tile_summary() -> dict[str, Any]:
+async def get_tile_summary(
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """获取地块摘要"""
-    plugin = _check_plugin_available("tile_biome")
+    plugin = _check_plugin_available("tile_biome", container)
     
     try:
         summary = plugin.get_tile_summary()
@@ -1003,9 +1035,12 @@ async def get_tile_summary() -> dict[str, Any]:
 # ==================== 演化空间插件 API ====================
 
 @router.get("/evolution/trends")
-async def get_evolution_trends(top_k: int = 5) -> dict[str, Any]:
+async def get_evolution_trends(
+    top_k: int = 5,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """获取演化趋势"""
-    plugin = _check_plugin_available("evolution_space")
+    plugin = _check_plugin_available("evolution_space", container)
     
     try:
         trends = plugin.get_current_trends(top_k=top_k)
@@ -1021,9 +1056,12 @@ async def get_evolution_trends(top_k: int = 5) -> dict[str, Any]:
 
 
 @router.get("/evolution/convergent")
-async def detect_convergent_evolution(min_species: int = 3) -> dict[str, Any]:
+async def detect_convergent_evolution(
+    min_species: int = 3,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """检测收敛演化"""
-    plugin = _check_plugin_available("evolution_space")
+    plugin = _check_plugin_available("evolution_space", container)
     
     try:
         convergences = plugin.detect_convergent_evolution(min_species=min_species)
@@ -1034,9 +1072,12 @@ async def detect_convergent_evolution(min_species: int = 3) -> dict[str, Any]:
 
 
 @router.get("/evolution/trajectory/{species_code}")
-async def predict_species_trajectory(species_code: str) -> dict[str, Any]:
+async def predict_species_trajectory(
+    species_code: str,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """预测物种演化轨迹"""
-    plugin = _check_plugin_available("evolution_space")
+    plugin = _check_plugin_available("evolution_space", container)
     
     species = _get_species_by_code(species_code)
     if not species:
@@ -1056,9 +1097,11 @@ async def predict_species_trajectory(species_code: str) -> dict[str, Any]:
 
 
 @router.get("/evolution/summary")
-async def get_evolution_summary() -> dict[str, Any]:
+async def get_evolution_summary(
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """获取演化空间摘要"""
-    plugin = _check_plugin_available("evolution_space")
+    plugin = _check_plugin_available("evolution_space", container)
     
     try:
         summary = plugin.get_evolution_summary()
@@ -1071,9 +1114,12 @@ async def get_evolution_summary() -> dict[str, Any]:
 # ==================== 血统向量插件 API ====================
 
 @router.get("/ancestry/{species_code}")
-async def get_ancestry_info(species_code: str) -> dict[str, Any]:
+async def get_ancestry_info(
+    species_code: str,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """获取物种血统信息"""
-    plugin = _check_plugin_available("ancestry")
+    plugin = _check_plugin_available("ancestry", container)
     
     species = _get_species_by_code(species_code)
     if not species:
@@ -1104,9 +1150,13 @@ async def get_ancestry_info(species_code: str) -> dict[str, Any]:
 
 
 @router.get("/ancestry/inertia/{species_code}/{trait}")
-async def get_genetic_inertia(species_code: str, trait: str) -> dict[str, Any]:
+async def get_genetic_inertia(
+    species_code: str,
+    trait: str,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """获取遗传惯性"""
-    plugin = _check_plugin_available("ancestry")
+    plugin = _check_plugin_available("ancestry", container)
     
     species = _get_species_by_code(species_code)
     if not species:
@@ -1126,9 +1176,13 @@ async def get_genetic_inertia(species_code: str, trait: str) -> dict[str, Any]:
 
 
 @router.get("/ancestry/speciation/{species_code}")
-async def should_species_speciate(species_code: str, threshold: float = 0.6) -> dict[str, Any]:
+async def should_species_speciate(
+    species_code: str,
+    threshold: float = 0.6,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """判断是否应该分化"""
-    plugin = _check_plugin_available("ancestry")
+    plugin = _check_plugin_available("ancestry", container)
     
     species = _get_species_by_code(species_code)
     if not species:
@@ -1149,9 +1203,12 @@ class DivergenceRequest(BaseModel):
 
 
 @router.post("/ancestry/divergence")
-async def calculate_divergence(request: DivergenceRequest) -> dict[str, Any]:
+async def calculate_divergence(
+    request: DivergenceRequest,
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """计算两个物种的分化程度"""
-    plugin = _check_plugin_available("ancestry")
+    plugin = _check_plugin_available("ancestry", container)
     
     species_a = _get_species_by_code(request.species_code_a)
     species_b = _get_species_by_code(request.species_code_b)
@@ -1175,9 +1232,11 @@ async def calculate_divergence(request: DivergenceRequest) -> dict[str, Any]:
 
 
 @router.get("/ancestry/summary")
-async def get_ancestry_summary() -> dict[str, Any]:
+async def get_ancestry_summary(
+    container = Depends(get_container),
+) -> dict[str, Any]:
     """获取血统摘要"""
-    plugin = _check_plugin_available("ancestry")
+    plugin = _check_plugin_available("ancestry", container)
     
     try:
         summary = plugin.get_ancestry_summary()

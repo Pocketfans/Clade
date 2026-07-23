@@ -11,10 +11,6 @@ from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import MagicMock, AsyncMock
 
-# 配置 pytest-asyncio
-pytest_plugins = ('pytest_asyncio',)
-
-
 # ============================================================================
 # Mock Species
 # ============================================================================

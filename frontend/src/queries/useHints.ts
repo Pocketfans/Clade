@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "../providers/SessionProvider";
 import { useGame } from "../providers/GameProvider";
+import { http } from "@/services/api";
 
 interface HintsInfo {
   count: number;
@@ -44,10 +45,7 @@ export function useHints(): UseHintsResult {
     setError(null);
     
     try {
-      const res = await fetch("/api/hints");
-      if (!res.ok) throw new Error("获取提示失败");
-      
-      const data = await res.json();
+      const data = await http.get<{ hints?: Hint[] }>("/api/hints");
       const hints: Hint[] = data.hints || [];
       
       setHintsInfo({

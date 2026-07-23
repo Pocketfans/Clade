@@ -124,7 +124,7 @@ class SimpleWeatherStage(BaseStage):
         self.max_affected_ratio = max_affected_ratio
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
-        from ..repositories.environment_repository import environment_repository
+        environment_repository = engine.environment_repository
         
         # 随机决定是否触发天气事件
         if random.random() > self.trigger_chance:

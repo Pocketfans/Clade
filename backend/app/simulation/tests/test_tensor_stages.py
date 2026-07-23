@@ -4,6 +4,9 @@
 测试张量计算阶段的功能和与管线的集成。
 """
 
+import importlib
+from types import SimpleNamespace
+
 import pytest
 import numpy as np
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -14,6 +17,7 @@ pytestmark = pytest.mark.asyncio
 from ..tensor_stages import (
     PressureTensorStage,
     TensorEcologyStage,
+    TensorStateInitStage,
     TensorStateSyncStage,
     TensorMetricsStage,
     get_tensor_stages,
@@ -99,6 +103,70 @@ class TestPressureTensorStage:
         assert len(mock_context.pressure_overlay.active_pressures) > 0
 
 
+class TestTensorStateInitStage:
+    """TensorStateInitStage 仓库隔离测试。"""
+
+    async def test_uses_engine_environment_repository(self, monkeypatch):
+        """栖息地读取只使用引擎注入的环境仓库。"""
+        environment_repository_module = importlib.import_module(
+            "app.repositories.environment_repository"
+        )
+
+        class RecordingRepository:
+            def __init__(self, habitats):
+                self.habitats = habitats
+                self.calls = []
+
+            def get_habitats_by_species_id(self, species_id, latest_only):
+                self.calls.append((species_id, latest_only))
+                return self.habitats
+
+        species = SimpleNamespace(
+            id=7,
+            lineage_code="SP007",
+            morphology_stats={"population": 20},
+            habitats=[],
+            habitat_type="terrestrial",
+            temp_optimal=20.0,
+            temp_tolerance=15.0,
+            mobility=1.0,
+            reproduction_rate=0.1,
+        )
+        tile = SimpleNamespace(
+            id=11,
+            x=0,
+            y=0,
+            temperature=20.0,
+            humidity=0.5,
+            elevation=0.0,
+            resources=100.0,
+            biome="land",
+        )
+        injected_repository = RecordingRepository(
+            [SimpleNamespace(tile_id=11, population=20)]
+        )
+        global_repository = RecordingRepository(
+            [SimpleNamespace(tile_id=11, population=99)]
+        )
+        monkeypatch.setattr(
+            environment_repository_module,
+            "environment_repository",
+            global_repository,
+        )
+        context = SimpleNamespace(
+            species_batch=[species],
+            current_map_state=SimpleNamespace(height=1, width=1),
+            all_tiles=[tile],
+        )
+        engine = SimpleNamespace(environment_repository=injected_repository)
+
+        await TensorStateInitStage().execute(context, engine)
+
+        assert injected_repository.calls == [(7, True)]
+        assert global_repository.calls == []
+        assert context.tensor_state.pop[0, 0, 0] == 20
+
+
 class TestTensorEcologyStage:
     """TensorEcologyStage 测试 - 统一生态计算阶段"""
     
@@ -178,6 +246,81 @@ class TestTensorStateSyncStage:
         # 应该更新 new_populations
         assert "SP001" in mock_context.new_populations
         assert mock_context.new_populations["SP001"] >= 0
+
+    async def test_uses_engine_repositories(self, monkeypatch):
+        """物种持久化和栖息地写入只使用引擎注入的仓库。"""
+        species_repository_module = importlib.import_module(
+            "app.repositories.species_repository"
+        )
+        environment_repository_module = importlib.import_module(
+            "app.repositories.environment_repository"
+        )
+
+        class RecordingSpeciesRepository:
+            def __init__(self):
+                self.upserted = []
+
+            def upsert(self, species):
+                self.upserted.append(species)
+
+        class RecordingEnvironmentRepository:
+            def __init__(self):
+                self.batches = []
+
+            def write_habitats(self, habitats):
+                self.batches.append(habitats)
+
+        injected_species_repository = RecordingSpeciesRepository()
+        global_species_repository = RecordingSpeciesRepository()
+        injected_environment_repository = RecordingEnvironmentRepository()
+        global_environment_repository = RecordingEnvironmentRepository()
+        monkeypatch.setattr(
+            species_repository_module,
+            "species_repository",
+            global_species_repository,
+        )
+        monkeypatch.setattr(
+            environment_repository_module,
+            "environment_repository",
+            global_environment_repository,
+        )
+
+        species = SimpleNamespace(
+            id=7,
+            lineage_code="SP007",
+            morphology_stats={"population": 10},
+            status="alive",
+        )
+        context = SimpleNamespace(
+            tensor_state=TensorState(
+                env=np.zeros((7, 1, 1), dtype=np.float32),
+                pop=np.array([[[20.0]]], dtype=np.float32),
+                species_params=np.zeros((1, 4), dtype=np.float32),
+                masks={},
+                species_map={"SP007": 0},
+            ),
+            species_batch=[species],
+            all_tiles=[SimpleNamespace(id=11, x=0, y=0)],
+            new_populations={},
+            turn_index=3,
+        )
+        engine = SimpleNamespace(
+            species_repository=injected_species_repository,
+            environment_repository=injected_environment_repository,
+        )
+
+        await TensorStateSyncStage().execute(context, engine)
+
+        assert injected_species_repository.upserted == [species]
+        assert global_species_repository.upserted == []
+        assert len(injected_environment_repository.batches) == 1
+        assert global_environment_repository.batches == []
+        habitat = injected_environment_repository.batches[0][0]
+        assert habitat.tile_id == 11
+        assert habitat.species_id == 7
+        assert habitat.population == 20
+        assert context.new_populations == {"SP007": 20}
+        assert species.morphology_stats["population"] == 20
 
 
 class TestGetTensorStages:

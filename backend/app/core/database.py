@@ -1,8 +1,11 @@
 ﻿from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
+from sqlalchemy.engine import Connection, RootTransaction
 from sqlmodel import Session, SQLModel, create_engine
 
 from .config import get_settings
@@ -15,6 +18,11 @@ if db_path and not db_path.startswith(":memory:"):
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(settings.database_url, echo=False, connect_args={"check_same_thread": False})
+
+_transaction_connection: ContextVar[Connection | None] = ContextVar(
+    "transaction_connection",
+    default=None,
+)
 
 
 def init_db() -> None:
@@ -29,7 +37,15 @@ def init_db() -> None:
 def session_scope() -> Session:
     """Provide a transactional scope around a series of operations."""
 
-    session = Session(engine, expire_on_commit=False)
+    transaction_connection = _transaction_connection.get()
+    if transaction_connection is None:
+        session = Session(engine, expire_on_commit=False)
+    else:
+        session = Session(
+            bind=transaction_connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
     try:
         yield session
         session.commit()
@@ -38,6 +54,39 @@ def session_scope() -> Session:
         raise
     finally:
         session.close()
+
+
+@contextmanager
+def transaction_scope() -> Iterator[RootTransaction]:
+    """Group repository sessions into one commit or rollback boundary."""
+
+    connection = engine.connect()
+    try:
+        if connection.dialect.name == "sqlite":
+            # SQLite otherwise starts lazily at the first SAVEPOINT, whose release
+            # could persist data before this outer transaction decides to commit.
+            connection.exec_driver_sql("BEGIN")
+            transaction = connection.get_transaction()
+            if transaction is None:
+                raise RuntimeError("Unable to start SQLite transaction")
+        else:
+            transaction = connection.begin()
+    except BaseException:
+        connection.close()
+        raise
+
+    token = _transaction_connection.set(connection)
+    try:
+        yield transaction
+        if transaction.is_active:
+            transaction.commit()
+    except BaseException:
+        if transaction.is_active:
+            transaction.rollback()
+        raise
+    finally:
+        _transaction_connection.reset(token)
+        connection.close()
 
 
 def _migrate_species_table() -> None:

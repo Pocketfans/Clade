@@ -125,7 +125,7 @@ export function SessionProvider({ children }: SessionProviderProps) {
         clearStoredSession();
         setSceneRaw("menu");
       });
-  }, [scene]);
+  }, [scene, storedSession?.backendSessionId]);
 
   // 持久化逻辑
   useEffect(() => {

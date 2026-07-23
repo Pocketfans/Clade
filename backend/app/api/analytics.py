@@ -11,12 +11,23 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from threading import RLock
+from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pydantic import ValidationError
 
+from ..security import OutboundRequestError, SafeProbeClient
+from ..security.admin_token import AdminTokenValidationError, validate_admin_token
+from ..security.config_secrets import (
+    UIConfigUpdateRequest,
+    merge_ui_config_secrets,
+    public_ui_config,
+    resolve_provider_credentials,
+)
 from ..schemas.responses import ExportRecord
 from .dependencies import get_container, get_history_repository, get_session
 from ..core.ai_router_config import configure_model_router
@@ -29,6 +40,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="", tags=["analytics"])
+_UI_CONFIG_UPDATE_LOCK = RLock()
+_SAFE_PROBE_CLIENT = SafeProbeClient()
 
 
 # ========== 导出 ==========
@@ -255,51 +268,210 @@ async def stream_simulation_events(
 @router.get("/config/ui")
 def get_ui_config(
     container: 'ServiceContainer' = Depends(get_container),
-):
+) -> dict:
     """获取 UI 配置"""
-    return container.config_service.get_ui_config()
+    return public_ui_config(container.config_service.get_ui_config())
 
 
-@router.post("/config/ui")
+def _inline_local_schema_definitions(schema: dict[str, Any]) -> dict[str, Any]:
+    definitions = schema.get("$defs", {})
+    if not isinstance(definitions, dict):
+        raise ValueError("Schema definitions must be an object")
+
+    def expand(value: Any, active_references: frozenset[str]) -> Any:
+        if isinstance(value, list):
+            return [expand(item, active_references) for item in value]
+        if not isinstance(value, dict):
+            return value
+
+        reference = value.get("$ref")
+        if isinstance(reference, str) and reference.startswith("#/$defs/"):
+            if reference in active_references:
+                raise ValueError(f"Recursive schema reference: {reference}")
+
+            definition_name = reference.removeprefix("#/$defs/")
+            definition = definitions.get(definition_name)
+            if not isinstance(definition, dict):
+                raise ValueError(f"Unknown local schema reference: {reference}")
+
+            next_references = active_references | {reference}
+            expanded_reference = expand(definition, next_references)
+            siblings = {
+                key: expand(item, active_references)
+                for key, item in value.items()
+                if key not in {"$ref", "$defs"}
+            }
+            if siblings:
+                return {"allOf": [expanded_reference], **siblings}
+            return expanded_reference
+
+        return {
+            key: expand(item, active_references)
+            for key, item in value.items()
+            if key != "$defs"
+        }
+
+    expanded = expand(schema, frozenset())
+    if not isinstance(expanded, dict):
+        raise ValueError("Schema root must be an object")
+    return expanded
+
+
+def _is_json_media_type(content_type: str | None) -> bool:
+    if not content_type:
+        return False
+
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if media_type == "application/json":
+        return True
+    if not media_type.startswith("application/"):
+        return False
+
+    subtype = media_type.removeprefix("application/")
+    token_characters = frozenset(
+        "!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyz"
+    )
+    return (
+        subtype.endswith("+json")
+        and bool(subtype.removesuffix("+json"))
+        and "*" not in subtype
+        and all(character in token_characters for character in subtype)
+    )
+
+
+async def _parse_ui_config_update(request: Request) -> UIConfigUpdateRequest:
+    raw_request = await _parse_safe_json_object(request)
+
+    try:
+        return UIConfigUpdateRequest.model_validate(raw_request)
+    except ValidationError:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid configuration payload",
+        ) from None
+
+
+async def _parse_safe_json_object(request: Request) -> dict[str, Any]:
+    if not _is_json_media_type(request.headers.get("content-type")):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid configuration payload",
+        )
+
+    try:
+        raw_request = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid configuration payload",
+        ) from None
+
+    if not isinstance(raw_request, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid configuration payload",
+        )
+
+    return raw_request
+
+
+def _json_object_request_openapi() -> dict[str, Any]:
+    return {
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "additionalProperties": True,
+                    },
+                },
+            },
+        },
+    }
+
+
+@router.post(
+    "/config/ui",
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": _inline_local_schema_definitions(
+                        UIConfigUpdateRequest.model_json_schema()
+                    ),
+                },
+            },
+        },
+    },
+)
 def update_ui_config(
-    config: dict,
+    request: UIConfigUpdateRequest = Depends(_parse_ui_config_update),
+    x_clade_admin_token: str | None = Header(
+        default=None, alias="X-Clade-Admin-Token"
+    ),
     container: 'ServiceContainer' = Depends(get_container),
-):
+) -> dict:
+    with _UI_CONFIG_UPDATE_LOCK:
+        return _update_ui_config(request, container, x_clade_admin_token)
+
+
+def _update_ui_config(
+    request: UIConfigUpdateRequest,
+    container: 'ServiceContainer',
+    x_clade_admin_token: str | None,
+) -> dict:
     """更新 UI 配置"""
-    from ..models.config import UIConfig
-    
     env_repo = container.environment_repository
     config_service = container.config_service
-    
-    ui_config = UIConfig(**config)
+
+    current = config_service.get_ui_config()
+    if request.config.allow_local_ai_endpoints != current.allow_local_ai_endpoints:
+        try:
+            validate_admin_token(
+                x_clade_admin_token,
+                container.settings.clade_admin_token,
+            )
+        except AdminTokenValidationError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"code": exc.code, "message": exc.public_message},
+            ) from None
+
+    merged = merge_ui_config_secrets(
+        current,
+        request.config,
+        request.clear_provider_api_keys,
+    )
     
     # 保存配置
     saved = env_repo.save_ui_config(
         Path(container.settings.ui_config_path),
-        ui_config
+        merged,
     )
     
     # 使缓存失效
-    config_service.invalidate_cache()
+    try:
+        config_service.invalidate_cache()
+    except Exception as exc:
+        logger.warning(
+            "[config] Cache invalidation failed (error_type=%s)",
+            type(exc).__name__,
+        )
     
     # 应用配置到容器级 ModelRouter
     try:
         configure_model_router(saved, container.model_router, container.embedding_service, container.settings)
         logger.info("[配置] 容器 ModelRouter 已更新")
-    except Exception as e:
-        logger.warning(f"[配置] 更新容器 ModelRouter 失败: {e}")
-    
-    # 【修复】应用 AI 配置到 ModelRouter（负载均衡、服务商路由等）
-    try:
-        from . import routes
-        routes.apply_ui_config(saved)
-        logger.info("[配置] AI 服务商配置已应用")
-    except Exception as e:
-        logger.warning(f"[配置] 应用 AI 配置失败（不影响其他配置）: {e}")
+    except Exception as exc:
+        logger.warning(
+            "[配置] 更新容器 ModelRouter 失败 (error_type=%s)",
+            type(exc).__name__,
+        )
     
     # 【修复】刷新 SimulationEngine 及子服务的配置（分化、死亡率、生态平衡等）
     try:
-        from . import routes
         # 获取最新配置
         new_configs = {
             "ecology": config_service.get_ecology_balance(),
@@ -307,117 +479,140 @@ def update_ui_config(
             "speciation": config_service.get_speciation(),
             "food_web": getattr(saved, 'food_web', None),
         }
-        routes.simulation_engine.reload_configs(new_configs)
+        container.simulation_engine.reload_configs(new_configs)
         logger.info("[配置] 游戏参数配置已刷新到引擎")
-    except Exception as e:
-        logger.warning(f"[配置] 刷新引擎配置失败（将在下次推演时自动加载）: {e}")
+    except Exception as exc:
+        logger.warning(
+            "[配置] 刷新引擎配置失败（将在下次推演时自动加载） "
+            "(error_type=%s)",
+            type(exc).__name__,
+        )
     
-    return saved
+    return public_ui_config(saved)
 
 
-@router.post("/config/test-api")
+@router.post("/config/test-api", openapi_extra=_json_object_request_openapi())
 def test_api_connection(
-    request: dict,
+    request: dict[str, Any] = Depends(_parse_safe_json_object),
     container: 'ServiceContainer' = Depends(get_container),
 ) -> dict:
     """测试 API 连接是否有效"""
-    import httpx
-    
-    base_url = request.get("base_url", "")
-    api_key = request.get("api_key", "")
-    provider_type = request.get("provider_type", "openai")
+    current = container.config_service.get_ui_config()
+    try:
+        credentials = resolve_provider_credentials(request, current)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+
+    base_url = credentials.base_url or ""
+    api_key = credentials.api_key
+    provider_type = credentials.provider_type
     
     if not base_url or not api_key:
         return {"success": False, "error": "缺少必要参数"}
     
+    headers = {"Authorization": f"Bearer {api_key}"}
+    endpoint = "models"
+
+    if provider_type == "anthropic":
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        }
+        endpoint = "messages"
+
     try:
-        headers = {"Authorization": f"Bearer {api_key}"}
-        
-        if provider_type == "anthropic":
-            headers = {
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            }
-            test_url = f"{base_url.rstrip('/')}/messages"
-        else:
-            test_url = f"{base_url.rstrip('/')}/models"
-        
-        with httpx.Client(timeout=10) as client:
-            response = client.get(test_url, headers=headers)
-        
-        if response.status_code == 200:
-            return {"success": True, "message": "连接成功"}
-        else:
-            return {
-                "success": False,
-                "error": f"API 返回状态码: {response.status_code}",
-                "detail": response.text[:500] if response.text else "",
-            }
-            
-    except httpx.TimeoutException:
-        return {"success": False, "error": "连接超时"}
-    except httpx.ConnectError as e:
-        return {"success": False, "error": f"连接失败: {str(e)}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        status_code = _SAFE_PROBE_CLIENT.probe_status(
+            base_url,
+            endpoint=endpoint,
+            headers=headers,
+            allow_local=current.allow_local_ai_endpoints,
+        )
+    except OutboundRequestError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.public_message},
+        ) from None
+
+    if status_code == 200:
+        return {"success": True, "message": "连接成功"}
+    return {"success": False, "error": "API 返回非成功状态"}
 
 
-@router.post("/config/fetch-models")
+@router.post("/config/fetch-models", openapi_extra=_json_object_request_openapi())
 def fetch_models(
-    request: dict,
+    request: dict[str, Any] = Depends(_parse_safe_json_object),
     container: 'ServiceContainer' = Depends(get_container),
 ) -> dict:
     """获取服务商的可用模型列表"""
-    import httpx
-    
-    base_url = request.get("base_url", "")
-    api_key = request.get("api_key", "")
-    provider_type = request.get("provider_type", "openai")
+    current = container.config_service.get_ui_config()
+    try:
+        credentials = resolve_provider_credentials(request, current)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc), "models": []}
+
+    base_url = credentials.base_url or ""
+    api_key = credentials.api_key
+    provider_type = credentials.provider_type
     
     if not base_url or not api_key:
         return {"success": False, "error": "缺少必要参数", "models": []}
     
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    if provider_type == "anthropic":
+        # Anthropic 没有 models API，返回硬编码列表
+        return {
+            "success": True,
+            "models": [
+                {"id": "claude-3-opus-20240229", "name": "Claude 3 Opus"},
+                {"id": "claude-3-sonnet-20240229", "name": "Claude 3 Sonnet"},
+                {"id": "claude-3-haiku-20240307", "name": "Claude 3 Haiku"},
+                {"id": "claude-3-5-sonnet-20240620", "name": "Claude 3.5 Sonnet"},
+            ],
+        }
+
     try:
-        headers = {"Authorization": f"Bearer {api_key}"}
-        
-        if provider_type == "anthropic":
-            # Anthropic 没有 models API，返回硬编码列表
-            return {
-                "success": True,
-                "models": [
-                    {"id": "claude-3-opus-20240229", "name": "Claude 3 Opus"},
-                    {"id": "claude-3-sonnet-20240229", "name": "Claude 3 Sonnet"},
-                    {"id": "claude-3-haiku-20240307", "name": "Claude 3 Haiku"},
-                    {"id": "claude-3-5-sonnet-20240620", "name": "Claude 3.5 Sonnet"},
-                ],
-            }
-        
-        models_url = f"{base_url.rstrip('/')}/models"
-        
-        with httpx.Client(timeout=15) as client:
-            response = client.get(models_url, headers=headers)
-        
-        if response.status_code == 200:
-            data = response.json()
-            models = data.get("data", [])
-            
-            return {
-                "success": True,
-                "models": [
-                    {"id": m.get("id", ""), "name": m.get("id", "")}
-                    for m in models
-                    if m.get("id")
-                ],
-            }
-        else:
-            return {
-                "success": False,
-                "error": f"获取模型列表失败: {response.status_code}",
-                "models": [],
-            }
-            
-    except Exception as e:
-        return {"success": False, "error": str(e), "models": []}
+        response = _SAFE_PROBE_CLIENT.fetch_json_response(
+            base_url,
+            endpoint="models",
+            headers=headers,
+            allow_local=current.allow_local_ai_endpoints,
+        )
+    except OutboundRequestError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.public_message},
+        ) from None
+
+    if response.status_code != 200:
+        return {
+            "success": False,
+            "error": "API 返回非成功状态",
+            "models": [],
+        }
+
+    data = response.data
+    models = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(models, list) or any(
+        not isinstance(model, dict) or not isinstance(model.get("id"), str)
+        for model in models
+    ):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "outbound_bad_response",
+                "message": "外部服务响应无效",
+            },
+        )
+
+    return {
+        "success": True,
+        "models": [
+            {"id": model["id"], "name": model["id"]}
+            for model in models
+            if model["id"]
+        ],
+    }
 
 
 # ========== 地图 ==========

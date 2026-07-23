@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchLogs, fetchAIDiagnostics, resetAIDiagnostics, type AIDiagnostics } from "@/services/api";
 
 interface LogPanelProps {
@@ -18,16 +18,16 @@ export function LogPanel({ onClose }: LogPanelProps) {
   const [diagnostics, setDiagnostics] = useState<AIDiagnostics | null>(null);
   const [diagLoading, setDiagLoading] = useState(false);
 
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     try {
       const data = await fetchLogs(lines);
       setLogs(data);
     } catch (e) {
       console.error("Failed to load logs", e);
     }
-  };
+  }, [lines]);
   
-  const loadDiagnostics = async () => {
+  const loadDiagnostics = useCallback(async () => {
     setDiagLoading(true);
     try {
       const data = await fetchAIDiagnostics();
@@ -37,7 +37,7 @@ export function LogPanel({ onClose }: LogPanelProps) {
     } finally {
       setDiagLoading(false);
     }
-  };
+  }, []);
   
   const handleResetDiagnostics = async () => {
     try {
@@ -63,7 +63,7 @@ export function LogPanel({ onClose }: LogPanelProps) {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [lines, autoRefresh, activeTab]);
+  }, [autoRefresh, activeTab, loadLogs, loadDiagnostics]);
 
   useEffect(() => {
     // Scroll to bottom on new logs

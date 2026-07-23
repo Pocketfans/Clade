@@ -332,10 +332,26 @@ Write-Status $lang.start ($lang.startingBackend -f $BACKEND_PORT) $cWarning
 
 # 处理带空格的路径（使用 Set-Location 支持跨驱动器）
 $backendPath = "$scriptDir\backend"
+Push-Location $backendPath
+try {
+    $bindConfigJson = & ".\venv\Scripts\python.exe" -c "import json; from app.core.config import get_settings; from app.core.network_policy import resolve_bind_hosts; h=resolve_bind_hosts(get_settings()); print(json.dumps({'backend': h.backend, 'frontend': h.frontend, 'lan_enabled': h.lan_enabled}))"
+    if ($LASTEXITCODE -ne 0) {
+        throw "启动地址配置无效。非本机监听必须显式设置 ALLOW_LAN_ACCESS=true。"
+    }
+} finally {
+    Pop-Location
+}
+$bindConfig = $bindConfigJson | ConvertFrom-Json
+$backendHost = $bindConfig.backend
+$frontendHost = $bindConfig.frontend
+$allowLanAccess = if ($bindConfig.lan_enabled) { "true" } else { "false" }
+if ($bindConfig.lan_enabled) {
+    Write-Warning "局域网访问已启用。Clade API 和前端可能被同一网络中的其他设备访问。"
+}
 $beCmd = @"
 Set-Location -LiteralPath '$backendPath'
 & '.\venv\Scripts\Activate.ps1'
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port $BACKEND_PORT
+python -m uvicorn app.main:app --reload --host $backendHost --port $BACKEND_PORT
 "@
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $beCmd -WorkingDirectory $backendPath
 
@@ -349,7 +365,10 @@ $feCmd = @"
 Set-Location -LiteralPath '$frontendPath'
 `$env:BACKEND_PORT='$BACKEND_PORT'
 `$env:FRONTEND_PORT='$FRONTEND_PORT'
-npx.cmd vite --port $FRONTEND_PORT --config vite.config.ts
+`$env:BACKEND_HOST='$backendHost'
+`$env:FRONTEND_HOST='$frontendHost'
+`$env:ALLOW_LAN_ACCESS='$allowLanAccess'
+npx.cmd vite --host `$env:FRONTEND_HOST --port $FRONTEND_PORT --config vite.config.ts
 "@
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $feCmd -WorkingDirectory $frontendPath
 

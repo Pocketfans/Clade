@@ -18,6 +18,7 @@ import type {
   PressureDraft,
 } from "@/services/api.types";
 import type { OverlayView } from "@/providers/types";
+import type { UpdateUIConfigOptions } from "@/services/api";
 
 // 懒加载模态窗组件
 const SettingsDrawer = lazy(() => import("./SettingsDrawer").then(m => ({ default: m.SettingsDrawer })));
@@ -114,7 +115,7 @@ interface ModalsLayerProps {
   onExecuteTurn: (drafts: PressureDraft[], rounds: number) => void;
   onBatchExecute: (rounds: number, pressures: PressureDraft[], randomEnergy: number) => void;
   onQueueAdd: (drafts: PressureDraft[], rounds: number) => void;
-  onSaveConfig: (config: UIConfig) => Promise<void>;
+  onSaveConfig: (config: UIConfig, options?: UpdateUIConfigOptions) => Promise<void>;
   onRefreshMap: () => void;
   onRefreshQueue: () => void;
   onRefreshSpecies: () => void;

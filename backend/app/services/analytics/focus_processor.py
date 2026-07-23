@@ -47,7 +47,6 @@ class FocusBatchProcessor:
                 capability="focus_batch",
                 payload={"batch": payload},
                 task_name=f"Focus批次[{len(chunk)}物种]",
-                timeout=90,
                 heartbeat_interval=2.0,
             )
         except asyncio.TimeoutError:

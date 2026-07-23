@@ -372,6 +372,24 @@ export function TurnProgressOverlay({ message = "推演进行中...", showDetail
         });
         return;
       }
+
+      if (event.type === 'ai_stream_interrupted') {
+        const lastActivity = Date.now();
+        const interruptionMessage = "AI 生成中断，已使用备用结果";
+        setLastAIActivity(lastActivity);
+        setConnectionStatus("warning");
+        setAIProgress(prev => prev ? {
+          ...prev,
+          current_task: interruptionMessage,
+          last_activity: lastActivity
+        } : {
+          total: 1,
+          completed: 0,
+          current_task: interruptionMessage,
+          last_activity: lastActivity
+        });
+        return;
+      }
       
       if (event.type === 'ai_stream_error') {
         // 流式错误不中断，只记录

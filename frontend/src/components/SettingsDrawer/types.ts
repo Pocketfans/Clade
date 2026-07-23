@@ -75,6 +75,8 @@ export type SettingsAction =
   | { type: "SELECT_PROVIDER"; id: string | null }
   | { type: "SET_FORM"; form: UIConfig }
   | { type: "UPDATE_PROVIDER"; id: string; field: keyof ProviderConfig; value: unknown }
+  | { type: "UPDATE_PROVIDER_API_KEY"; providerId: string; apiKey: string }
+  | { type: "CLEAR_PROVIDER_API_KEY"; providerId: string }
   | { type: "ADD_PROVIDER"; provider: ProviderConfig }
   | { type: "REMOVE_PROVIDER"; id: string }
   | { type: "UPDATE_GLOBAL"; field: string; value: unknown }

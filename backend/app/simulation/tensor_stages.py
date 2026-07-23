@@ -132,7 +132,7 @@ class TensorStateInitStage(BaseStage):
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
         import numpy as np
-        from ..repositories.environment_repository import environment_repository
+        environment_repository = engine.environment_repository
 
         species_batch = getattr(ctx, "species_batch", []) or []
         if not species_batch:
@@ -700,8 +700,8 @@ class TensorStateSyncStage(BaseStage):
     
     async def execute(self, ctx: SimulationContext, engine: SimulationEngine) -> None:
         from ..tensor import get_compute
-        from ..repositories.species_repository import species_repository
-        from ..repositories.environment_repository import environment_repository
+        species_repository = engine.species_repository
+        environment_repository = engine.environment_repository
         from ..models.environment import HabitatPopulation
         
         tensor_state = getattr(ctx, "tensor_state", None)

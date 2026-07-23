@@ -25,8 +25,6 @@ import {
   PieChart,
   Pie,
   Cell,
-  Sparklines,
-  SparklinesLine,
   ComposedChart,
 } from "recharts";
 import {
@@ -426,8 +424,8 @@ export const GlobalTrendsPanel = memo(function GlobalTrendsPanel({
           recentEvents.push({
             turn: r.turn_index,
             type: "分化",
-            title: `新物种 ${e.child_code} 诞生`,
-            detail: `从 ${e.parent_code} 分化`,
+            title: `新物种 ${e.new_lineage} 诞生`,
+            detail: `从 ${e.parent_lineage} 分化`,
             color: "#22c55e"
           });
         }
@@ -435,10 +433,8 @@ export const GlobalTrendsPanel = memo(function GlobalTrendsPanel({
     });
     
     // 湿度数据
-    const humidity = latest.global_humidity ?? 0;
-    const prevHumidity = filteredReports.length > 1 
-      ? filteredReports[filteredReports.length - 2].global_humidity ?? humidity
-      : humidity;
+    const humidity = environmentData.at(-1)?.humidity ?? 0;
+    const prevHumidity = environmentData.at(-2)?.humidity ?? humidity;
     
     // 环境趋势数据
     const tempTrend = environmentData.map(d => d.temperature);

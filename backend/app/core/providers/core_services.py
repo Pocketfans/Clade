@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from ...services.system.save_manager import SaveManager
     from ...services.ecology.semantic_anchors import SemanticAnchorService
     from ...services.ecology.ecological_realism import EcologicalRealismService
+    from ...repositories.genus_repository import GenusRepository
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class CoreServiceProvider:
     
     settings: 'Settings'
     _overrides: dict[str, Any]
+    genus_repository: 'GenusRepository'
     
     def _get_or_override(self, name: str, factory: Callable[[], Any]) -> Any:
         """Get service instance, preferring override if set"""
@@ -206,7 +208,11 @@ class CoreServiceProvider:
     def _init_save_manager(self, energy_service=None, progression_service=None) -> 'SaveManager':
         """初始化 SaveManager，并注入神力/神迹服务以持久化状态。"""
         from ...services.system.save_manager import SaveManager
-        save_manager = SaveManager(self.settings.saves_dir, embedding_service=self.embedding_service)
+        save_manager = SaveManager(
+            self.settings.saves_dir,
+            embedding_service=self.embedding_service,
+            genus_repository=self.genus_repository,
+        )
         if energy_service:
             try:
                 save_manager.set_energy_service(energy_service)
